@@ -18,7 +18,7 @@ index 0000000000000..0adfaa4a8ac83
 +#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
 +#include "chrome/browser/ui/ui_features.h"
-+#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 +#include "chrome/common/chrome_features.h"
 +#include "ui/actions/actions.h"
 +

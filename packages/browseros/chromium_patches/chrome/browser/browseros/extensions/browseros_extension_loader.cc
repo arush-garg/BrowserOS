@@ -18,7 +18,7 @@ index 0000000000000..fdb6be443f25b
 +#include "base/version.h"
 +#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
-+#include "chrome/browser/extensions/crx_installer.h"
++#include "extensions/browser/crx_installer.h"
 +#include "chrome/browser/extensions/external_provider_impl.h"
 +#include "chrome/browser/extensions/updater/extension_updater.h"
 +#include "chrome/browser/profiles/profile.h"
