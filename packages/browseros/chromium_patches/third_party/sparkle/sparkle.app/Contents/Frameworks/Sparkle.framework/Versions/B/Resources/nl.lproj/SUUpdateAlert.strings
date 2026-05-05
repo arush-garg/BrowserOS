@@ -1,0 +1,23 @@
+diff --git a/third_party/sparkle/sparkle.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/nl.lproj/SUUpdateAlert.strings b/third_party/sparkle/sparkle.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/nl.lproj/SUUpdateAlert.strings
+new file mode 100644
+index 0000000000000..3edac367ff878
+--- /dev/null
++++ b/third_party/sparkle/sparkle.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/nl.lproj/SUUpdateAlert.strings
+@@ -0,0 +1,17 @@
++/* Class = "NSWindow"; title = "Software Update"; ObjectID = "5"; */
++"5.title" = "Software-update";
++
++/* Class = "NSTextFieldCell"; title = "Release Notes:"; ObjectID = "170"; */
++"170.title" = "Versiegegevens:";
++
++/* Class = "NSButtonCell"; title = "Remind Me Later"; ObjectID = "171"; */
++"171.title" = "Herinner mij later";
++
++/* Class = "NSButtonCell"; title = "Skip This Version"; ObjectID = "172"; */
++"172.title" = "Sla deze versie over";
++
++/* Class = "NSButtonCell"; title = "Install Update"; ObjectID = "173"; */
++"173.title" = "Installeer update";
++
++/* Class = "NSButtonCell"; title = "Automatically download and install updates in the future"; ObjectID = "175"; */
++"175.title" = "Download en installeer updates voortaan automatisch";

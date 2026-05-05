@@ -1,0 +1,11 @@
+diff --git a/third_party/sparkle/INSTALL b/third_party/sparkle/INSTALL
+new file mode 100644
+index 0000000000000..8f3fc32221692
+--- /dev/null
++++ b/third_party/sparkle/INSTALL
+@@ -0,0 +1,5 @@
++For integration and usage, please visit Sparkle's Documentation:
++https://sparkle-project.org/documentation/
++
++For integrating XPC Services in a Sandboxed Application, please visit:
++https://sparkle-project.org/documentation/sandboxing/

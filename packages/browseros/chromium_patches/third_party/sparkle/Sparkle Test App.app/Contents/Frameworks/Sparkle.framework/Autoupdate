@@ -1,0 +1,8 @@
+diff --git a/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Autoupdate b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Autoupdate
+new file mode 120000
+index 0000000000000..1a4fc02ca692d
+--- /dev/null
++++ b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Autoupdate	
+@@ -0,0 +1 @@
++Versions/Current/Autoupdate
+\ No newline at end of file

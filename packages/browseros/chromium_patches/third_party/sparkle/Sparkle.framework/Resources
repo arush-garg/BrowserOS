@@ -1,0 +1,8 @@
+diff --git a/third_party/sparkle/Sparkle.framework/Resources b/third_party/sparkle/Sparkle.framework/Resources
+new file mode 120000
+index 0000000000000..953ee36f3bb70
+--- /dev/null
++++ b/third_party/sparkle/Sparkle.framework/Resources
+@@ -0,0 +1 @@
++Versions/Current/Resources
+\ No newline at end of file

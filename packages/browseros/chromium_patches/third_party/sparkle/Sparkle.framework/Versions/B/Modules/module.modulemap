@@ -1,0 +1,12 @@
+diff --git a/third_party/sparkle/Sparkle.framework/Versions/B/Modules/module.modulemap b/third_party/sparkle/Sparkle.framework/Versions/B/Modules/module.modulemap
+new file mode 100644
+index 0000000000000..01a494aa9b2ba
+--- /dev/null
++++ b/third_party/sparkle/Sparkle.framework/Versions/B/Modules/module.modulemap
+@@ -0,0 +1,6 @@
++framework module Sparkle {
++  umbrella header "Sparkle.h"
++  export *
++
++  module * { export * }
++}

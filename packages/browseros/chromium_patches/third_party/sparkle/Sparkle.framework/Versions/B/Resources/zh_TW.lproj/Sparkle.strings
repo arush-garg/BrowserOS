@@ -1,0 +1,65 @@
+diff --git a/third_party/sparkle/Sparkle.framework/Versions/B/Resources/zh_TW.lproj/Sparkle.strings b/third_party/sparkle/Sparkle.framework/Versions/B/Resources/zh_TW.lproj/Sparkle.strings
+new file mode 100644
+index 0000000000000000000000000000000000000000..1e826ad21289dbf6e074d80120672faf6a157df3
+GIT binary patch
+literal 13420
+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
+FzX5~68sz{0
+
+literal 0
+HcmV?d00001
+

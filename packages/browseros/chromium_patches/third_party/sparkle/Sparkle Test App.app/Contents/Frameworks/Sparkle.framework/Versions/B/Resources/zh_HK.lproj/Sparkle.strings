@@ -1,0 +1,64 @@
+diff --git a/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/zh_HK.lproj/Sparkle.strings b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/zh_HK.lproj/Sparkle.strings
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9dfe529555bfbfe11be33e825f4b4b9fa80f2c2
+GIT binary patch
+literal 13270
+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
+I2kVvp2Qb9n;{X5v
+
+literal 0
+HcmV?d00001
+

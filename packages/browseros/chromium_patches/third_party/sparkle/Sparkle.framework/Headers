@@ -1,0 +1,8 @@
+diff --git a/third_party/sparkle/Sparkle.framework/Headers b/third_party/sparkle/Sparkle.framework/Headers
+new file mode 120000
+index 0000000000000..a177d2a6b9260
+--- /dev/null
++++ b/third_party/sparkle/Sparkle.framework/Headers
+@@ -0,0 +1 @@
++Versions/Current/Headers
+\ No newline at end of file

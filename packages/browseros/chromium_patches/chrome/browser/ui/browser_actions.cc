@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index 8a43e7c2fcde5..c91a90f4ed466 100644
+index 8a43e7c2fcde5..95eff82226b48 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
 @@ -17,6 +17,7 @@
@@ -130,7 +130,7 @@ index 8a43e7c2fcde5..c91a90f4ed466 100644
 +          .SetImage(ui::ImageModel::FromResourceId(IDR_PRODUCT_LOGO_16))
 +          .SetProperty(actions::kActionItemPinnableKey,
 +                       std::underlying_type_t<actions::ActionPinnableState>(
-+                           actions::ActionPinnableState::kNotPinnable))
++                           actions::ActionPinnableState::kEnterpriseControlled))
 +          .Build());
 +
    if (HistorySidePanelCoordinator::IsSupported()) {

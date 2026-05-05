@@ -1,6 +1,6 @@
 diff --git a/chrome/utility/importer/browseros/chrome_decryptor_mac.mm b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
 new file mode 100644
-index 0000000000000..caabfa17010ab
+index 0000000000000..d9aadb0466ace
 --- /dev/null
 +++ b/chrome/utility/importer/browseros/chrome_decryptor_mac.mm
 @@ -0,0 +1,191 @@

@@ -1,0 +1,8 @@
+diff --git a/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/XPCServices b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/XPCServices
+new file mode 120000
+index 0000000000000..99c46ea236ca9
+--- /dev/null
++++ b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/XPCServices	
+@@ -0,0 +1 @@
++Versions/Current/XPCServices
+\ No newline at end of file

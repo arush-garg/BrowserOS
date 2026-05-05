@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/core/browseros_action_utils.h b/chrome/browser/browseros/core/browseros_action_utils.h
 new file mode 100644
-index 0000000000000..0adfaa4a8ac83
+index 0000000000000..f7e801d662789
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_action_utils.h
 @@ -0,0 +1,70 @@

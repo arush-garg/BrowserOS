@@ -1,0 +1,8 @@
+diff --git a/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/PkgInfo b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/PkgInfo
+new file mode 100644
+index 0000000000000..bd04210fb49f6
+--- /dev/null
++++ b/third_party/sparkle/Sparkle Test App.app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app/Contents/PkgInfo	
+@@ -0,0 +1 @@
++APPL????
+\ No newline at end of file
