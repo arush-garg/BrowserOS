@@ -1,7 +1,6 @@
 import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
 import type { FC } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
-import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { CreditBadge } from '@/components/credits/CreditBadge'
 import { ThemeToggle } from '@/components/elements/theme-toggle'
@@ -26,8 +25,6 @@ const CreditsBadgeWrapper: FC = () => {
 
 interface ChatHeaderProps {
   selectedProvider: Provider
-  providers: Provider[]
-  onSelectProvider: (provider: Provider) => void
   onNewConversation: () => void
   hasMessages: boolean
   hideHistory?: boolean
@@ -35,8 +32,6 @@ interface ChatHeaderProps {
 
 export const ChatHeader: FC<ChatHeaderProps> = ({
   selectedProvider,
-  providers,
-  onSelectProvider,
   onNewConversation,
   hasMessages,
   hideHistory,
@@ -53,32 +48,21 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   return (
     <header className="flex items-center justify-between border-border/40 border-b bg-background/80 px-3 py-2.5 backdrop-blur-md">
       <div className="flex items-center gap-2">
-        {/* Provider Selector */}
-        <ChatProviderSelector
-          providers={providers}
-          selectedProvider={selectedProvider}
-          onSelectProvider={onSelectProvider}
-        >
-          <button
-            type="button"
-            className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-            title="Change AI Provider"
-          >
-            {selectedProvider.kind === 'acp' ? (
-              <Bot className="h-[18px] w-[18px]" />
-            ) : selectedProvider.type === 'browseros' ? (
-              <BrowserOSIcon size={18} />
-            ) : (
-              <ProviderIcon
-                type={selectedProvider.type as ProviderType}
-                size={18}
-              />
-            )}
-            <span className="font-semibold text-base">
-              {selectedProvider.name}
-            </span>
-          </button>
-        </ChatProviderSelector>
+        <div className="group relative inline-flex items-center gap-2 rounded-lg p-2 text-muted-foreground">
+          {selectedProvider.kind === 'acp' ? (
+            <Bot className="h-[18px] w-[18px]" />
+          ) : selectedProvider.type === 'browseros' ? (
+            <BrowserOSIcon size={18} />
+          ) : (
+            <ProviderIcon
+              type={selectedProvider.type as ProviderType}
+              size={18}
+            />
+          )}
+          <span className="font-semibold text-base">
+            {selectedProvider.name}
+          </span>
+        </div>
         {selectedProvider.type === 'browseros' && <CreditsBadgeWrapper />}
       </div>
 

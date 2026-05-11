@@ -19,7 +19,7 @@
 **/.wrangler/
 **/node_modules/
 
-
+.v_env/
 
 nxtscape-cli-access.json
 gclient.json
@@ -33,3 +33,5 @@ packages/browseros/build/tools/
 # AI SDK DevTools traces
 .devtools/
 .omc/
+
+.github/agents/*

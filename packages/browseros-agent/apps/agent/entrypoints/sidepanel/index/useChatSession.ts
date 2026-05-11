@@ -130,6 +130,8 @@ export interface ChatSessionOptions {
   origin?: ChatOrigin
   /** When false, messages are queued until integrations finish syncing. */
   isIntegrationsSynced?: boolean
+  /** Active tab ID for per-tab provider isolation. */
+  activeTabId?: number | null
 }
 
 const NEWTAB_SYSTEM_PROMPT = `IMPORTANT: The user is chatting from the New Tab page. When performing browser actions, ALWAYS open content in a NEW TAB rather than navigating the current tab. The user's new tab page should remain accessible.`
@@ -194,13 +196,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     enabledMcpServersRef,
     enabledCustomServersRef,
     personalizationRef,
-    setDefaultProvider,
     chatTargets,
     selectedChatTarget,
     selectChatTarget,
     selectedLlmProvider,
     isLoadingProviders,
-  } = useChatRefs()
+  } = useChatRefs({ activeTabId: options?.activeTabId })
   const invalidateCredits = useInvalidateCredits()
 
   const {
@@ -783,7 +784,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         },
       })
     })
-    if (target.kind === 'llm') setDefaultProvider(target.provider.id)
 
     if (
       previousTarget &&
@@ -835,5 +835,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     onClickDislike,
     conversationId,
     addToolApprovalResponse: respondToToolApproval,
+    activeTabId: options?.activeTabId,
   }
 }

@@ -10,6 +10,7 @@ import { type McpServer, useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { usePersonalization } from '@/lib/personalization/personalizationStorage'
 import {
   buildSidepanelChatTargets,
+  chatTargetSelectionStorage,
   loadSidepanelChatTargetSelection,
   persistSidepanelChatTargetSelection,
   resolveSidepanelChatTarget,
@@ -32,7 +33,11 @@ const constructCustomServers = (servers: McpServer[]) => {
     }))
 }
 
-export const useChatRefs = () => {
+interface UseChatRefsOptions {
+  activeTabId?: number | null
+}
+
+export const useChatRefs = ({ activeTabId }: UseChatRefsOptions = {}) => {
   const { servers: mcpServers } = useMcpServers()
   const {
     providers: llmProviders,
@@ -43,18 +48,34 @@ export const useChatRefs = () => {
   const { adapters, loading: isLoadingAdapters } = useAgentAdapters()
   const { harnessAgents, loading: isLoadingAgents } = useHarnessAgents()
   const { personalization } = usePersonalization()
+
   const [targetSelection, setTargetSelection] =
     useState<SidepanelChatTargetSelection | null>(null)
 
+  // Load per-tab selection when activeTabId changes
   useEffect(() => {
+    if (activeTabId == null) {
+      setTargetSelection(null)
+      return
+    }
     let cancelled = false
-    loadSidepanelChatTargetSelection().then((selection) => {
+    loadSidepanelChatTargetSelection(activeTabId).then((selection) => {
       if (!cancelled) setTargetSelection(selection)
     })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [activeTabId])
+
+  // Watch for external changes to the per-tab selection storage
+  useEffect(() => {
+    const unwatch = chatTargetSelectionStorage.watch((map) => {
+      if (activeTabId == null) return
+      const key = String(activeTabId)
+      setTargetSelection(map[key] ?? null)
+    })
+    return unwatch
+  }, [activeTabId])
 
   const chatTargets = useMemo(
     () =>
@@ -104,9 +125,11 @@ export const useChatRefs = () => {
     async (target: SidepanelChatTarget | undefined) => {
       selectedChatTargetRef.current = target
       setTargetSelection(target ? { kind: target.kind, id: target.id } : null)
-      await persistSidepanelChatTargetSelection(target)
+      if (activeTabId != null) {
+        await persistSidepanelChatTargetSelection(target, activeTabId)
+      }
     },
-    [],
+    [activeTabId],
   )
 
   return {

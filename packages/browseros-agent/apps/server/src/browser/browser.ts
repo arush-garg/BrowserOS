@@ -549,7 +549,12 @@ export class Browser {
 
   async newPage(
     url: string,
-    opts?: { hidden?: boolean; background?: boolean; windowId?: number },
+    opts?: {
+      hidden?: boolean
+      background?: boolean
+      windowId?: number
+      originPageId?: number
+    },
   ): Promise<number> {
     const windowId = await this.resolveWindowIdForNewPage(opts)
     const createResult = await this.cdp.Browser.createTab({
@@ -587,6 +592,26 @@ export class Browser {
       index: tabInfo.index,
       groupId: tabInfo.groupId,
     })
+
+    // Auto-group: if originPageId is provided and this is not a hidden tab,
+    // group the new tab with the origin tab.
+    if (opts?.originPageId !== undefined && !opts?.hidden) {
+      const originPage = this.pages.get(opts.originPageId)
+      if (originPage && originPage.pageId !== pageId) {
+        try {
+          if (originPage.groupId) {
+            await this.groupTabs([opts.originPageId, pageId], {
+              groupId: originPage.groupId,
+            })
+          } else {
+            await this.groupTabs([opts.originPageId, pageId])
+          }
+        } catch {
+          // Grouping is best-effort; don't fail tab creation if it fails
+        }
+      }
+    }
+
     return pageId
   }
 

@@ -1,9 +1,22 @@
+import { storage } from '@wxt-dev/storage'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
   HarnessAgentAdapter,
 } from '@/entrypoints/app/agents/agent-harness-types'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
+
+/** Legacy key — kept for migration, no longer used for reads/writes. */
+const SIDEPANEL_CHAT_TARGET_SELECTION_KEY =
+  'browseros:sidepanel-chat-target-selection'
+
+/**
+ * Per-tab provider selection map, keyed by tab ID string.
+ * Follows the same pattern as selectedTextStorage.
+ */
+export const chatTargetSelectionStorage = storage.defineItem<
+  Record<string, SidepanelChatTargetSelection>
+>('local:chatTargetSelectionMap', { defaultValue: {} })
 
 export type SidepanelTargetKind = 'llm' | 'acp'
 
@@ -48,21 +61,6 @@ interface ResolveSidepanelChatTargetInput {
   selection?: SidepanelChatTargetSelection | null
 }
 
-interface SidepanelChatTargetSelectionWriter {
-  setValue(value: SidepanelChatTargetSelection | null): Promise<void>
-}
-
-interface SidepanelChatTargetSelectionReader {
-  getValue(): Promise<SidepanelChatTargetSelection | null>
-}
-
-type SidepanelChatTargetSelectionStore = SidepanelChatTargetSelectionReader &
-  SidepanelChatTargetSelectionWriter
-
-let sidepanelChatTargetSelectionStorage:
-  | SidepanelChatTargetSelectionStore
-  | undefined
-
 export function buildSidepanelChatTargets({
   providers,
   adapters,
@@ -86,7 +84,6 @@ function toAcpTargetForAgent(
   const reasoning = adapter?.reasoningEfforts.find(
     (effort) => effort.id === reasoningEffort,
   )
-
   return {
     kind: 'acp',
     id: agent.id,
@@ -123,7 +120,6 @@ export function resolveSidepanelChatTarget({
     )
     if (selected) return selected
   }
-
   return (
     targets.find(
       (target) => target.kind === 'llm' && target.id === defaultProviderId,
@@ -137,21 +133,51 @@ export function toLlmProviderConfig(
   return target?.kind === 'llm' ? target.provider : undefined
 }
 
+/**
+ * Persist the chat target selection for a specific tab.
+ * Uses chrome.storage.local via @wxt-dev/storage for cross-context persistence.
+ */
 export async function persistSidepanelChatTargetSelection(
   target: SidepanelChatTarget | undefined,
-  store?: SidepanelChatTargetSelectionWriter,
+  tabId: number,
 ): Promise<void> {
-  const targetStore = store ?? (await getSidepanelChatTargetSelectionStorage())
-  await targetStore.setValue(
-    target ? { kind: target.kind, id: target.id } : null,
-  )
+  const map = await chatTargetSelectionStorage.getValue()
+  const key = String(tabId)
+  if (target) {
+    map[key] = { kind: target.kind, id: target.id }
+  } else {
+    delete map[key]
+  }
+  await chatTargetSelectionStorage.setValue(map)
 }
 
+/**
+ * Load the chat target selection for a specific tab.
+ * Falls back to legacy sessionStorage for migration, then returns null.
+ */
 export async function loadSidepanelChatTargetSelection(
-  store?: SidepanelChatTargetSelectionReader,
+  tabId: number,
 ): Promise<SidepanelChatTargetSelection | null> {
-  const targetStore = store ?? (await getSidepanelChatTargetSelectionStorage())
-  return targetStore.getValue()
+  const map = await chatTargetSelectionStorage.getValue()
+  const key = String(tabId)
+  if (map[key]) return map[key]
+  // Migration: try legacy sessionStorage once
+  try {
+    const stored = window.sessionStorage.getItem(
+      SIDEPANEL_CHAT_TARGET_SELECTION_KEY,
+    )
+    if (stored) {
+      const legacy = JSON.parse(stored) as SidepanelChatTargetSelection
+      // Migrate to per-tab storage and clear legacy
+      map[key] = legacy
+      await chatTargetSelectionStorage.setValue(map)
+      window.sessionStorage.removeItem(SIDEPANEL_CHAT_TARGET_SELECTION_KEY)
+      return legacy
+    }
+  } catch {
+    // ignore
+  }
+  return null
 }
 
 function toLlmTarget(provider: LlmProviderConfig): SidepanelChatTarget {
@@ -162,18 +188,4 @@ function toLlmTarget(provider: LlmProviderConfig): SidepanelChatTarget {
     type: provider.type,
     provider,
   }
-}
-
-async function getSidepanelChatTargetSelectionStorage(): Promise<SidepanelChatTargetSelectionStore> {
-  if (sidepanelChatTargetSelectionStorage) {
-    return sidepanelChatTargetSelectionStorage
-  }
-
-  const { storage } = await import('@wxt-dev/storage')
-  sidepanelChatTargetSelectionStorage =
-    storage.defineItem<SidepanelChatTargetSelection | null>(
-      'local:sidepanel-chat-target-selection',
-      { fallback: null },
-    )
-  return sidepanelChatTargetSelectionStorage
 }

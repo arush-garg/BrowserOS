@@ -1,12 +1,16 @@
-import { ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
+import { Bot, ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
 import type { FC, FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
+import type { Provider } from '@/components/chat/chatComponentTypes'
 import { AppSelector } from '@/components/elements/AppSelector'
 import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/entrypoints/app/connect-mcp/McpServerIcon'
 import { useGetUserMCPIntegrations } from '@/entrypoints/app/connect-mcp/useGetUserMCPIntegrations'
 import { Feature } from '@/lib/browseros/capabilities'
 import { useCapabilities } from '@/lib/browseros/useCapabilities'
+import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
@@ -22,6 +26,9 @@ import { ChatSelectedText } from './ChatSelectedText'
 import type { ChatMode } from './chatTypes'
 
 interface ChatFooterProps {
+  providers: Provider[]
+  selectedProvider: Provider
+  onSelectProvider: (provider: Provider) => void
   mode: ChatMode
   onModeChange: (mode: ChatMode) => void
   input: string
@@ -33,9 +40,13 @@ interface ChatFooterProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
+  activeTabId?: number | null
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
+  providers,
+  selectedProvider,
+  onSelectProvider,
   mode,
   onModeChange,
   input,
@@ -47,6 +58,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onToggleTab,
   onRemoveTab,
   voice,
+  activeTabId,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { supports } = useCapabilities()
@@ -56,19 +68,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
   >({})
-  const [activeTabId, setActiveTabId] = useState<number | undefined>()
-
-  // Track active tab for tab-scoped selection display
-  useEffect(() => {
-    chrome.tabs
-      .query({ active: true, currentWindow: true })
-      .then((tabs) => setActiveTabId(tabs[0]?.id))
-    const listener = (activeInfo: { tabId: number }) => {
-      setActiveTabId(activeInfo.tabId)
-    }
-    chrome.tabs.onActivated.addListener(listener)
-    return () => chrome.tabs.onActivated.removeListener(listener)
-  }, [])
 
   // Watch selected text storage (per-tab map)
   useEffect(() => {
@@ -129,6 +128,35 @@ export const ChatFooter: FC<ChatFooterProps> = ({
 
       <div className="p-3">
         <div className="flex items-center gap-2">
+          <ChatProviderSelector
+            providers={providers}
+            selectedProvider={selectedProvider}
+            onSelectProvider={onSelectProvider}
+          >
+            <button
+              type="button"
+              className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+              title="Change AI Provider"
+            >
+              {selectedProvider.kind === 'acp' ? (
+                <Bot className="h-4 w-4" />
+              ) : selectedProvider.type === 'browseros' ? (
+                <BrowserOSIcon size={16} />
+              ) : (
+                <ProviderIcon
+                  type={selectedProvider.type as ProviderType}
+                  size={16}
+                />
+              )}
+              <span className="font-medium text-sm">
+                {selectedProvider.name}
+              </span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          </ChatProviderSelector>
+
+          <div className="h-4 w-px bg-border/50" />
+
           <ChatModeToggle mode={mode} onModeChange={onModeChange} />
 
           <div className="h-4 w-px bg-border/50" />

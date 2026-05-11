@@ -36,7 +36,9 @@ export const Chat = () => {
     stop,
     agentUrlError,
     chatError,
+    providers,
     selectedProvider,
+    handleSelectProvider,
     getActionForMessage,
     liked,
     onClickLike,
@@ -44,6 +46,7 @@ export const Chat = () => {
     onClickDislike,
     isRestoringConversation,
     addToolApprovalResponse,
+    activeTabId,
   } = useChatSessionContext()
 
   const {
@@ -243,6 +246,9 @@ export const Chat = () => {
       </main>
 
       <ChatFooter
+        providers={providers}
+        selectedProvider={selectedProvider}
+        onSelectProvider={handleSelectProvider}
         mode={mode}
         onModeChange={handleModeChange}
         input={input}
@@ -254,6 +260,7 @@ export const Chat = () => {
         onToggleTab={toggleTabSelection}
         onRemoveTab={removeTab}
         voice={voiceState}
+        activeTabId={activeTabId}
       />
     </>
   )

@@ -158,6 +158,7 @@ export const new_page = defineNavigationTool({
       hidden: args.hidden ? true : undefined,
       background: args.background !== false,
       windowId: args.windowId,
+      originPageId: ctx.session?.originPageId,
     })
     response.text(`Opened new page: ${args.url}\nPage ID: ${pageId}`)
     response.data({

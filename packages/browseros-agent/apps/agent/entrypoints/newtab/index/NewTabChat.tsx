@@ -135,8 +135,6 @@ export const NewTabChat: FC = () => {
       <div className="mx-auto w-full max-w-3xl">
         <ChatHeader
           selectedProvider={selectedProvider}
-          providers={providers}
-          onSelectProvider={handleSelectProvider}
           onNewConversation={handleNewConversation}
           hasMessages={messages.length > 0}
           hideHistory
@@ -182,6 +180,9 @@ export const NewTabChat: FC = () => {
 
       <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">
         <ChatFooter
+          providers={providers}
+          selectedProvider={selectedProvider}
+          onSelectProvider={handleSelectProvider}
           mode={mode}
           onModeChange={handleModeChange}
           input={input}

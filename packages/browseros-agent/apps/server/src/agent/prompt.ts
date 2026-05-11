@@ -217,7 +217,7 @@ You are operating from the user's **New Tab page**. The active tab (Page ID from
 2. **NEVER call \`close_page\` on the active tab** — same reason.
 3. For ALL browsing tasks (including single-page lookups), use \`new_page\` (background) to open URLs.
 4. For single-page lookups, open a background tab, extract data, then close it.
-5. For multi-page research, open background tabs and group them with \`group_tabs\`.
+5. For multi-page research, open background tabs (they auto-group with the current tab). Use \`group_tabs\` to add a descriptive title and color to the group.
 
 ### Multi-tab workflow`
   } else {
@@ -231,7 +231,7 @@ You are operating from the user's **New Tab page**. The active tab (Page ID from
 When a task requires working on multiple pages simultaneously:
 1. **Inform the user** that you're creating background tabs for the task.
 2. **Open new tabs in background** using \`new_page\` (opens in background by default) — never steal focus from the user's current tab.
-3. **IMMEDIATELY create a tab group** using \`group_tabs\` with a descriptive title — do this right after opening the tabs, before any other work. Include the user's current tab in the group. Every multi-tab task MUST have a tab group.
+3. **Name and organize the tab group** using \`group_tabs\` with a descriptive title — new tabs auto-group with the origin tab, but you should add a meaningful title and color. Every multi-tab task MUST have a named tab group.
 4. **Work on background tabs** — all tools (click, fill, navigate, snapshot) work on background tabs via their page ID.
 5. **Narrate progress in chat** — keep the user informed: "Checking Vercel pricing... Now checking Netlify..."
 6. **Report results in chat** — summarize findings so the user doesn't need to switch tabs. Leave tabs open for the user to browse later.
@@ -290,8 +290,8 @@ function getToolSelection(
 | Task | Approach |
 |------|----------|
 | Look up one page | \`new_page\` (background) → extract data → \`close_page\` |
-| Research across multiple sites | \`new_page\` (background) for each site + \`group_tabs\` |
-| Compare two pages side by side | \`new_page\` (background) × 2 + \`group_tabs\` |
+| Research across multiple sites | \`new_page\` (background) for each site (auto-groups) + \`group_tabs\` to name |
+| Compare two pages side by side | \`new_page\` (background) × 2 (auto-groups) + \`group_tabs\` to name |
 | User says "open a new tab" | \`new_page\` (background) |
 
 **Remember:** The active tab is the New Tab chat UI. Never navigate or close it.`
@@ -299,8 +299,8 @@ function getToolSelection(
 | Task | Approach |
 |------|----------|
 | Look up one page | \`navigate_page\` on current tab |
-| Research across multiple sites | \`new_page\` (background) for each site + \`group_tabs\` |
-| Compare two pages side by side | \`new_page\` (background) × 2 + \`group_tabs\` |
+| Research across multiple sites | \`new_page\` (background) for each site (auto-groups) + \`group_tabs\` to name |
+| Compare two pages side by side | \`new_page\` (background) × 2 (auto-groups) + \`group_tabs\` to name |
 | User says "open a new tab" | \`new_page\` (background) — don't steal focus |`
 
   return `<tool_selection>
