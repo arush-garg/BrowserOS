@@ -2,8 +2,7 @@ import { keepPreviousData, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
 import { Loader2 } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo, useState } from 'react'
-import { toast } from 'sonner'
+import { useMemo } from 'react'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import { useConversations } from '@/lib/conversations/conversationStorage'
 import { GetProfileIdByUserIdDocument } from '@/lib/conversations/graphql/uploadConversationDocument'
@@ -22,11 +21,8 @@ import {
 import { LocalChatHistory } from './local/LocalChatHistory'
 
 const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
-  const { conversationId: activeConversationId, resetConversation } =
-    useChatSessionContext()
-  const { clearConversations } = useConversations()
+  const { conversationId: activeConversationId } = useChatSessionContext()
   const queryClient = useQueryClient()
-  const [isClearingAll, setIsClearingAll] = useState(false)
 
   const { data: profileData } = useGraphqlQuery(GetProfileIdByUserIdDocument, {
     userId,
@@ -72,50 +68,6 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
     deleteConversationMutation.mutate({ rowId: id })
   }
 
-  const getAllRemoteConversationIds = async () => {
-    let pages = graphqlData?.pages ?? []
-    let hasMore = Boolean(
-      pages.at(-1)?.conversations?.pageInfo.hasNextPage ?? hasNextPage,
-    )
-
-    while (hasMore) {
-      const result = await fetchNextPage()
-      pages = result.data?.pages ?? pages
-      hasMore = Boolean(pages.at(-1)?.conversations?.pageInfo.hasNextPage)
-    }
-
-    return pages.flatMap((page) =>
-      (page.conversations?.nodes ?? [])
-        .filter((node): node is NonNullable<typeof node> => node !== null)
-        .map((node) => node.rowId),
-    )
-  }
-
-  const handleClearAll = async () => {
-    setIsClearingAll(true)
-    try {
-      const ids = [...new Set(await getAllRemoteConversationIds())]
-      for (let i = 0; i < ids.length; i += 10) {
-        const batch = ids.slice(i, i + 10)
-        await Promise.all(
-          batch.map((rowId) =>
-            deleteConversationMutation.mutateAsync({ rowId }),
-          ),
-        )
-      }
-      await clearConversations()
-      resetConversation()
-      await queryClient.invalidateQueries({
-        queryKey: [getQueryKeyFromDocument(GetConversationsForHistoryDocument)],
-      })
-      toast.success('Chat sessions cleared')
-    } catch {
-      toast.error('Failed to clear chat sessions')
-    } finally {
-      setIsClearingAll(false)
-    }
-  }
-
   const conversations = useMemo<HistoryConversation[]>(() => {
     if (!graphqlData?.pages) return []
 
@@ -158,8 +110,6 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
       groupedConversations={groupedConversations}
       activeConversationId={activeConversationId}
       onDelete={handleDelete}
-      onClearAll={handleClearAll}
-      isClearingAll={isClearingAll || deleteConversationMutation.isPending}
       hasNextPage={hasNextPage}
       isFetchingNextPage={isFetchingNextPage}
       onLoadMore={fetchNextPage}
@@ -171,6 +121,8 @@ const RemoteChatHistory: FC<{ userId: string }> = ({ userId }) => {
 export const ChatHistory: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const userId = sessionInfo.user?.id
+  // needed to initiate remote-sync
+  useConversations()
 
   if (userId) {
     return <RemoteChatHistory userId={userId} />

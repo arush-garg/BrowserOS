@@ -9,7 +9,6 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
-import { createGeminiComputerUseFetch } from '../lib/clients/llm/gemini-computer-use-fetch'
 import {
   createMockBrowserOSLanguageModel,
   shouldUseMockBrowserOSLLM,
@@ -68,12 +67,7 @@ function createGoogleFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
   if (!config.apiKey) throw new Error('Google provider requires apiKey')
-  const fetch = createGeminiComputerUseFetch(config.model)
-  return createGoogleGenerativeAI({
-    apiKey: config.apiKey,
-    ...(config.baseUrl && { baseURL: config.baseUrl }),
-    ...(fetch && { fetch }),
-  })
+  return createGoogleGenerativeAI({ apiKey: config.apiKey })
 }
 
 function createOpenRouterFactory(

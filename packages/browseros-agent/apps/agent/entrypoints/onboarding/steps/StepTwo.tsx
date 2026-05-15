@@ -1,6 +1,5 @@
 import { AlertCircle, CheckCircle2, Loader2, Mail } from 'lucide-react'
 import { useState } from 'react'
-import { CloudSyncDisclosure } from '@/components/auth/CloudSyncDisclosure'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -199,8 +198,6 @@ export const StepTwo = ({ direction, onContinue }: StepTwoProps) => {
               Send Magic Link
             </Button>
           </form>
-
-          <CloudSyncDisclosure />
 
           <div className="text-center">
             <Button

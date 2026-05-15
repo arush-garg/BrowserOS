@@ -30,4 +30,8 @@ describe('tool approval enforcement', () => {
 
     assert.deepStrictEqual(approvedToolNames.sort(), registry.names().sort())
   })
+
+  it('does not expose unsupported window visibility tools', () => {
+    assert.ok(!registry.names().includes('set_window_visibility'))
+  })
 })

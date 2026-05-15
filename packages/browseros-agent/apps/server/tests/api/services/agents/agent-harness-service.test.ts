@@ -606,21 +606,15 @@ async function withHermesBrowserosDir<T>(
   }) => Promise<T>,
 ): Promise<T> {
   const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-test-'))
-  const previousBrowserosDir = process.env.BROWSEROS_DIR
-  process.env.BROWSEROS_DIR = browserosDir
   const agents: AgentDefinition[] = []
   try {
     const service = new AgentHarnessService({
       agentStore: createAgentStore(agents) as AgentStore,
+      browserosDir,
       runtime: stubRuntime(),
     })
     return await run({ agents, browserosDir, service })
   } finally {
-    if (previousBrowserosDir === undefined) {
-      delete process.env.BROWSEROS_DIR
-    } else {
-      process.env.BROWSEROS_DIR = previousBrowserosDir
-    }
     await rm(browserosDir, { recursive: true, force: true })
   }
 }

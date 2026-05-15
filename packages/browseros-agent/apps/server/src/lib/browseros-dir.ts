@@ -1,10 +1,9 @@
 import { unlinkSync } from 'node:fs'
-import { readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PATHS } from '@browseros/shared/constants/paths'
 import type { ServerDiscoveryConfig } from '@browseros/shared/types/server-config'
-import { ensureDirectory } from './ensure-directory'
 import { logger } from './logger'
 
 export function getBrowserosDir(): string {
@@ -113,12 +112,12 @@ export function removeServerConfigSync(): void {
 
 export async function ensureBrowserosDir(): Promise<void> {
   logDevelopmentBrowserosDir()
-  await ensureDirectory(getMemoryDir())
-  await ensureDirectory(getSkillsDir())
-  await ensureDirectory(getBuiltinSkillsDir())
-  await ensureDirectory(getSessionsDir())
-  await ensureDirectory(getLazyMonitoringRunsDir())
-  await ensureDirectory(getVmDisksDir())
+  await mkdir(getMemoryDir(), { recursive: true })
+  await mkdir(getSkillsDir(), { recursive: true })
+  await mkdir(getBuiltinSkillsDir(), { recursive: true })
+  await mkdir(getSessionsDir(), { recursive: true })
+  await mkdir(getLazyMonitoringRunsDir(), { recursive: true })
+  await mkdir(getVmDisksDir(), { recursive: true })
 }
 
 export async function cleanOldSessions(): Promise<void> {

@@ -10,27 +10,7 @@ function restoreGlobal(name: string, value: unknown) {
 }
 
 describe('stageAttachment', () => {
-  it('stages pasted clipboard images that do not have a filename', async () => {
-    const file = new File([new Uint8Array([1, 2, 3])], '', {
-      type: 'image/png',
-    })
-
-    const result = await stageAttachment(file)
-
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error(result.error.message)
-    expect(result.attachment.kind).toBe('image')
-    expect(result.attachment.name).toBe('image')
-    expect(result.attachment.mediaType).toBe('image/png')
-    expect(result.attachment.dataUrl).toStartWith('data:image/png;base64,')
-    expect(result.attachment.payload).toMatchObject({
-      kind: 'image',
-      mediaType: 'image/png',
-      dataUrl: result.attachment.dataUrl,
-    })
-  })
-
-  it('uses the recompressed blob media type for large pasted images', async () => {
+  it('uses the recompressed blob media type for large images', async () => {
     const originalCreateImageBitmap = Reflect.get(
       globalThis,
       'createImageBitmap',

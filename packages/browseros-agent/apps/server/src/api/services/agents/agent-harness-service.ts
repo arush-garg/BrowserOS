@@ -33,14 +33,14 @@ export {
   type QueuedMessageAttachment,
 } from '../../../lib/agents/message-queue'
 
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import type {
   AgentHistoryPage,
   AgentRowSnapshot,
   AgentRuntime,
   AgentStreamEvent,
 } from '../../../lib/agents/types'
-import { getOpenClawDir } from '../../../lib/browseros-dir'
+import { getBrowserosDir, getOpenClawDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
 import {
   buildFilePreview,
@@ -198,6 +198,7 @@ export type TurnLifecycleListener = (
 export class AgentHarnessService {
   private readonly agentStore: AgentStore
   private readonly runtime: AgentRuntime
+  private readonly browserosDir: string
   private readonly openclawProvisioner: OpenClawProvisioner | null
   private readonly turnRegistry: TurnRegistry
   private readonly messageQueue: FileMessageQueue
@@ -224,6 +225,7 @@ export class AgentHarnessService {
     deps: {
       agentStore?: AgentStore
       runtime?: AgentRuntime
+      browserosDir?: string
       browserosServerPort?: number
       openclawGateway?: OpenclawGatewayAccessor
       openclawProvisioner?: OpenClawProvisioner
@@ -232,16 +234,27 @@ export class AgentHarnessService {
       producedFilesStore?: ProducedFilesStore
     } = {},
   ) {
+    this.browserosDir = deps.browserosDir ?? getBrowserosDir()
     this.agentStore = deps.agentStore ?? new DbAgentStore()
     this.runtime =
       deps.runtime ??
       new AcpxRuntime({
+        browserosDir: this.browserosDir,
         browserosServerPort: deps.browserosServerPort,
         openclawGateway: deps.openclawGateway,
       })
     this.openclawProvisioner = deps.openclawProvisioner ?? null
     this.turnRegistry = deps.turnRegistry ?? new TurnRegistry()
-    this.messageQueue = deps.messageQueue ?? new FileMessageQueue()
+    this.messageQueue =
+      deps.messageQueue ??
+      new FileMessageQueue({
+        filePath: join(
+          this.browserosDir,
+          'agents',
+          'harness',
+          'message-queues.json',
+        ),
+      })
     if (deps.producedFilesStore) {
       this.explicitProducedFilesStore = deps.producedFilesStore
     }
@@ -612,6 +625,7 @@ export class AgentHarnessService {
       )
     }
     await writeHermesPerAgentProvider({
+      browserosDir: this.browserosDir,
       agentId,
       providerId: mapping.hermesProvider,
       envVarName: mapping.envVarName,
