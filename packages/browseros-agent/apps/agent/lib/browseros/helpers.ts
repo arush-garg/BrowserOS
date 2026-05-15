@@ -3,6 +3,10 @@ import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
 
+const PREF_READ_TIMEOUT_MS = 1500
+const PREF_READ_MAX_ATTEMPTS = 5
+const PREF_RETRY_BASE_DELAY_MS = 200
+
 export class AgentPortError extends Error {
   constructor() {
     super('Agent server port not configured.')
@@ -32,35 +36,81 @@ export async function getAgentServerUrl(): Promise<string> {
   return `http://127.0.0.1:${port}`
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error,
+): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(timeoutError), timeoutMs)
+    }),
+  ])
+}
+
+async function getPrefNumberWithRetry(prefKey: string): Promise<number | null> {
+  const adapter = getBrowserOSAdapter()
+
+  for (let attempt = 0; attempt < PREF_READ_MAX_ATTEMPTS; attempt++) {
+    try {
+      const pref = await withTimeout(
+        adapter.getPref(prefKey),
+        PREF_READ_TIMEOUT_MS,
+        new Error(`Timed out reading BrowserOS pref: ${prefKey}`),
+      )
+
+      if (pref?.value && typeof pref.value === 'number') {
+        return pref.value
+      }
+    } catch {
+      // BrowserOS API may be temporarily unavailable during startup.
+    }
+
+    if (attempt < PREF_READ_MAX_ATTEMPTS - 1) {
+      await sleep(PREF_RETRY_BASE_DELAY_MS * (attempt + 1))
+    }
+  }
+
+  return null
+}
+
 async function getAgentPort(): Promise<number> {
   if (env.VITE_BROWSEROS_SERVER_PORT) {
     return env.VITE_BROWSEROS_SERVER_PORT
   }
 
-  try {
-    const adapter = getBrowserOSAdapter()
-    const pref = await adapter.getPref(BROWSEROS_PREFS.AGENT_PORT)
+  const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.AGENT_PORT)
+  if (prefPort !== null) {
+    return prefPort
+  }
 
-    if (pref?.value && typeof pref.value === 'number') {
-      return pref.value
-    }
-  } catch {
-    // BrowserOS API not available
+  // Final fallback for local development where prefs can lag at startup.
+  if (env.NODE_ENV === 'development') {
+    return 9100
   }
 
   throw new AgentPortError()
 }
 
 async function getMcpPort(): Promise<number> {
-  try {
-    const adapter = getBrowserOSAdapter()
-    const pref = await adapter.getPref(BROWSEROS_PREFS.MCP_PORT)
+  if (env.VITE_BROWSEROS_SERVER_PORT) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
 
-    if (pref?.value && typeof pref.value === 'number') {
-      return pref.value
-    }
-  } catch {
-    // BrowserOS API not available
+  const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.MCP_PORT)
+  if (prefPort !== null) {
+    return prefPort
+  }
+
+  if (env.NODE_ENV === 'development') {
+    return 9100
   }
 
   throw new McpPortError()
@@ -87,15 +137,9 @@ export class ProxyPortError extends Error {
 }
 
 async function getProxyPort(): Promise<number> {
-  try {
-    const adapter = getBrowserOSAdapter()
-    const pref = await adapter.getPref(BROWSEROS_PREFS.PROXY_PORT)
-
-    if (pref?.value && typeof pref.value === 'number') {
-      return pref.value
-    }
-  } catch {
-    // BrowserOS API not available
+  const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.PROXY_PORT)
+  if (prefPort !== null) {
+    return prefPort
   }
 
   throw new ProxyPortError()

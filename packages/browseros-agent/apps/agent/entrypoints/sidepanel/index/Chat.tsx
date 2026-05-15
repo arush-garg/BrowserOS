@@ -23,6 +23,8 @@ import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
 import type { ChatMode } from './chatTypes'
 
+const RESTORE_LOADING_TIMEOUT_MS = 12000
+
 /**
  * @public
  */
@@ -63,6 +65,7 @@ export const Chat = () => {
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
   const [mounted, setMounted] = useState(false)
+  const [restoreTimedOut, setRestoreTimedOut] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -79,6 +82,21 @@ export const Chat = () => {
       setAttachedTabs(currentTab)
     })()
   }, [])
+
+  useEffect(() => {
+    if (!isRestoringConversation) {
+      setRestoreTimedOut(false)
+      return
+    }
+
+    const timeoutId = setTimeout(() => {
+      setRestoreTimedOut(true)
+    }, RESTORE_LOADING_TIMEOUT_MS)
+
+    return () => {
+      clearTimeout(timeoutId)
+    }
+  }, [isRestoringConversation])
 
   // Trigger JTBD popup when AI finishes responding
   const previousChatStatus = useRef(status)
@@ -205,7 +223,18 @@ export const Chat = () => {
       <main className="mt-4 flex h-full flex-1 flex-col space-y-4 overflow-y-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            {restoreTimedOut ? (
+              <ChatError
+                error={
+                  new Error(
+                    'Loading took longer than expected. Try sending a message to re-establish the connection.',
+                  )
+                }
+                providerType={selectedProvider?.type}
+              />
+            ) : (
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            )}
           </div>
         ) : messages.length === 0 ? (
           <ChatEmptyState

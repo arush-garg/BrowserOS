@@ -20,6 +20,32 @@ import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
 import type { ResolvedAgentConfig } from './types'
 
+/**
+ * Strips `reasoning_content` from assistant messages in the request body.
+ *
+ * The @ai-sdk/openai-compatible package only omits `reasoning_content` for
+ * Groq, but many other OpenAI-compatible providers (LMStudio, Ollama,
+ * Moonshot, Qwen Code, GitHub Copilot, etc.) also reject requests that
+ * include it. This transform removes it before the body is sent.
+ */
+function stripReasoningContent(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!args.messages) return args
+  let changed = false
+  const messages = (args.messages as Record<string, unknown>[]).map(
+    (msg: Record<string, unknown>) => {
+      if (msg.role === 'assistant' && 'reasoning_content' in msg) {
+        changed = true
+        const { reasoning_content: _, ...rest } = msg
+        return rest
+      }
+      return msg
+    },
+  )
+  return changed ? { ...args, messages } : args
+}
+
 type ProviderFactory = (
   config: ResolvedAgentConfig,
 ) => (modelId: string) => unknown
@@ -81,6 +107,7 @@ function createLMStudioFactory(
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -92,6 +119,7 @@ function createOllamaFactory(
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -147,6 +175,7 @@ function createBrowserOSFactory(
     baseURL: baseUrl,
     ...(apiKey && { apiKey }),
     fetch: browserosFetch,
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -159,6 +188,7 @@ function createOpenAICompatibleFactory(
     name: 'openai-compatible',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -171,6 +201,7 @@ function createMoonshotFactory(
     name: 'moonshot',
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -182,6 +213,7 @@ function createQwenCodeFactory(
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
+    transformRequestBody: stripReasoningContent,
   })
 }
 
@@ -195,6 +227,7 @@ function createGitHubCopilotFactory(
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
     fetch: createCopilotFetch() as typeof globalThis.fetch,
+    transformRequestBody: stripReasoningContent,
   })
 }
 

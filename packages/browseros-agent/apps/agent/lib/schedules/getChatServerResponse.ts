@@ -13,6 +13,19 @@ import { personalizationStorage } from '../personalization/personalizationStorag
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
 
+const CHAT_CONNECT_TIMEOUT_MS = 30000
+const CHAT_MAX_ATTEMPTS = 3
+const CHAT_RETRY_BASE_DELAY_MS = 500
+
+class StreamEndedUnexpectedlyError extends Error {
+  constructor() {
+    super(
+      'Stream ended unexpectedly without completion. The task may have been interrupted.',
+    )
+    this.name = 'StreamEndedUnexpectedlyError'
+  }
+}
+
 interface ActiveTab {
   id?: number
   url?: string
@@ -107,59 +120,131 @@ export async function getChatServerResponse(
     // biome-ignore lint/style/noNonNullAssertion: filter guarantees url exists
     .map((s) => ({ name: s.displayName, url: s.config!.url }))
 
-  const response = await fetch(`${agentServerUrl}/chat`, {
-    method: 'POST',
-    signal: request.signal,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      messages: [{ role: 'user', content: request.message }],
-      ...buildChatRequestBody({
-        message: request.message,
-        conversationId,
-        provider,
-        mode: request.mode ?? 'agent',
-        browserContext:
-          request.activeTab ||
-          request.windowId ||
-          enabledMcpServers.length ||
-          customMcpServers.length
-            ? {
-                windowId: request.windowId,
-                activeTab: request.activeTab,
-                enabledMcpServers:
-                  enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
-                customMcpServers:
-                  customMcpServers.length > 0 ? customMcpServers : undefined,
-              }
-            : undefined,
-        userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-        supportsImages: provider.supportsImages,
-        isScheduledTask: true,
-      }),
+  const body = JSON.stringify({
+    messages: [{ role: 'user', content: request.message }],
+    ...buildChatRequestBody({
+      message: request.message,
+      conversationId,
+      provider,
+      mode: request.mode ?? 'agent',
+      browserContext:
+        request.activeTab ||
+        request.windowId ||
+        enabledMcpServers.length ||
+        customMcpServers.length
+          ? {
+              windowId: request.windowId,
+              activeTab: request.activeTab,
+              enabledMcpServers:
+                enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
+              customMcpServers:
+                customMcpServers.length > 0 ? customMcpServers : undefined,
+            }
+          : undefined,
+      userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
+      supportsImages: provider.supportsImages,
+      isScheduledTask: true,
     }),
   })
 
-  if (!response.ok) {
-    throw new Error(
-      `Chat request failed: ${response.status} ${response.statusText}`,
-    )
-  }
-
-  const parsed = await parseUIMessageStream(response)
-
-  if (parsed.error) {
-    throw new Error(parsed.error)
-  }
+  const result = await fetchChatWithRetry({
+    agentServerUrl,
+    body,
+    signal: request.signal,
+  })
 
   return {
-    text: parsed.fullText,
+    text: result.fullText,
     conversationId,
-    finalResult: parsed.finalResult,
-    executionLog: parsed.executionLog,
-    toolCalls: parsed.toolCalls,
+    finalResult: result.finalResult,
+    executionLog: result.executionLog,
+    toolCalls: result.toolCalls,
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+async function fetchChatWithRetry({
+  agentServerUrl,
+  body,
+  signal,
+}: {
+  agentServerUrl: string
+  body: string
+  signal?: AbortSignal
+}): Promise<ParsedStreamResult> {
+  let lastError: Error | null = null
+
+  for (let attempt = 1; attempt <= CHAT_MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) {
+      throw new Error('Chat request was aborted')
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => {
+      controller.abort()
+    }, CHAT_CONNECT_TIMEOUT_MS)
+
+    try {
+      const response = await fetch(`${agentServerUrl}/chat`, {
+        method: 'POST',
+        signal: signal
+          ? AbortSignal.any([signal, controller.signal])
+          : controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body,
+      })
+
+      if (!response.ok) {
+        throw new Error(
+          `Chat request failed: ${response.status} ${response.statusText}`,
+        )
+      }
+
+      const parsed = await parseUIMessageStream(response)
+
+      if (parsed.error) {
+        throw new Error(parsed.error)
+      }
+
+      return parsed
+    } catch (error) {
+      if (isAbortError(error) && signal?.aborted) {
+        throw new Error('Chat request was aborted')
+      }
+
+      const nextError =
+        error instanceof Error ? error : new Error(String(error))
+      lastError = nextError
+
+      const retryable =
+        isAbortError(nextError) ||
+        nextError instanceof StreamEndedUnexpectedlyError ||
+        /network|failed to fetch|timed out|stream ended unexpectedly/i.test(
+          nextError.message,
+        )
+
+      if (!retryable || attempt === CHAT_MAX_ATTEMPTS) {
+        throw nextError
+      }
+
+      await sleep(CHAT_RETRY_BASE_DELAY_MS * attempt)
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  throw lastError ?? new Error('Failed to fetch chat response')
 }
 
 function processEvent(event: UIMessageEvent, state: StreamParseState): void {
@@ -243,8 +328,7 @@ async function parseUIMessageStream(
     }
 
     if (!state.receivedFinish && !state.error) {
-      state.error =
-        'Stream ended unexpectedly without completion. The task may have been interrupted.'
+      state.error = new StreamEndedUnexpectedlyError().message
     }
 
     const finalResult = state.currentStepText.trim()

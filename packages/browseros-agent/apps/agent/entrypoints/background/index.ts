@@ -1,3 +1,4 @@
+import { chatTargetSelectionStorage } from '@/entrypoints/sidepanel/index/sidepanel-chat-targets'
 import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
@@ -106,6 +107,24 @@ export default defineBackground(() => {
       if (map[key]) {
         const { [key]: _, ...rest } = map
         selectedTextStorage.setValue(rest)
+      }
+    })
+  })
+
+  // When a tab is created by another tab (has an openerTabId), copy the
+  // per-tab chat target selection from the opener to the new tab so new
+  // pages inherit the same provider selection (covers window.open / ctrl+click).
+  chrome.tabs.onCreated.addListener((tab) => {
+    const newTabId = tab.id
+    const openerTabId = (tab as chrome.tabs.Tab & { openerTabId?: number })
+      .openerTabId
+    if (!newTabId || !openerTabId) return
+    const keyNew = String(newTabId)
+    const keyOpener = String(openerTabId)
+    chatTargetSelectionStorage.getValue().then((map) => {
+      if (map[keyOpener]) {
+        map[keyNew] = map[keyOpener]
+        chatTargetSelectionStorage.setValue(map).catch(() => null)
       }
     })
   })
