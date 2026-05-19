@@ -1,0 +1,6 @@
+{"level":30,"time":1779233116657,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","msg":"Using development BrowserOS directory: /Users/ag/.browseros-dev"}
+{"level":30,"time":1779233116804,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","browserosId":"d3373160-8d1","fromConfig":false,"msg":"BrowserOS ID initialized"}
+{"level":40,"time":1779233116804,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","msg":"Metrics disabled: missing POSTHOG_API_KEY"}
+{"level":30,"time":1779233116806,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","msg":"Connected to CDP on port 9005"}
+{"level":30,"time":1779233116806,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","msg":"Loaded 61 unified tools"}
+{"level":50,"time":1779233116815,"pid":23054,"hostname":"AGs-MacBook-Pro-2.local","port":9105,"error":"Failed to start server. Is port 9105 in use?","msg":"Failed to start HTTP server"}

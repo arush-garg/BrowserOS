@@ -13,8 +13,8 @@ import {
   createSubagentGetResultTool,
   createSubagentSpawnTool,
 } from './subagent'
-import { createWebFetchTool } from './web-fetch'
 import { waitTool } from './wait'
+import { createWebFetchTool } from './web-fetch'
 
 /**
  * Build a set of custom tools for the agent.

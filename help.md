@@ -78,5 +78,6 @@ A few likely failure points from the documented setup are: [github](https://gith
 - Port collisions on 9000 or 9100.
 - `BROWSEROS_BINARY` not pointing to a valid executable.
 - Running only the extension without the Bun server, even though the agent UI connects to the local server on `VITE_BROWSEROS_SERVER_PORT`. [github](https://github.com/browseros-ai/BrowserOS)
+- `run.sh` hangs waiting on `/health`: don’t add custom tools that reference non-existent approval category constants (for example `ToolApprovalCategoryId.LOW_RISK`). Use `defineToolWithCategory('assistant')` or another valid ID from `TOOL_APPROVAL_CATEGORY_IDS`, or the server will crash before `/health` comes up.
 
 If you want, paste your `packages/browseros-agent/package.json` and I can turn this into the exact one-command workflow and tell you what `dev:watch` actually runs under the hood. [github](https://github.com/browseros-ai/BrowserOS)
