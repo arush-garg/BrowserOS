@@ -48,6 +48,10 @@ import type {
 
 export type { OpenclawGatewayAccessor } from './openclaw/acp-command'
 
+const CLAUDE_ACP_ADAPTER_COMMAND =
+  'npx -y @agentclientprotocol/claude-agent-acp@^0.31.0'
+const CODEX_ACP_ADAPTER_COMMAND = 'npx -y @zed-industries/codex-acp@^0.12.0'
+
 type AcpxRuntimeOptions = {
   cwd?: string
   browserosDir?: string
@@ -706,20 +710,31 @@ function createBrowserosAgentRegistry(input: {
         return wrapCommandWithEnv('hermes acp', input.commandEnv)
       }
 
-      // claude + codex resolve through acpx-core's built-in registry
-      // because the canonical command is an npx wrapper around the
-      // upstream ACP-adapter package (e.g. `npx @zed-industries/codex-acp`),
-      // and the package version range lives inside acpx-core. The
-      // ClaudeRuntime / CodexRuntime registrations still drive health
-      // probing and per-turn prep; only the spawn command source-of-
-      // truth stays in acpx-core.
       if (lower === 'claude' || lower === 'codex') {
-        return wrapCommandWithEnv(registry.resolve(agentName), input.commandEnv)
+        return wrapCommandWithEnv(
+          resolveBrowserosHostAcpAdapterCommand(lower),
+          input.commandEnv,
+        )
       }
 
       return registry.resolve(agentName)
     },
   }
+}
+
+/**
+ * Resolve host-spawned Claude/Codex ACP adapters without asking acpx
+ * to discover package bins. BrowserOS prefixes commands with `env`;
+ * that hides acpx's built-in command from its package launcher, and
+ * in Bun standalone builds that launcher may also see `$bunfs` paths
+ * plus the compiled BrowserOS binary as `process.execPath`.
+ */
+function resolveBrowserosHostAcpAdapterCommand(
+  adapter: 'claude' | 'codex',
+): string {
+  return adapter === 'claude'
+    ? CLAUDE_ACP_ADAPTER_COMMAND
+    : CODEX_ACP_ADAPTER_COMMAND
 }
 
 async function applyRuntimeControls(
