@@ -14,6 +14,7 @@ import {
   createSubagentSpawnTool,
 } from './subagent'
 import { createWebFetchTool } from './web-fetch'
+import { waitTool } from './wait'
 
 /**
  * Build a set of custom tools for the agent.
@@ -30,6 +31,7 @@ export function buildCustomToolSet(
   const tools: ToolSet = {
     code_execute: createCodeExecutionTool(),
     run_app_script: createRunAppScriptTool(),
+    wait: waitTool,
   }
 
   // web_fetch requires browser context

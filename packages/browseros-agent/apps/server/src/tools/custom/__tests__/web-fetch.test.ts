@@ -67,7 +67,7 @@ function createMockBrowser() {
 describe('Web Fetch Tool', () => {
   it('exports a tool with description and schema', () => {
     const { browser } = createMockBrowser()
-    const tool = createWebFetchTool(browser)
+    const tool = createWebFetchTool(browser as any)
 
     expect(tool.description).toBeTruthy()
     expect(tool.inputSchema).toBeTruthy()
@@ -77,7 +77,7 @@ describe('Web Fetch Tool', () => {
 
   it('fetches search results and returns formatted text', async () => {
     const { browser, calls } = createMockBrowser()
-    const tool = createWebFetchTool(browser)
+    const tool = createWebFetchTool(browser as any)
 
     const result = (await (
       tool as unknown as {
@@ -127,7 +127,7 @@ describe('Web Fetch Tool', () => {
       async closePage() {},
     } as unknown
 
-    const tool = createWebFetchTool(errorBrowser)
+    const tool = createWebFetchTool(errorBrowser as any)
     const result = (await (
       tool as unknown as {
         execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
@@ -156,7 +156,7 @@ describe('Web Fetch Tool', () => {
       async closePage() {},
     } as unknown
 
-    const tool = createWebFetchTool(emptyBrowser)
+    const tool = createWebFetchTool(emptyBrowser as any)
     const result = (await (
       tool as unknown as {
         execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
@@ -173,7 +173,7 @@ describe('Web Fetch Tool', () => {
   it('uses the correct search engine URL', async () => {
     // Test Google
     const googleMock = createMockBrowser()
-    const googleTool = createWebFetchTool(googleMock.browser)
+    const googleTool = createWebFetchTool(googleMock.browser as any)
     await (
       googleTool as unknown as {
         execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
@@ -183,7 +183,7 @@ describe('Web Fetch Tool', () => {
 
     // Test DuckDuckGo
     const ddgMock = createMockBrowser()
-    const ddgTool = createWebFetchTool(ddgMock.browser)
+    const ddgTool = createWebFetchTool(ddgMock.browser as any)
     await (
       ddgTool as unknown as {
         execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
@@ -193,7 +193,7 @@ describe('Web Fetch Tool', () => {
 
     // Test Brave (default)
     const braveMock = createMockBrowser()
-    const braveTool = createWebFetchTool(braveMock.browser)
+    const braveTool = createWebFetchTool(braveMock.browser as any)
     await (
       braveTool as unknown as {
         execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
