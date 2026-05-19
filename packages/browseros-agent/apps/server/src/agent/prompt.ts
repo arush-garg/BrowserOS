@@ -184,10 +184,22 @@ You have a session workspace for reading, writing, and executing files. See the 
 You have persistent memory across sessions and an evolving personality. See the Memory & Identity section for tools and guidance.`
   }
 
-  capabilities += '\n</capabilities>'
+  capabilities += `
+
+### Custom Tools
+Specialized tools for advanced workflows:
+
+**Code Execution**: \`code_execute\` — run short JavaScript or Python snippets for calculations, data transformations, or simple reasoning tasks (max 10s runtime).
+
+**Web Search & Fetch**: \`web_fetch\` — search the web using Brave/Google/DuckDuckGo and fetch content from top results to gather research data.
+
+**Subagent Spawning**: \`subagent_spawn\` — create and run subagents with custom instructions and optional provider/model selection. Supports both synchronous and asynchronous execution modes.
+
+**Apps Script Execution**: \`run_app_script\` — execute Google Apps Script workflows on Google Docs, Sheets, and Slides for automated document manipulation.
+
+\n</capabilities>`
   return capabilities
 }
-
 // -----------------------------------------------------------------------------
 // section: execution
 // -----------------------------------------------------------------------------

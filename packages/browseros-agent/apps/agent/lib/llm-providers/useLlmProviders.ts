@@ -5,6 +5,7 @@ import {
   defaultProviderIdStorage,
   loadProviders,
   providersStorage,
+  setupBrowserOSProvidersWatcher,
 } from './storage'
 import type { LlmProviderConfig } from './types'
 
@@ -83,6 +84,9 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   // Listen for storage changes
   useEffect(() => {
+    // Also watch BrowserOS Local State for cross-profile changes
+    const stopBrowserOSWatcher = setupBrowserOSProvidersWatcher()
+
     const unsubscribeProviders = providersStorage.watch((newProviders) => {
       if (newProviders) {
         setProviders(newProviders)
@@ -100,6 +104,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     return () => {
       unsubscribeProviders()
       unsubscribeDefaultId()
+      stopBrowserOSWatcher()
     }
   }, [])
 

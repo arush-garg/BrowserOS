@@ -23,6 +23,7 @@ index 12845dd2464bb..ab7dbdd7d9452 100644
    breadcrumbs::RegisterPrefs(registry);
    browser_shutdown::RegisterPrefs(registry);
    BrowserProcessImpl::RegisterPrefs(registry);
++  browseros::RegisterLocalStatePrefs(registry);
 +  browseros_server::RegisterLocalStatePrefs(registry);
 +  browseros_metrics::RegisterLocalStatePrefs(registry);
    ChromeContentBrowserClient::RegisterLocalStatePrefs(registry);

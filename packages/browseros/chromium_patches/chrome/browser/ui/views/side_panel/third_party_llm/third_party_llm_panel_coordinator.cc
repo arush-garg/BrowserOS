@@ -1,3 +1,18 @@
+		Profile* profile,
+		TabStripModel* tab_strip_model)
+		: profile_(CHECK_DEREF(profile)),
+			tab_strip_model_(CHECK_DEREF(tab_strip_model)),
+			feedback_timer_(std::make_unique<base::OneShotTimer>()) {
+	// Register for early cleanup notifications
+	browser_list_observation_.Observe(BrowserList::GetInstance());
+	profile_observation_.Observe(&profile_.get());
+
+	// Ensure cross-profile provider prefs are migrated into Local State if needed
+	browseros::MigrateProviderPrefsIfNeeded();
+
+	// Load providers from preferences
+	LoadProvidersFromPrefs();
+}
 diff --git a/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_panel_coordinator.cc
 new file mode 100644
 index 0000000000000..9eea7f83e53dd
@@ -13,6 +28,9 @@ index 0000000000000..9eea7f83e53dd
 +#include <memory>
 +#include <vector>
 +
+#include "chrome/browser/browseros/core/browseros_prefs.h"
+#include "chrome/browser/browser_process.h"
+
 +#include "base/check.h"
 +#include "base/check_deref.h"
 +#include "build/build_config.h"
@@ -594,66 +612,86 @@ index 0000000000000..9eea7f83e53dd
 +      ui::PAGE_TRANSITION_LINK, AddTabTypes::ADD_ACTIVE);
 +}
 +
-+void ThirdPartyLlmPanelCoordinator::OnCopyContent() {
-+  // Get the active tab's web contents
-+  TabStripModel* tab_strip_model = GetTabStripModel();
-+  if (!tab_strip_model) {
-+    return;
-+  }
-+
-+  content::WebContents* active_contents = tab_strip_model->GetActiveWebContents();
-+  if (!active_contents) {
-+    return;
-+  }
-+  
-+  // Store the title and URL for later use
-+  page_title_ = active_contents->GetTitle();
-+  page_url_ = active_contents->GetVisibleURL();
-+  
-+  // Request accessibility tree snapshot
-+  active_contents->RequestAXTreeSnapshot(
-+      base::BindOnce(&ThirdPartyLlmPanelCoordinator::OnAccessibilityTreeReceived,
-+                     weak_factory_.GetWeakPtr()),
-+      ui::AXMode::kWebContents,  // Request web contents mode
-+      0,  // max_nodes (0 = no limit)
-+      base::Seconds(5),  // timeout
-+      content::WebContents::AXTreeSnapshotPolicy::kSameOriginDirectDescendants);
-+}
-+
-+void ThirdPartyLlmPanelCoordinator::OnScreenshotContent() {
-+  // Get the active tab's web contents
-+  TabStripModel* tab_strip_model = GetTabStripModel();
-+  if (!tab_strip_model) {
-+    return;
-+  }
-+
-+  content::WebContents* active_contents = tab_strip_model->GetActiveWebContents();
-+  if (!active_contents) {
-+    return;
-+  }
-+
-+  // Get the render widget host
-+  content::RenderWidgetHostView* view = active_contents->GetRenderWidgetHostView();
-+  if (!view) {
-+    return;
-+  }
-+
-+  // For now, just capture the visible viewport
-+  // Full page screenshot would require DevTools protocol or RenderFrameHostImpl access
-+  view->CopyFromSurface(
-+      gfx::Rect(),  // Empty rect = full visible surface
-+      gfx::Size(),  // Empty size = original size
-+      base::TimeDelta(),  // No timeout
-+      base::BindOnce([](base::WeakPtr<ThirdPartyLlmPanelCoordinator> coordinator,
-+                        const content::CopyFromSurfaceResult& result) {
-+        if (!coordinator) {
-+          return;
-+        }
-+        gfx::Image image;
-+        if (result.has_value() && !result->bitmap.drawsNothing()) {
-+          image = gfx::Image::CreateFrom1xBitmap(result->bitmap);
-+        }
-+        coordinator->OnScreenshotCaptured(image);
+void ThirdPartyLlmPanelCoordinator::LoadProvidersFromPrefs() {
+	PrefService* profile_prefs = GetProfile()->GetPrefs();
+	if (!profile_prefs) {
+		LOG(ERROR) << "[browseros] Failed to get Profile PrefService";
+		providers_ = GetDefaultProviders();
+		return;
+	}
+
+	PrefService* local_state = g_browser_process->local_state();
+
+	// Prefer Local State if the pref is registered there and contains entries.
+	bool use_local_state = false;
+	if (local_state && local_state->FindPreference(kThirdPartyLlmProvidersPref) != nullptr) {
+		const base::ListValue& ls_list = local_state->GetList(kThirdPartyLlmProvidersPref);
+		if (!ls_list.empty())
+			use_local_state = true;
+	}
+
+	const base::ListValue& providers_list = use_local_state
+																						 ? local_state->GetList(kThirdPartyLlmProvidersPref)
+																						 : profile_prefs->GetList(kThirdPartyLlmProvidersPref);
+
+	providers_.clear();
+
+	if (!providers_list.empty()) {
+		for (const base::Value& item : providers_list) {
+			if (!item.is_dict()) {
+				LOG(WARNING) << "[browseros] Invalid provider entry (not a dict), skipping";
+				continue;
+			}
+
+			const std::string* name = item.GetDict().FindString("name");
+			const std::string* url = item.GetDict().FindString("url");
+
+			if (!name || name->empty()) {
+				LOG(WARNING) << "[browseros] Provider missing name, skipping";
+				continue;
+			}
+
+			if (!url || url->empty()) {
+				LOG(WARNING) << "[browseros] Provider missing URL, skipping";
+				continue;
+			}
+
+			GURL provider_url(*url);
+			if (!provider_url.is_valid()) {
+				LOG(WARNING) << "[browseros] Invalid provider URL: " << *url;
+				continue;
+			}
+
+			providers_.push_back({base::UTF8ToUTF16(*name), provider_url});
+		}
+	}
+
+	// If no valid providers loaded, use defaults and persist to the preferred store.
+	if (providers_.empty()) {
+		LOG(INFO) << "[browseros] No providers in prefs, using defaults";
+		providers_ = GetDefaultProviders();
+		SaveProvidersToPrefs();
+	}
+
+	// Load selected provider index from Local State when present, otherwise profile prefs
+	int selected_index = 0;
+	if (use_local_state && local_state)
+		selected_index = local_state->GetInteger(kThirdPartyLlmSelectedProviderPref);
+	else
+		selected_index = profile_prefs->GetInteger(kThirdPartyLlmSelectedProviderPref);
+
+	if (selected_index < 0 || static_cast<size_t>(selected_index) >= providers_.size()) {
+		LOG(WARNING) << "[browseros] Invalid selected provider index: " << selected_index
+								 << ", resetting to 0";
+		current_provider_index_ = 0;
+		if (use_local_state && local_state)
+			local_state->SetInteger(kThirdPartyLlmSelectedProviderPref, 0);
+		else
+			profile_prefs->SetInteger(kThirdPartyLlmSelectedProviderPref, 0);
+	} else {
+		current_provider_index_ = static_cast<size_t>(selected_index);
+	}
+}
 +      }, weak_factory_.GetWeakPtr()));
 +}
 +

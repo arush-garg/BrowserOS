@@ -99,6 +99,12 @@ const VERB_OVERRIDES: Record<string, string> = {
   focus_window: 'Focused window',
   close_window: 'Closed window',
   create_window: 'Created window',
+
+  // Custom tools
+  code_execute: 'Executed code',
+  subagent_spawn: 'Launched subagent',
+  subagent_get_result: 'Fetched subagent result',
+  run_app_script: 'Ran Apps Script',
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -174,7 +180,6 @@ const SUBJECT_EXTRACTORS: Record<string, SubjectExtractor> = {
     if (action === 'reload') return 'reload'
     return formatUrl(i.url)
   },
-  web_fetch: (i) => formatUrl(i.url),
 
   // Search queries
   web_search: (i) => quote(stringField(i, 'query', 'q')),
@@ -266,6 +271,24 @@ const SUBJECT_EXTRACTORS: Record<string, SubjectExtractor> = {
 
   // History
   delete_history_url: (i) => formatUrl(i.url),
+
+  // Custom tools
+  code_execute: (i) => asString(i.language) || 'code',
+  subagent_spawn: (i) => {
+    const provider = asString(i.provider)
+    const model = asString(i.model)
+    if (provider && model) return `${provider}/${model}`
+    return provider ?? model ?? 'subagent'
+  },
+  subagent_get_result: (i) => asString(i.jobId),
+  run_app_script: (i) => asString(i.app) || 'Apps Script',
+  web_fetch: (i) => {
+    const query = quote(stringField(i, 'query', 'q'))
+    const n = i.n
+    if (query && typeof n === 'number')
+      return `${n} result${n === 1 ? '' : 's'} for ${query}`
+    return query ?? `${n || 'results'}`
+  },
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -293,11 +316,9 @@ function humanizeToolName(rawName: string): string {
   const stripped = canonicalName(rawName)
   const words = stripped.split(/[_-]/).filter((w) => w.length > 0)
   if (words.length === 0) return rawName
-  const first = words[0]!
-  return [
-    first.charAt(0).toUpperCase() + first.slice(1),
-    ...words.slice(1),
-  ].join(' ')
+  const [first, ...rest] = words
+  if (!first) return rawName
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ')
 }
 
 /**

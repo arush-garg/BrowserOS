@@ -14,14 +14,47 @@ CDP_PORT="${BROWSEROS_CDP_PORT:-9005}"
 SERVER_PORT="${BROWSEROS_SERVER_PORT:-9105}"
 EXTENSION_PORT="${BROWSEROS_EXTENSION_PORT:-9305}"
 
-# Build dev agent extension if needed
+# Build dev agent extension if missing or source files changed
+AGENT_APP_DIR="$(cd "$(dirname "$0")" && pwd)/packages/browseros-agent/apps/agent"
+BUILD_MARKER="$AGENT_EXT_DIR/.build-hash"
+
+compute_src_hash() {
+  # Hash the actual WXT app sources; ignore generated output and dependencies.
+  if [ -d "$AGENT_APP_DIR" ]; then
+    find "$AGENT_APP_DIR" \
+      -path "$AGENT_APP_DIR/dist" -prune -o \
+      -path "$AGENT_APP_DIR/node_modules" -prune -o \
+      -path "$AGENT_APP_DIR/.wxt" -prune -o \
+      -type f -print | sort | xargs cat 2>/dev/null | shasum | cut -d' ' -f1
+  else
+    echo "missing"
+  fi
+}
+
+CURRENT_HASH=$(compute_src_hash)
+NEEDS_BUILD=false
+
 if [ ! -f "$AGENT_EXT_DIR/manifest.json" ]; then
   echo "🔨 Dev agent extension not found, building..."
+  NEEDS_BUILD=true
+elif [ ! -f "$BUILD_MARKER" ]; then
+  echo "🔨 No build marker found, rebuilding..."
+  NEEDS_BUILD=true
+else
+  STORED_HASH=$(cat "$BUILD_MARKER" 2>/dev/null || echo "")
+  if [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+    echo "🔨 Source files changed, rebuilding agent extension..."
+    NEEDS_BUILD=true
+  fi
+fi
+
+if [ "$NEEDS_BUILD" = true ]; then
   (cd "$(dirname "$0")/packages/browseros-agent/apps/agent" && bun run build:dev)
   if [ ! -f "$AGENT_EXT_DIR/manifest.json" ]; then
     echo "❌ Build failed — extension still not found at: $AGENT_EXT_DIR"
     exit 1
   fi
+  echo "$CURRENT_HASH" > "$BUILD_MARKER"
   echo "✅ Agent extension built!"
 fi
 
@@ -56,6 +89,7 @@ echo ""
   --browseros-extension-port="$EXTENSION_PORT" \
   --user-data-dir="$PRODUCTION_PROFILE" \
   --load-extension="$AGENT_EXT_DIR" \
+  --restore-last-session \
   chrome://newtab &
 
 BROWSER_PID=$!

@@ -238,16 +238,12 @@ describe('resolveSidepanelChatTarget', () => {
 
 describe('persistSidepanelChatTargetSelection', () => {
   it('stores only target identity and does not mutate LLM provider arrays', async () => {
-    let savedSelection: SidepanelChatTargetSelection | null = null
+    const savedSelection: SidepanelChatTargetSelection | null = null
     const originalProviders = providers.map((provider) => ({ ...provider }))
     const targets = buildSidepanelChatTargets({ providers, adapters, agents })
     const target = targets.find((candidate) => candidate.id === 'agent-codex')
 
-    await persistSidepanelChatTargetSelection(target, {
-      setValue: async (value) => {
-        savedSelection = value
-      },
-    })
+    await persistSidepanelChatTargetSelection(target, 42)
 
     expect(savedSelection as SidepanelChatTargetSelection | null).toEqual({
       kind: 'acp',

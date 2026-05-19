@@ -53,6 +53,9 @@ index 0000000000000..a94b14e0664ca
 +// Registers BrowserOS profile preferences.
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 +
+// Registers BrowserOS preferences in Local State (cross-profile).
+// Use this to make provider prefs shared across all profiles on the machine.
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 +// Check if LLM Chat should be shown in toolbar.
 +bool ShouldShowLLMChat(PrefService* pref_service);
 +
@@ -70,6 +73,10 @@ index 0000000000000..a94b14e0664ca
 +// reflects BrowserOS's default.
 +void SyncVerticalTabsPref(PrefService* pref_service);
 +
+// If Local State does not contain provider prefs but any profile does,
+// copy the first-found profile value into Local State. This is a safe,
+// copy-only, idempotent migration that may be invoked at startup.
+void MigrateProviderPrefsIfNeeded();
 +// Sets the default BrowserOS theme (blue tonal spot) on first run
 +// when the user hasn't customized the theme yet.
 +void SyncDefaultTheme(PrefService* pref_service);

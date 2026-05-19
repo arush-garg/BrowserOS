@@ -32,7 +32,7 @@ const useActiveTabId = (): number | null => {
       }
     }
     getActiveTab()
-    const listener = (info: chrome.tabs.TabActiveInfo) => {
+    const listener = (info: { tabId: number; windowId: number }) => {
       setActiveTabId(info.tabId)
     }
     chrome.tabs.onActivated.addListener(listener)

@@ -26,6 +26,7 @@ import { metrics } from '../lib/metrics'
 import { isSoulBootstrap, readSoul } from '../lib/soul'
 import { buildSkillsCatalog } from '../skills/catalog'
 import { loadSkills } from '../skills/loader'
+import { buildCustomToolSet } from '../tools/custom/build-toolset'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
 import type { ToolContext } from '../tools/framework'
 import { buildMemoryToolSet } from '../tools/memory/build-toolset'
@@ -182,6 +183,10 @@ export class AiSdkAgent {
     }
 
     // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
+    // Add custom tools (code_execute, web_fetch, subagent, run_app_script)
+    const customTools = buildCustomToolSet(toolContext, config.resolvedConfig)
+
+    // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
     const filesystemTools =
       !config.resolvedConfig.chatMode && config.resolvedConfig.workingDir
         ? buildFilesystemToolSet(config.resolvedConfig.workingDir)
@@ -192,6 +197,7 @@ export class AiSdkAgent {
     const tools = {
       ...browserTools,
       ...externalMcpTools,
+      ...customTools,
       ...filesystemTools,
       ...memoryTools,
     }

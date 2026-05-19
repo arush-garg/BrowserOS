@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test'
-import { resolveStaticFeatureSupport } from './capabilities'
+import { BrowserOSAdapter } from './adapter'
+import {
+  CAPABILITIES_READ_TIMEOUT_MS,
+  Capabilities,
+  resolveStaticFeatureSupport,
+} from './capabilities'
 
 describe('resolveStaticFeatureSupport', () => {
   it('enables alpha-gated features automatically in development', () => {
@@ -38,5 +43,27 @@ describe('resolveStaticFeatureSupport', () => {
         alphaFeaturesEnabled: false,
       }),
     ).toBeNull()
+  })
+})
+
+describe('Capabilities initialization', () => {
+  it('falls back when BrowserOS capability reads never resolve', async () => {
+    const originalGetInstance = BrowserOSAdapter.getInstance
+    BrowserOSAdapter.getInstance = () =>
+      ({
+        getBrowserosVersion: () => new Promise<string>(() => {}),
+        getPref: () => new Promise(() => {}),
+      }) as unknown as BrowserOSAdapter
+
+    try {
+      Capabilities.reset()
+      const start = Date.now()
+      await expect(Capabilities.getBrowserOSVersion()).resolves.toBeNull()
+      await expect(Capabilities.getServerVersion()).resolves.toBeNull()
+      expect(Date.now() - start).toBeLessThan(CAPABILITIES_READ_TIMEOUT_MS * 2)
+    } finally {
+      Capabilities.reset()
+      BrowserOSAdapter.getInstance = originalGetInstance
+    }
   })
 })

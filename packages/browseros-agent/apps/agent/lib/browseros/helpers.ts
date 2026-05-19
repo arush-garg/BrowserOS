@@ -92,7 +92,7 @@ async function getAgentPort(): Promise<number> {
   }
 
   // Final fallback for local development where prefs can lag at startup.
-  if (env.NODE_ENV === 'development') {
+  if (import.meta.env.NODE_ENV === 'development') {
     return 9100
   }
 
@@ -109,7 +109,7 @@ async function getMcpPort(): Promise<number> {
     return prefPort
   }
 
-  if (env.NODE_ENV === 'development') {
+  if (import.meta.env.NODE_ENV === 'development') {
     return 9100
   }
 

@@ -88,6 +88,32 @@ export function setupLlmProvidersSyncToBackend(): () => void {
 
 /** Load providers from storage */
 export async function loadProviders(): Promise<LlmProviderConfig[]> {
+  // Prefer BrowserOS Local State prefs when available (cross-profile).
+  try {
+    const adapter = getBrowserOSAdapter()
+    const pref = await adapter.getPref(BROWSEROS_PREFS.PROVIDERS)
+    const raw = pref?.value
+    if (typeof raw === 'string' && raw.length > 0) {
+      try {
+        const parsed = JSON.parse(raw)
+        // Support both backup shape { defaultProviderId, providers } and plain array
+        const providersFromPref: LlmProviderConfig[] | undefined =
+          Array.isArray(parsed) ? parsed : parsed?.providers
+
+        if (providersFromPref && providersFromPref.length > 0) {
+          const normalized = normalizeProviderNames(providersFromPref)
+          // Keep local storage consistent with BrowserOS prefs
+          await providersStorage.setValue(normalized)
+          return normalized
+        }
+      } catch {
+        // fall through to storage
+      }
+    }
+  } catch {
+    // BrowserOS adapter unavailable — fall back to local storage
+  }
+
   const providers = (await providersStorage.getValue()) || []
   const normalizedProviders = normalizeProviderNames(providers)
 
@@ -99,6 +125,47 @@ export async function loadProviders(): Promise<LlmProviderConfig[]> {
   }
 
   return normalizedProviders
+}
+
+/** Poll BrowserOS prefs for cross-profile changes and sync into local storage. */
+export function setupBrowserOSProvidersWatcher(
+  pollIntervalMs = 3000,
+): () => void {
+  let stopped = false
+  let lastSeen = ''
+
+  const poll = async () => {
+    const adapter = getBrowserOSAdapter()
+    while (!stopped) {
+      try {
+        const pref = await adapter.getPref(BROWSEROS_PREFS.PROVIDERS)
+        const raw = pref?.value
+        if (typeof raw === 'string' && raw !== lastSeen) {
+          lastSeen = raw
+          try {
+            const parsed = JSON.parse(raw)
+            const providersFromPref: LlmProviderConfig[] | undefined =
+              Array.isArray(parsed) ? parsed : parsed?.providers
+            if (providersFromPref) {
+              const normalized = normalizeProviderNames(providersFromPref)
+              await providersStorage.setValue(normalized)
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      } catch {
+        // ignore adapter errors
+      }
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs))
+    }
+  }
+
+  void poll()
+  return () => {
+    stopped = true
+  }
 }
 
 /** Creates the default BrowserOS provider configuration */

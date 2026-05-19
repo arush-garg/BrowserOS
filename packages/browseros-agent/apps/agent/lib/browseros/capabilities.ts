@@ -2,6 +2,7 @@ import { env } from '../env'
 import { BrowserOSAdapter } from './adapter'
 
 const SERVER_VERSION_PREF = 'browseros.server.version'
+export const CAPABILITIES_READ_TIMEOUT_MS = 1500
 
 type FeatureConfig = {
   minBrowserOSVersion?: string
@@ -109,6 +110,19 @@ function compareVersions(a: number[], b: number[]): number {
   return 0
 }
 
+async function readWithTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  fallbackValue: T,
+): Promise<T> {
+  return await Promise.race([
+    operation,
+    new Promise<T>((resolve) => {
+      setTimeout(() => resolve(fallbackValue), timeoutMs)
+    }),
+  ])
+}
+
 function checkVersionConstraints(
   version: number[] | null,
   minVersionStr?: string,
@@ -170,23 +184,27 @@ async function doInitialize(): Promise<CapabilitiesState> {
     serverVersion: null,
   }
 
-  try {
-    const versionStr = await adapter.getBrowserosVersion()
-    if (versionStr) {
-      state.browserOSVersion = parseVersion(versionStr)
-    }
-  } catch {
-    // BrowserOS version unknown - features requiring it will be disabled
-  }
+  const [browserOSVersion, serverVersion] = await Promise.all([
+    readWithTimeout(
+      adapter
+        .getBrowserosVersion()
+        .then((version) => (version ? parseVersion(version) : null))
+        .catch(() => null),
+      CAPABILITIES_READ_TIMEOUT_MS,
+      null,
+    ),
+    readWithTimeout(
+      adapter
+        .getPref(SERVER_VERSION_PREF)
+        .then((pref) => (pref?.value ? parseVersion(pref.value) : null))
+        .catch(() => null),
+      CAPABILITIES_READ_TIMEOUT_MS,
+      null,
+    ),
+  ])
 
-  try {
-    const pref = await adapter.getPref(SERVER_VERSION_PREF)
-    if (pref?.value) {
-      state.serverVersion = parseVersion(pref.value)
-    }
-  } catch {
-    // Server version unknown - features requiring it will be disabled
-  }
+  state.browserOSVersion = browserOSVersion
+  state.serverVersion = serverVersion
 
   return state
 }

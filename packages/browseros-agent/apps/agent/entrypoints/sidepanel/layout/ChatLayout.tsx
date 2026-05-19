@@ -7,19 +7,23 @@ import {
 } from './ChatSessionContext'
 
 const ChatLayoutContent: FC = () => {
-  const {
-    providers,
-    selectedProvider,
-    handleSelectProvider,
-    resetConversation,
-    messages,
-    isLoading,
-  } = useChatSessionContext()
+  const { selectedProvider, resetConversation, messages, isLoading } =
+    useChatSessionContext()
 
   if (isLoading || !selectedProvider) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-background">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+      <div className="flex h-screen w-screen items-center justify-center bg-background px-6 text-center">
+        <div className="space-y-3">
+          <div className="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+          <div className="space-y-1">
+            <p className="font-medium text-foreground text-sm">
+              Connecting to BrowserOS…
+            </p>
+            <p className="text-muted-foreground text-xs">
+              Waiting for browser capabilities and agent data.
+            </p>
+          </div>
+        </div>
       </div>
     )
   }
@@ -28,8 +32,6 @@ const ChatLayoutContent: FC = () => {
     <div className="mx-auto flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <ChatHeader
         selectedProvider={selectedProvider}
-        onSelectProvider={handleSelectProvider}
-        providers={providers}
         onNewConversation={resetConversation}
         hasMessages={messages.length > 0}
       />
