@@ -6,7 +6,24 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import type { ToolExecutionOptions } from 'ai'
 import { createWebFetchTool } from '../web-fetch'
+
+const testToolOptions: ToolExecutionOptions = {
+  toolCallId: 'test-tool-call',
+  messages: [],
+}
+
+function executeWebFetchTool(tool: unknown, params: unknown) {
+  return (
+    tool as {
+      execute: (
+        params: unknown,
+        options: ToolExecutionOptions,
+      ) => Promise<unknown>
+    }
+  ).execute(params, testToolOptions)
+}
 
 /**
  * Creates a mock Browser that simulates the search → fetch → extract flow.
@@ -79,14 +96,11 @@ describe('Web Fetch Tool', () => {
     const { browser, calls } = createMockBrowser()
     const tool = createWebFetchTool(browser as any)
 
-    const result = (await (
-      tool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute(
-      { query: 'browseros agent', n: 2, engine: 'brave' },
-      {} as unknown,
-    )) as {
+    const result = (await executeWebFetchTool(tool, {
+      query: 'browseros agent',
+      n: 2,
+      engine: 'brave',
+    })) as {
       text: string
       isError: boolean
     }
@@ -128,11 +142,11 @@ describe('Web Fetch Tool', () => {
     } as unknown
 
     const tool = createWebFetchTool(errorBrowser as any)
-    const result = (await (
-      tool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute({ query: 'test', n: 1, engine: 'google' }, {} as unknown)) as {
+    const result = (await executeWebFetchTool(tool, {
+      query: 'test',
+      n: 1,
+      engine: 'google',
+    })) as {
       text: string
       isError: boolean
     }
@@ -157,14 +171,11 @@ describe('Web Fetch Tool', () => {
     } as unknown
 
     const tool = createWebFetchTool(emptyBrowser as any)
-    const result = (await (
-      tool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute(
-      { query: 'obscure query with no results', n: 3, engine: 'duckduckgo' },
-      {} as unknown,
-    )) as { text: string; isError: boolean }
+    const result = (await executeWebFetchTool(tool, {
+      query: 'obscure query with no results',
+      n: 3,
+      engine: 'duckduckgo',
+    })) as { text: string; isError: boolean }
 
     expect(result.isError).toBe(false)
     expect(result.text).toContain('No search results found')
@@ -174,31 +185,22 @@ describe('Web Fetch Tool', () => {
     // Test Google
     const googleMock = createMockBrowser()
     const googleTool = createWebFetchTool(googleMock.browser as any)
-    await (
-      googleTool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute({ query: 'test', engine: 'google' }, {} as unknown)
+    await executeWebFetchTool(googleTool, { query: 'test', engine: 'google' })
     expect(googleMock.calls.newPage[0][0]).toContain('google.com/search?q=')
 
     // Test DuckDuckGo
     const ddgMock = createMockBrowser()
     const ddgTool = createWebFetchTool(ddgMock.browser as any)
-    await (
-      ddgTool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute({ query: 'test', engine: 'duckduckgo' }, {} as unknown)
+    await executeWebFetchTool(ddgTool, {
+      query: 'test',
+      engine: 'duckduckgo',
+    })
     expect(ddgMock.calls.newPage[0][0]).toContain('duckduckgo.com/?q=')
 
     // Test Brave (default)
     const braveMock = createMockBrowser()
     const braveTool = createWebFetchTool(braveMock.browser as any)
-    await (
-      braveTool as unknown as {
-        execute?: (params: unknown, ctx?: unknown) => Promise<unknown>
-      }
-    ).execute({ query: 'test', engine: 'brave' }, {} as unknown)
+    await executeWebFetchTool(braveTool, { query: 'test', engine: 'brave' })
     expect(braveMock.calls.newPage[0][0]).toContain(
       'search.brave.com/search?q=',
     )

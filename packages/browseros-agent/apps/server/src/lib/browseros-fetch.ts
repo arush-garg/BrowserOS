@@ -62,7 +62,7 @@ export function createBrowserOSFetch(browserosId: string): typeof fetch {
           requestBodyValues: {},
           statusCode,
           responseBody,
-          isRetryable: false,
+          isRetryable: true,
         })
       }
 

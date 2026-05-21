@@ -6,7 +6,13 @@
 
 /* biome-disable suspicious/noExplicitAny style/noNonNullAssertion */
 import { beforeEach, describe, expect, it } from 'bun:test'
+import type { ToolExecutionOptions } from 'ai'
 import type { ResolvedAgentConfig } from '../../../agent/types'
+
+const testToolOptions: ToolExecutionOptions = {
+  toolCallId: 'test-tool-call',
+  messages: [],
+}
 
 /**
  * Creates a minimal ResolvedAgentConfig for testing.
@@ -41,7 +47,7 @@ function createTestConfig(
     declinedApps: [],
     origin: undefined,
     browserosId: '',
-    toolApprovalConfig: {} as unknown as Record<string, unknown>,
+    toolApprovalConfig: { categories: {} },
     ...overrides,
   }
 }
@@ -76,7 +82,7 @@ describe('Subagent Tools', () => {
         maxSteps: 1,
         runMode: 'sync',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     expect(result.type).toBe('text')
@@ -97,7 +103,7 @@ describe('Subagent Tools', () => {
         maxSteps: 2,
         runMode: 'sync',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     expect(result.type).toBe('text')
@@ -119,7 +125,7 @@ describe('Subagent Tools', () => {
         maxSteps: 1,
         runMode: 'sync',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     expect(result.type).toBe('text')
@@ -147,7 +153,7 @@ describe('Subagent Tools', () => {
           maxSteps: 1,
           runMode: 'sync',
         },
-        {} as unknown,
+        testToolOptions,
       )) as { type: 'text' | 'error-text'; value: string }
 
       expect(result.type).toBe('error-text')
@@ -168,7 +174,7 @@ describe('Subagent Tools', () => {
         maxSteps: 1,
         runMode: 'async',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     expect(result.type).toBe('text')
@@ -191,7 +197,7 @@ describe('Subagent Tools', () => {
         maxSteps: 2,
         runMode: 'async',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     // Extract jobId from the response text
@@ -205,7 +211,7 @@ describe('Subagent Tools', () => {
     // Get the result
     const getResult = (await getResultTool.execute?.(
       { jobId },
-      {} as unknown,
+      testToolOptions,
     )) as {
       type: 'text' | 'error-text'
       value: string
@@ -221,7 +227,7 @@ describe('Subagent Tools', () => {
 
     const result = (await getResultTool.execute?.(
       { jobId: 'job_nonexistent_12345' },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     expect(result.type).toBe('error-text')
@@ -242,7 +248,7 @@ describe('Subagent Tools', () => {
         maxSteps: 2,
         runMode: 'async',
       },
-      {} as unknown,
+      testToolOptions,
     )) as { type: 'text' | 'error-text'; value: string }
 
     const jobIdMatch = (spawnResult.value as string).match(/job_\d+_[a-z0-9]+/)
@@ -252,7 +258,7 @@ describe('Subagent Tools', () => {
     // Immediately check - job may still be pending/running
     const immediateResult = (await getResultTool.execute?.(
       { jobId },
-      {} as unknown,
+      testToolOptions,
     )) as {
       type: 'text' | 'error-text'
       value: string

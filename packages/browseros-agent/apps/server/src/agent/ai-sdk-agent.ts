@@ -38,6 +38,7 @@ import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
 } from './message-normalization'
+import { createRetryingLanguageModel } from './model-retry'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
 import { buildBrowserToolSet } from './tool-adapter'
@@ -91,6 +92,40 @@ export class AiSdkAgent {
         conversationId: config.resolvedConfig.conversationId,
         provider: config.resolvedConfig.provider,
         model: config.resolvedConfig.model,
+      })
+    }
+
+    // Wrap with retry/fallback middleware if gateway providers are configured
+    if (
+      isV3Model &&
+      config.resolvedConfig.gatewayProviders &&
+      config.resolvedConfig.gatewayProviders.length > 0
+    ) {
+      model = createRetryingLanguageModel({
+        resolvedConfig: config.resolvedConfig,
+        initialModel: model as LanguageModelV3,
+        createModel: ({
+          model: fallbackModel,
+          apiKey,
+          baseUrl,
+          providerType,
+        }) =>
+          createLanguageModel({
+            ...config.resolvedConfig,
+            provider: providerType as ResolvedAgentConfig['provider'],
+            model: fallbackModel,
+            apiKey,
+            baseUrl,
+          }) as LanguageModelV3,
+        logger: {
+          info: (msg, data) => logger.info(msg, data),
+          warn: (msg, data) => logger.warn(msg, data),
+          debug: (msg, data) => logger.debug(msg, data),
+        },
+      })
+      logger.info('Retry/fallback middleware enabled', {
+        conversationId: config.resolvedConfig.conversationId,
+        fallbackCount: config.resolvedConfig.gatewayProviders.length,
       })
     }
 

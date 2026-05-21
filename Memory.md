@@ -1,3 +1,14 @@
+### 2026-05-21 LLM Retry/Fallback Middleware
+
+#### Architecture
+- Server retry middleware lives in `packages/browseros-agent/apps/server/src/agent/model-retry.ts` and wraps AI SDK `LanguageModelV3` `doGenerate`/`doStream` calls.
+- Policy is same-model retry, same-model retry after fixed backoff, then random fallback provider; fallback provider becomes sticky after success.
+- `ResolvedAgentConfig.gatewayProviders` carries fallback provider configs; `ai-sdk-agent.ts` wraps v3 models only.
+
+#### Testing Notes
+- AI SDK v3 tool tests must pass a `ToolExecutionOptions` object with at least `toolCallId` and `messages`; bare `{}` casts fail `tsc`.
+- `LanguageModelV3.doGenerate`/`doStream` return `PromiseLike`, so retry helpers should accept `PromiseLike<T>` operations.
+
 ### 2026-05-13 BrowserOS Agent Error Resolution
 
 #### ✅ Fixed Issues

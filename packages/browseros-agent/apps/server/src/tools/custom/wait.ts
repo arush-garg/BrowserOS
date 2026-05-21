@@ -6,9 +6,6 @@
 
 import { tool } from 'ai'
 import { z } from 'zod'
-import { executeWithMetrics } from '../filesystem/utils'
-
-const TOOL_NAME = 'wait'
 
 export function createWaitTool() {
   return tool({
@@ -21,14 +18,11 @@ export function createWaitTool() {
         .max(60)
         .describe('The number of seconds to wait. Minimum 0.1s, maximum 60s.'),
     }),
-    execute: (params) =>
-      executeWithMetrics(TOOL_NAME, async () => {
-        const { seconds } = params
-        await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
-        return {
-          text: `Waited for ${seconds} seconds.`,
-        }
-      }),
+    execute: async (params) => {
+      const { seconds } = params
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
+      return `Waited for ${seconds} second${seconds === 1 ? '' : 's'}.`
+    },
   })
 }
 

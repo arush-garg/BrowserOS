@@ -53,4 +53,12 @@ export interface ResolvedAgentConfig {
   browserosId?: string
   /** Tool approval configuration — which categories require human approval. */
   toolApprovalConfig?: ToolApprovalConfig
+  /** Gateway provider pool for retry/fallback. */
+  gatewayProviders?: Array<{
+    name: string
+    model: string
+    apiKey?: string
+    baseUrl?: string
+    providerType: string
+  }>
 }
