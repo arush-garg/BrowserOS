@@ -92,7 +92,10 @@ export type OpenClawSessionHistoryEvent =
   | { type: 'error'; data: { message: string } }
 
 export class OpenClawHttpClient {
-  constructor(private readonly hostPort: number) {}
+  constructor(
+    private readonly hostPort: number,
+    private readonly token?: string,
+  ) {}
 
   async getSessionHistory(
     sessionKey: string,
@@ -118,9 +121,13 @@ export class OpenClawHttpClient {
 
   async isAuthenticated(): Promise<boolean> {
     try {
+      const headers: Record<string, string> = {}
+      if (this.token) {
+        headers.Authorization = `Bearer ${this.token}`
+      }
       const response = await fetch(
         `http://127.0.0.1:${this.hostPort}/v1/models`,
-        { method: 'GET' },
+        { method: 'GET', headers },
       )
       return response.ok
     } catch {
@@ -133,11 +140,16 @@ export class OpenClawHttpClient {
     input: OpenClawSessionHistoryInput,
     extraHeaders: Record<string, string>,
   ): Promise<Response> {
+    const headers = { ...extraHeaders }
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`
+    }
+
     const response = await fetch(
       `http://127.0.0.1:${this.hostPort}${buildHistoryPath(sessionKey, input)}`,
       {
         method: 'GET',
-        headers: extraHeaders,
+        headers,
         signal: input.signal,
       },
     )

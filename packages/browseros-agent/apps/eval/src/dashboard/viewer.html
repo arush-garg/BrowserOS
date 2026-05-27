@@ -744,8 +744,8 @@
       '<span>' + stats.total + ' total</span>' +
       '<span class="s-pass">' + stats.passed + ' pass</span>' +
       '<span class="s-fail">' + stats.failed + ' fail</span>' +
-      (stats.avgSteps !== null ? '<span>' + fmtCompact(stats.avgSteps) + ' steps/task</span>' : '') +
-      (stats.avgToolCalls !== null ? '<span>' + fmtCompact(stats.avgToolCalls) + ' tools/task</span>' : '');
+      (stats.avgSteps !== null ? `<span>${fmtCompact(stats.avgSteps)} steps/task</span>` : '') +
+      (stats.avgToolCalls !== null ? `<span>${fmtCompact(stats.avgToolCalls)} tools/task</span>` : '');
 
     renderSidebarMetrics(tasks, stats);
 

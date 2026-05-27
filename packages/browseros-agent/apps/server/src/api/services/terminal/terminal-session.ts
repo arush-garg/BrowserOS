@@ -16,6 +16,7 @@ interface TerminalSessionDeps {
   limactlPath: string
   vmName: string
   workingDir: string
+  nativeMode?: boolean
   onExit: (exitCode: number) => void
   onOutput: (data: string) => void
 }
@@ -31,7 +32,15 @@ export function buildTerminalExecCommand(
   vmName: string,
   containerName: string,
   workingDir: string,
+  nativeMode?: boolean,
 ): string[] {
+  if (nativeMode) {
+    return [
+      process.env.SHELL ?? '/bin/sh',
+      '-c',
+      `cd "${workingDir}" && exec ${process.env.SHELL ?? '/bin/sh'}`,
+    ]
+  }
   return [
     limactlPath,
     'shell',
@@ -62,6 +71,7 @@ export function createTerminalSession(
       deps.vmName,
       deps.containerName,
       deps.workingDir,
+      deps.nativeMode,
     ),
     {
       cwd: '/',

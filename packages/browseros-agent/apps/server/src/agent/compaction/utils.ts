@@ -286,6 +286,23 @@ export function estimateTokensForThreshold(
   )
 }
 
+export function updateTokenCount(
+  currentTokens: number,
+  originalMessages: ModelMessage[],
+  reducedMessages: ModelMessage[],
+  config: ComputedConfig,
+): number {
+  const savedEstimated =
+    estimateTokens(originalMessages, config.imageTokenEstimate) -
+    estimateTokens(reducedMessages, config.imageTokenEstimate)
+  const discountedActual = Math.max(
+    0,
+    currentTokens - Math.max(0, savedEstimated),
+  )
+  const pureHeuristic = estimateTokensForThreshold(reducedMessages, config)
+  return Math.max(discountedActual, pureHeuristic)
+}
+
 export function findSafeSplitPoint(
   messages: ModelMessage[],
   keepRecentTokens: number,

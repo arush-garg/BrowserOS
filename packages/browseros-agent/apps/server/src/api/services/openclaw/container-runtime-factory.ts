@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import os from 'node:os'
 import { dirname, join } from 'node:path'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { ContainerCli, ImageLoader } from '../../../lib/container'
@@ -18,6 +19,7 @@ import {
 } from '../../../lib/vm'
 import { VM_TELEMETRY_EVENTS } from '../../../lib/vm/telemetry'
 import { ContainerRuntime } from './container-runtime'
+import { NativeOpenClawRuntime } from './native-openclaw-runtime'
 
 const UNSUPPORTED_PLATFORM_MESSAGE =
   'browseros-vm currently supports macOS only; see the Linux/Windows tracking issue'
@@ -32,6 +34,28 @@ export interface ContainerRuntimeFactoryInput {
 export function buildContainerRuntime(
   input: ContainerRuntimeFactoryInput,
 ): ContainerRuntime {
+  const nativeConfigDir = join(os.homedir(), '.openclaw')
+  const nativeConfigPath = join(nativeConfigDir, 'openclaw.json')
+
+  if (existsSync(nativeConfigPath)) {
+    logger.info('Found native OpenClaw configuration, bypassing VM runtime')
+    try {
+      const cfg = JSON.parse(readFileSync(nativeConfigPath, 'utf-8')) as {
+        gateway?: { auth?: { token?: string }; port?: number }
+      }
+      return new NativeOpenClawRuntime(input.projectDir, {
+        port: cfg.gateway?.port ?? 18789,
+        token: cfg.gateway?.auth?.token,
+        configDir: nativeConfigDir,
+      })
+    } catch (err) {
+      logger.error(
+        'Failed to parse native openclaw.json, falling back to VM runtime',
+        { error: err instanceof Error ? err.message : String(err) },
+      )
+    }
+  }
+
   const platform = input.platform ?? process.platform
   if (platform !== 'darwin') {
     // BROWSEROS_SKIP_OPENCLAW=1 is the explicit opt-in for non-darwin hosts

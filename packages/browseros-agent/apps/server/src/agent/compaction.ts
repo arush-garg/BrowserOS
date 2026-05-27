@@ -18,13 +18,13 @@ import {
   type ComputedConfig,
   computeConfig,
   estimateTokens,
-  estimateTokensForThreshold,
   findSafeSplitPoint,
   getCurrentTokenCount,
   isCompactionState,
   reduceToolOutputs,
   type StepWithUsage,
   slidingWindow,
+  updateTokenCount,
 } from './compaction/utils'
 
 export {
@@ -38,6 +38,7 @@ export {
   reduceToolOutputs,
   type StepWithUsage,
   slidingWindow,
+  updateTokenCount,
 } from './compaction/utils'
 
 export interface CompactionConfig {
@@ -336,7 +337,7 @@ export function createCompactionPrepareStep(
     }
 
     let current = stripBinaryContent(messages)
-    currentTokens = estimateTokensForThreshold(current, config)
+    currentTokens = updateTokenCount(currentTokens, messages, current, config)
     if (currentTokens <= config.triggerThreshold) {
       return { messages: current, experimental_context: state }
     }
@@ -353,8 +354,9 @@ export function createCompactionPrepareStep(
         after: pruned.length,
         removed: current.length - pruned.length,
       })
+      const previous = current
       current = pruned
-      currentTokens = estimateTokensForThreshold(current, config)
+      currentTokens = updateTokenCount(currentTokens, previous, current, config)
       if (currentTokens <= config.triggerThreshold) {
         return { messages: current, experimental_context: state }
       }
@@ -364,7 +366,7 @@ export function createCompactionPrepareStep(
       maxChars: config.toolOutputMaxChars,
       keepRecentCount: 2,
     })
-    currentTokens = estimateTokensForThreshold(reduced, config)
+    currentTokens = updateTokenCount(currentTokens, current, reduced, config)
     if (currentTokens <= config.triggerThreshold) {
       return { messages: reduced, experimental_context: state }
     }

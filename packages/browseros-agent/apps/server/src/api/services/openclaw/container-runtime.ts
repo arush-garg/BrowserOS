@@ -74,6 +74,8 @@ export class ContainerRuntime {
   }
   private readonly projectDir: string
 
+  getNativeConfig?(): { port: number; token?: string }
+
   constructor(config: ContainerRuntimeConfig) {
     this.vm = config.vm
     this.shell = config.shell

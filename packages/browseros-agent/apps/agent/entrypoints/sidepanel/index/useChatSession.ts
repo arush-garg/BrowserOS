@@ -542,7 +542,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const wasStreaming =
       previousStatusRef.current === 'streaming' ||
       previousStatusRef.current === 'submitted'
-    const justFinished = wasStreaming && status === 'ready'
+    const justFinished =
+      wasStreaming && (status === 'ready' || status === 'error')
     previousStatusRef.current = status
 
     if (!justFinished) return

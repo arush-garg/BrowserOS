@@ -19,6 +19,9 @@ interface TerminalRouteDeps {
   limaHome: string
   limactlPath: string | (() => string)
   vmName: string
+  getNativeConfig?: () =>
+    | { port: number; token?: string; configDir?: string }
+    | undefined
 }
 
 function safeSend(ws: { send(data: string): void }, data: string): void {
@@ -49,12 +52,16 @@ export function createTerminalSocketEvents(deps: TerminalRouteDeps) {
           typeof deps.limactlPath === 'function'
             ? deps.limactlPath()
             : deps.limactlPath
+
+        const nativeConfig = deps.getNativeConfig?.()
+
         session = createTerminalSession({
           containerName: deps.containerName,
           limaHome: deps.limaHome,
           limactlPath,
           vmName: deps.vmName,
-          workingDir: TERMINAL_HOME_DIR,
+          workingDir: nativeConfig?.configDir ?? TERMINAL_HOME_DIR,
+          nativeMode: !!nativeConfig,
           onOutput(data) {
             sendOutput(ws, data)
           },

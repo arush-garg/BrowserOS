@@ -118,6 +118,8 @@ export async function createHttpServer(config: HttpServerConfig) {
         limaHome: getLimaHomeDir(),
         limactlPath: () => resolveBundledLimactl(resourcesDir),
         vmName: VM_NAME,
+        getNativeConfig: () =>
+          getOpenClawService().getRuntime().getNativeConfig?.(),
       }),
     )
 
@@ -141,6 +143,8 @@ export async function createHttpServer(config: HttpServerConfig) {
           getLimaHomeDir: () => getLimaHomeDir(),
           getLimactlPath: () => resolveBundledLimactl(resourcesDir),
           getVmName: () => VM_NAME,
+          getNativeConfig: () =>
+            getOpenClawService().getRuntime().getNativeConfig?.(),
         },
         openclawProvisioner: {
           createAgent: (input) => getOpenClawService().createAgent(input),

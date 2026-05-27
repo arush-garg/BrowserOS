@@ -360,6 +360,7 @@ export class OpenClawService {
   private httpClient: OpenClawHttpClient
   private openclawDir: string
   private hostPort = OPENCLAW_GATEWAY_CONTAINER_PORT
+  private openClawToken?: string
   private lastError: string | null = null
   private browserosServerPort: number
   private resourcesDir: string | null
@@ -380,7 +381,14 @@ export class OpenClawService {
     })
     this.cliClient = new OpenClawCliClient(this.runtime)
     this.bootstrapCliClient = this.buildBootstrapCliClient()
-    this.httpClient = new OpenClawHttpClient(this.hostPort)
+
+    const nativeConfig = this.runtime.getNativeConfig?.()
+    if (nativeConfig) {
+      this.hostPort = nativeConfig.port
+      this.openClawToken = nativeConfig.token
+    }
+
+    this.httpClient = new OpenClawHttpClient(this.hostPort, this.openClawToken)
     this.browserosServerPort =
       config.browserosServerPort ?? DEFAULT_PORTS.server
     this.resourcesDir = config.resourcesDir ?? null
@@ -414,6 +422,14 @@ export class OpenClawService {
 
   getPort(): number {
     return this.hostPort
+  }
+
+  getRuntime(): ContainerRuntime {
+    return this.runtime
+  }
+
+  getBrowserosServerPort(): number {
+    return this.browserosServerPort
   }
 
   /** Subscribe to real-time agent status changes from the ClawSession state machine. */
@@ -1279,12 +1295,23 @@ export class OpenClawService {
   private setPort(hostPort: number): void {
     if (hostPort === this.hostPort) return
     this.hostPort = hostPort
-    this.httpClient = new OpenClawHttpClient(this.hostPort)
+    this.httpClient = new OpenClawHttpClient(this.hostPort, this.openClawToken)
   }
 
   private async ensureGatewayPortAllocated(
     logProgress?: (msg: string) => void,
   ): Promise<void> {
+    const nativeConfig = this.runtime.getNativeConfig?.()
+    if (nativeConfig) {
+      this.hostPort = nativeConfig.port
+      this.openClawToken = nativeConfig.token
+      return
+    }
+
+    if (this.hostPort !== OPENCLAW_GATEWAY_CONTAINER_PORT) {
+      return
+    }
+
     const persistedPort = await readPersistedGatewayPort(this.openclawDir)
     if (persistedPort !== null) {
       this.setPort(persistedPort)
@@ -1315,7 +1342,7 @@ export class OpenClawService {
     const client =
       hostPort === this.hostPort
         ? this.httpClient
-        : new OpenClawHttpClient(hostPort)
+        : new OpenClawHttpClient(hostPort, this.openClawToken)
     const authenticated = await client.isAuthenticated()
     if (!authenticated) {
       logger.warn('OpenClaw gateway readiness probe failed', { hostPort })

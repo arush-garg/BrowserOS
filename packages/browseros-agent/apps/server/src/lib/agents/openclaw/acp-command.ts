@@ -23,6 +23,8 @@ export interface OpenclawGatewayAccessor {
   getLimactlPath(): string
   /** VM name registered in LIMA_HOME (e.g. browseros-vm). */
   getVmName(): string
+  /** Optional native configuration if running OpenClaw on host */
+  getNativeConfig?(): { port: number; token?: string } | undefined
 }
 
 /**
@@ -43,11 +45,10 @@ export function resolveOpenclawAcpCommand(
   gateway: OpenclawGatewayAccessor,
   sessionKey: string | null,
 ): string {
-  const limactl = gateway.getLimactlPath()
-  const vm = gateway.getVmName()
-  const container = gateway.getContainerName()
-  const limaHome = gateway.getLimaHomeDir()
-  const gatewayUrlInsideContainer = `ws://127.0.0.1:${OPENCLAW_GATEWAY_CONTAINER_PORT}`
+  const nativeConfig = gateway.getNativeConfig?.()
+  const gatewayUrlInsideContainer = nativeConfig
+    ? `ws://127.0.0.1:${nativeConfig.port}`
+    : `ws://127.0.0.1:${OPENCLAW_GATEWAY_CONTAINER_PORT}`
 
   // `--session <key>` routes the bridge's newSession requests to the
   // matching gateway agent. acpx does not pass sessionKey through ACP
@@ -66,32 +67,46 @@ export function resolveOpenclawAcpCommand(
       : `agent:main:${sessionKey.replace(/[^a-zA-Z0-9-]/g, '-')}`
     : null
 
-  // Prefix `env LIMA_HOME=<path>` so the spawned limactl finds the
-  // BrowserOS-owned VM instance. The BrowserOS server doesn't set
-  // LIMA_HOME on its own process env (it injects per-spawn elsewhere),
-  // so the acpx-spawned subprocess won't inherit it without this hint.
-  const argv = [
-    'env',
-    `LIMA_HOME=${limaHome}`,
-    limactl,
-    'shell',
-    '--workdir',
-    '/',
-    vm,
-    '--',
-    'nerdctl',
-    'exec',
-    '-i',
-    '-e',
-    'OPENCLAW_HIDE_BANNER=1',
-    '-e',
-    'OPENCLAW_SUPPRESS_NOTES=1',
-    container,
-    'openclaw',
-    'acp',
-    '--url',
-    gatewayUrlInsideContainer,
-  ]
+  let argv: string[]
+  if (nativeConfig) {
+    argv = ['openclaw', 'acp', '--url', gatewayUrlInsideContainer]
+    if (nativeConfig.token) {
+      argv.push('--token', nativeConfig.token)
+    }
+  } else {
+    const limactl = gateway.getLimactlPath()
+    const vm = gateway.getVmName()
+    const container = gateway.getContainerName()
+    const limaHome = gateway.getLimaHomeDir()
+
+    // Prefix `env LIMA_HOME=<path>` so the spawned limactl finds the
+    // BrowserOS-owned VM instance. The BrowserOS server doesn't set
+    // LIMA_HOME on its own process env (it injects per-spawn elsewhere),
+    // so the acpx-spawned subprocess won't inherit it without this hint.
+    argv = [
+      'env',
+      `LIMA_HOME=${limaHome}`,
+      limactl,
+      'shell',
+      '--workdir',
+      '/',
+      vm,
+      '--',
+      'nerdctl',
+      'exec',
+      '-i',
+      '-e',
+      'OPENCLAW_HIDE_BANNER=1',
+      '-e',
+      'OPENCLAW_SUPPRESS_NOTES=1',
+      container,
+      'openclaw',
+      'acp',
+      '--url',
+      gatewayUrlInsideContainer,
+    ]
+  }
+
   if (bridgeSessionKey) {
     argv.push('--session', bridgeSessionKey)
   }
