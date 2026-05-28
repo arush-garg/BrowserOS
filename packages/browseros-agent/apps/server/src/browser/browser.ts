@@ -15,6 +15,7 @@ import {
 } from './content-markdown'
 import { type DomSearchResult, parseNodeAttributes } from './dom'
 import * as elements from './elements'
+import * as extraction from './extraction'
 import type { HistoryEntry } from './history'
 import * as history from './history'
 import * as keyboard from './keyboard'
@@ -870,6 +871,112 @@ export class Browser {
     return treeLines.join('\n')
   }
 
+  async getStructuredPage(
+    page: number,
+    opts?: {
+      selector?: string
+      maxElements?: number
+      viewportOnly?: boolean
+      includeLinks?: boolean
+      includeImages?: boolean
+    },
+  ): Promise<{
+    url?: string
+    title?: string
+    elements: Array<{
+      backendNodeId: number
+      tag?: string
+      text?: string
+      label?: string
+      role?: string
+      attributes?: Record<string, string>
+      rect?: { x: number; y: number }
+    }>
+    pageText?: string
+  }> {
+    const session = await this.resolveSession(page)
+    const nodes = await this.fetchAXTree(session)
+    const info = this.pages.get(page)
+
+    const result: {
+      url?: string
+      title?: string
+      elements: Array<any>
+      pageText?: string
+    } = { url: info?.url, title: info?.title, elements: [] }
+
+    if (!nodes || nodes.length === 0) {
+      // still return page text if available
+      result.pageText = await this.contentAsMarkdown(page, {
+        selector: opts?.selector,
+        viewportOnly: opts?.viewportOnly,
+        includeLinks: opts?.includeLinks,
+        includeImages: opts?.includeImages,
+      })
+      return result
+    }
+
+    // Use the AX interactive tree to pick candidate backend node ids.
+    const lines = snapshot.buildInteractiveTree(nodes)
+    const ids = new Set<number>()
+    for (const line of lines) {
+      const m = line.match(/^\[(\d+)\]/)
+      if (m) ids.add(Number(m[1]))
+    }
+
+    // Include cursor-interactive detections as a best-effort supplement
+    try {
+      const cursorEls = await snapshot.findCursorInteractiveElements(session)
+      for (const el of cursorEls) ids.add(el.backendNodeId)
+    } catch {
+      // ignore
+    }
+
+    const max = opts?.maxElements ?? 150
+    // Fetch a slightly larger candidate set then prune by score
+    const candidateIds = Array.from(ids).slice(0, Math.max(max * 3, max + 50))
+    const candidates: extraction.StructuredElement[] = []
+
+    for (const backendNodeId of candidateIds) {
+      try {
+        const props = await this.resolveElementProperties(page, backendNodeId)
+        if (!props) continue
+
+        let rect: { x: number; y: number } | undefined
+        try {
+          const center = await elements.getElementCenter(session, backendNodeId)
+          rect = { x: center.x, y: center.y }
+        } catch {
+          // best-effort
+        }
+
+        candidates.push({
+          backendNodeId,
+          tag: props.tagName,
+          text: props.textContent,
+          label: props.labelText,
+          role: props.role,
+          attributes: props.attributes,
+          rect,
+        })
+      } catch {
+        // skip missing elements
+      }
+    }
+
+    const selected = extraction.pruneElements(candidates, max)
+    result.elements.push(...selected)
+
+    result.pageText = await this.contentAsMarkdown(page, {
+      selector: opts?.selector,
+      viewportOnly: opts?.viewportOnly,
+      includeLinks: opts?.includeLinks,
+      includeImages: opts?.includeImages,
+    })
+
+    return result
+  }
+
   async content(page: number, selector?: string): Promise<string> {
     const session = await this.resolveSession(page)
     const expression = selector
@@ -1160,6 +1267,18 @@ export class Browser {
     const session = await this.resolveSession(page)
 
     await elements.scrollIntoView(session, element)
+
+    // If the field already contains the requested value, make the
+    // tool idempotent and avoid retriggering validation / autosubmit
+    // flows with the same input.
+    try {
+      const currentValue = await elements.getInputValue(session, element)
+      if (currentValue === text) {
+        return undefined
+      }
+    } catch {
+      // Fall through and do the normal fill path.
+    }
 
     // Always click to guarantee real keyboard focus.
     // DOM.focus() is unreliable for shadow DOM, iframes, and custom components.

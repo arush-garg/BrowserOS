@@ -434,6 +434,7 @@ function getErrorRecovery(
 ### Browser interaction errors
 - Element not found → \`scroll(page, "down")\`, \`wait_for(page, text)\`, then \`take_snapshot(page)\` to re-fetch elements
 - Click/fill failed → \`scroll(page, "down", element)\` into view, retry once
+- Never repeat \`fill\` on the same element with the same text more than once; if the field still does not stick after one retry, stop and report the blocker.
 - Page didn't load → check URL, try \`navigate_page\` with reload
 - After 2 failed attempts → describe the blocking issue, request guidance
 

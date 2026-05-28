@@ -1,3 +1,4 @@
+import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { z } from 'zod'
 import { formatSearchResult } from '../browser/dom'
 import { defineToolWithCategory } from './framework'
@@ -117,6 +118,105 @@ export const search_dom = defineObservationTool({
       totalCount,
       shownCount: results.length,
       results,
+    })
+  },
+})
+
+export const get_structured_page = defineObservationTool({
+  name: 'get_structured_page',
+  description:
+    'Return a structured, token-efficient representation of the page: capped list of interactive elements and clean markdown. Large markdown is written to a local file and returned by path. Use for LLM-friendly page extracts.',
+  input: z.object({
+    page: pageParam,
+    selector: z
+      .string()
+      .optional()
+      .describe("CSS selector to scope extraction (e.g. 'main')"),
+    maxElements: z.number().int().min(1).max(1000).optional(),
+    viewportOnly: z.boolean().default(false),
+    includeLinks: z.boolean().default(false),
+    includeImages: z.boolean().default(false),
+  }),
+  output: z.object({
+    url: z.string().optional(),
+    title: z.string().optional(),
+    elements: z.array(
+      z.object({
+        backendNodeId: z.number(),
+        tag: z.string().optional(),
+        text: z.string().optional(),
+        label: z.string().optional(),
+        role: z.string().optional(),
+        attributes: z.record(z.string()).optional(),
+        rect: z.record(z.number()).optional(),
+      }),
+    ),
+    pageText: z.string().optional(),
+    path: z.string().optional(),
+    contentLength: z.number(),
+    writtenToFile: z.boolean(),
+  }),
+  handler: async (args, ctx, response) => {
+    const structured = await ctx.browser.getStructuredPage(args.page, {
+      selector: args.selector,
+      maxElements: args.maxElements,
+      viewportOnly: args.viewportOnly,
+      includeLinks: args.includeLinks,
+      includeImages: args.includeImages,
+    })
+
+    if (!structured) {
+      response.text('No structured content available for this page.')
+      response.data({
+        url: '',
+        title: '',
+        elements: [],
+        pageText: '',
+        contentLength: 0,
+        writtenToFile: false,
+      })
+      return
+    }
+
+    const { pageText, elements, url, title } = structured
+
+    if (
+      pageText &&
+      pageText.length > TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS
+    ) {
+      const path = await writeTempToolOutputFile({
+        toolName: 'get-structured-page',
+        extension: 'md',
+        content: pageText,
+      })
+      const truncated = pageText.slice(
+        0,
+        TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS,
+      )
+      response.text(truncated)
+      response.text(
+        `\n\n[Structured page text truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full content (${pageText.length} chars) saved to: ${path}]`,
+      )
+      response.data({
+        url,
+        title,
+        elements,
+        pageText: truncated,
+        path,
+        contentLength: pageText.length,
+        writtenToFile: true,
+      })
+      return
+    }
+
+    response.text(pageText ?? '')
+    response.data({
+      url,
+      title,
+      elements: elements ?? [],
+      pageText: pageText ?? '',
+      contentLength: (pageText ?? '').length,
+      writtenToFile: false,
     })
   },
 })

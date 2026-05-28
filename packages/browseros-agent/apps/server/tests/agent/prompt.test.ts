@@ -1085,6 +1085,11 @@ describe('execution section', () => {
     expect(prompt).toContain('Retry budget')
     expect(prompt).toContain('3-4 attempts')
   })
+
+  it('caps repeated fill retries', () => {
+    const prompt = buildRegular()
+    expect(prompt).toContain('Never repeat `fill` on the same element')
+  })
 })
 
 // ---------------------------------------------------------------------------
