@@ -1,7 +1,4 @@
-/**
- * Backend-aligned provider types (matches AIProvider enum in backend)
- * @public
- */
+/** AI settings provider config types. Most API-backed values match backend AIProvider. */
 export type ProviderType =
   | 'anthropic'
   | 'openai'
@@ -17,6 +14,8 @@ export type ProviderType =
   | 'chatgpt-pro'
   | 'github-copilot'
   | 'qwen-code'
+  | 'codex'
+  | 'claude-code'
 
 /**
  * LLM Provider configuration

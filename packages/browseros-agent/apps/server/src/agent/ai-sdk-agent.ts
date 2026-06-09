@@ -6,7 +6,6 @@ import type {
 import { AGENT_LIMITS } from '@browseros/shared/constants/limits'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
-import type { AclRule } from '@browseros/shared/types/acl'
 import {
   type LanguageModel,
   type ModelMessage,
@@ -20,17 +19,11 @@ import {
   buildKlavisToolSet,
   type KlavisProxyRef,
 } from '../api/services/klavis/strata-proxy'
-import type { Browser } from '../browser/browser'
+import type { BrowserSession } from '../browser/core/session'
 import { logger } from '../lib/logger'
 import { metrics } from '../lib/metrics'
-import { isSoulBootstrap, readSoul } from '../lib/soul'
-import { buildSkillsCatalog } from '../skills/catalog'
-import { loadSkills } from '../skills/loader'
 import { buildCustomToolSet } from '../tools/custom/build-toolset'
 import { buildFilesystemToolSet } from '../tools/filesystem/build-toolset'
-import type { ToolContext } from '../tools/framework'
-import { buildMemoryToolSet } from '../tools/memory/build-toolset'
-import type { ToolRegistry } from '../tools/tool-registry'
 import { CHAT_MODE_ALLOWED_TOOLS } from './chat-mode'
 import { createCompactionPrepareStep, type StepWithUsage } from './compaction'
 import { buildMcpServerSpecs, createMcpClients } from './mcp-builder'
@@ -39,20 +32,20 @@ import {
   normalizeMessagesForModel,
 } from './message-normalization'
 import { createRetryingLanguageModel } from './model-retry'
+import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
+import { readSoulPrompt } from './soul-prompt'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
 export interface AiSdkAgentConfig {
   resolvedConfig: ResolvedAgentConfig
-  browser: Browser
-  registry: ToolRegistry
+  browserSession: BrowserSession
   browserContext?: BrowserContext
   klavisRef?: KlavisProxyRef
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
-  aclRules?: AclRule[]
 }
 
 export class AiSdkAgent {
@@ -62,7 +55,6 @@ export class AiSdkAgent {
     private _mcpClients: Array<{ close(): Promise<void> }>,
     private conversationId: string,
     private _toolNames: Set<string>,
-    private toolContext: ToolContext,
   ) {}
 
   /** Tool names registered on this agent — used to sanitize messages during session rebuilds. */
@@ -129,22 +121,10 @@ export class AiSdkAgent {
       })
     }
 
-    // Build browser tools from the unified tool registry
-    const originPageId = config.browserContext?.activeTab?.pageId
-    const toolContext: ToolContext = {
-      browser: config.browser,
-      directories: { workingDir: config.resolvedConfig.workingDir },
-      session: {
-        origin: config.resolvedConfig.origin,
-        originPageId,
-      },
-      aclRules: config.aclRules,
-    }
-    const allBrowserTools = buildBrowserToolSet(
-      config.registry,
-      toolContext,
-      config.resolvedConfig.toolApprovalConfig,
-    )
+    const allBrowserTools = buildBrowserToolSet(config.browserSession, {
+      readOnly: config.resolvedConfig.chatMode,
+    })
+    const reservedBrowserToolNames = new Set(Object.keys(allBrowserTools))
     const browserTools = config.resolvedConfig.chatMode
       ? Object.fromEntries(
           Object.entries(allBrowserTools).filter(([name]) =>
@@ -171,15 +151,18 @@ export class AiSdkAgent {
       browserContext: config.browserContext,
     })
     const { clients, tools: customMcpTools } = await createMcpClients(specs)
-    const collidingToolNames = Object.keys(customMcpTools).filter(
+    const klavisCollidingToolNames = Object.keys(customMcpTools).filter(
       (name) => name in klavisTools,
     )
-    if (collidingToolNames.length > 0) {
+    if (klavisCollidingToolNames.length > 0) {
       logger.warn('Custom MCP tools override Klavis tools', {
-        toolNames: collidingToolNames,
+        toolNames: klavisCollidingToolNames,
       })
     }
-    const rawExternalMcpTools = { ...klavisTools, ...customMcpTools }
+    const rawExternalMcpTools = withoutReservedBrowserToolNames(
+      { ...klavisTools, ...customMcpTools },
+      reservedBrowserToolNames,
+    )
 
     // Wrap external MCP tools (Klavis, custom) with metrics
     const externalMcpTools: ToolSet = {}
@@ -219,22 +202,19 @@ export class AiSdkAgent {
 
     // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
     // Add custom tools (code_execute, web_fetch, subagent, run_app_script)
-    const customTools = buildCustomToolSet(toolContext, config.resolvedConfig)
+    const customTools = buildCustomToolSet(undefined, config.resolvedConfig)
 
     // Add filesystem tools — skip in chat mode (read-only) and when no workspace is selected
     const filesystemTools =
       !config.resolvedConfig.chatMode && config.resolvedConfig.workingDir
         ? buildFilesystemToolSet(config.resolvedConfig.workingDir)
         : {}
-    const memoryTools = config.resolvedConfig.chatMode
-      ? {}
-      : buildMemoryToolSet()
     const tools = {
       ...browserTools,
       ...externalMcpTools,
       ...customTools,
       ...filesystemTools,
-      ...memoryTools,
+      ...buildNudgeToolSet(),
     }
 
     if (
@@ -253,13 +233,7 @@ export class AiSdkAgent {
     ) {
       excludeSections.push('nudges')
     }
-    const soulContent = await readSoul()
-    const isBootstrap = await isSoulBootstrap()
-
-    // Load skills catalog for prompt injection
-    const skills = await loadSkills()
-    const skillsCatalog =
-      skills.length > 0 ? buildSkillsCatalog(skills) : undefined
+    const soulContent = await readSoulPrompt()
 
     const instructions = buildSystemPrompt({
       userSystemPrompt: config.resolvedConfig.userSystemPrompt,
@@ -268,11 +242,9 @@ export class AiSdkAgent {
       scheduledTaskPageId: config.browserContext?.activeTab?.pageId,
       workspaceDir: config.resolvedConfig.workingDir,
       soulContent,
-      isSoulBootstrap: isBootstrap,
       chatMode: config.resolvedConfig.chatMode,
       connectedApps: config.browserContext?.enabledMcpServers,
       declinedApps: config.resolvedConfig.declinedApps,
-      skillsCatalog,
       origin: config.resolvedConfig.origin,
     })
 
@@ -333,7 +305,6 @@ export class AiSdkAgent {
       clients,
       config.resolvedConfig.conversationId,
       new Set(Object.keys(tools)),
-      toolContext,
     )
   }
 
@@ -357,16 +328,36 @@ export class AiSdkAgent {
     })
   }
 
-  updateAclRules(rules?: AclRule[]): void {
-    this.toolContext.aclRules = rules
-  }
-
   async dispose(): Promise<void> {
     for (const client of this._mcpClients) {
       await client.close().catch(() => {})
     }
     logger.info('Agent disposed', { conversationId: this.conversationId })
   }
+}
+
+function withoutReservedBrowserToolNames(
+  tools: ToolSet,
+  reservedNames: Set<string>,
+): ToolSet {
+  const result: ToolSet = {}
+  const skipped: string[] = []
+  for (const [name, value] of Object.entries(tools)) {
+    if (reservedNames.has(name)) {
+      skipped.push(name)
+      continue
+    }
+    result[name] = value
+  }
+  if (skipped.length > 0) {
+    logger.warn(
+      'External MCP tools skipped due to BrowserOS tool name collision',
+      {
+        toolNames: skipped,
+      },
+    )
+  }
+  return result
 }
 
 export { formatUserMessage } from './format-message'

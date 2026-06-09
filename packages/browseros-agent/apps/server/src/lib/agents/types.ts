@@ -8,6 +8,7 @@ import type {
   AgentDefinition,
   AgentHistoryEntry,
   AgentPermissionMode,
+  AgentSessionId,
 } from './agent-types'
 
 export interface AgentStatus {
@@ -17,28 +18,14 @@ export interface AgentStatus {
 
 export interface AgentSession {
   agentId: string
-  id: 'main'
+  id: AgentSessionId
   updatedAt: number
 }
 
 export interface AgentHistoryPage {
   agentId: string
-  sessionId: 'main'
+  sessionId: AgentSessionId
   items: AgentHistoryEntry[]
-}
-
-/**
- * One file the harness attributed to the assistant turn that just
- * finished. Emitted as part of a `produced_files` event before the
- * terminal `done` so the inline artifact card renders alongside the
- * streamed text the user just watched complete.
- */
-export interface ProducedFileEventEntry {
-  id: string
-  /** Workspace-relative POSIX path. */
-  path: string
-  size: number
-  mtimeMs: number
 }
 
 export type AgentStreamEvent =
@@ -62,10 +49,6 @@ export type AgentStreamEvent =
       rawType?: string
     }
   | {
-      type: 'produced_files'
-      files: ProducedFileEventEntry[]
-    }
-  | {
       type: 'done'
       text?: string
       stopReason?: string
@@ -87,7 +70,7 @@ export interface AgentInlineImage {
 
 export interface AgentPromptInput {
   agent: AgentDefinition
-  sessionId: 'main'
+  sessionId: AgentSessionId
   sessionKey: string
   message: string
   attachments?: ReadonlyArray<AgentInlineImage>
@@ -104,6 +87,8 @@ export interface AgentPromptInput {
  * user message). Returned `null` when the agent has no record yet.
  */
 export interface AgentRowSnapshot {
+  /** Session this row snapshot was read from. Omitted by legacy test fakes. */
+  sessionId?: AgentSessionId
   cwd: string | null
   lastUsedAt: number | null
   lastUserMessage: string | null
@@ -124,12 +109,12 @@ export interface AgentRuntime {
   listSessions(agent: AgentDefinition): Promise<AgentSession[]>
   getHistory(input: {
     agent: AgentDefinition
-    sessionId: 'main'
+    sessionId: AgentSessionId
   }): Promise<AgentHistoryPage>
   send(input: AgentPromptInput): Promise<ReadableStream<AgentStreamEvent>>
   cancel?(input: {
     agent: AgentDefinition
-    sessionId: 'main'
+    sessionId: AgentSessionId
     reason?: string
   }): Promise<void>
   /**
@@ -139,6 +124,9 @@ export interface AgentRuntime {
    */
   getRowSnapshot?(input: {
     agent: AgentDefinition
-    sessionId: 'main'
+    sessionId: AgentSessionId
   }): Promise<AgentRowSnapshot | null>
+  getLatestRowSnapshot?(
+    agent: AgentDefinition,
+  ): Promise<AgentRowSnapshot | null>
 }

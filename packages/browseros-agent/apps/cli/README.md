@@ -32,8 +32,7 @@ make install    # Install to $GOPATH/bin
 ## Quick Start
 
 ```bash
-# If BrowserOS is not installed yet
-browseros-cli install                # downloads BrowserOS for your platform
+# If BrowserOS is not installed yet, download it from https://browseros.com
 
 # If BrowserOS is installed but not running
 browseros-cli launch                 # opens BrowserOS, waits for server
@@ -128,7 +127,7 @@ To connect Claude Code, Gemini CLI, or any MCP client, see the [MCP setup guide]
 
 Priority for server URL: `--server` flag > `BROWSEROS_URL` env > config file
 
-If no server URL is configured, the CLI exits with setup instructions pointing to `install`, `launch`, and `init <Server URL>`.
+If no server URL is configured, the CLI exits with setup instructions pointing to `launch` and `init <Server URL>`.
 
 ## Testing
 
@@ -180,7 +179,6 @@ apps/cli/
 ├── cmd/
 │   ├── root.go         # Root command, global flags
 │   ├── init.go         # Server URL configuration (URL arg or interactive)
-│   ├── install.go      # install (download BrowserOS for current platform)
 │   ├── launch.go       # launch (find and start BrowserOS, wait for server)
 │   ├── open.go         # open (new_page / new_hidden_page)
 │   ├── nav.go          # nav, back, forward, reload

@@ -3,9 +3,17 @@ import {
   type EvalRunMetrics,
   type EvalTaskMetrics,
 } from '../reporting/task-metrics'
-import type { GraderResult } from '../types'
+import type { GraderResult, TaskDatasetMetadata } from '../types'
 
-export const VIEWER_MANIFEST_SCHEMA_VERSION = 2
+export const VIEWER_MANIFEST_SCHEMA_VERSION = 3
+
+/** Per-criterion entry surfaced from the agisdk_state_diff grader. */
+export interface ViewerCriterion {
+  passed: boolean
+  softened?: boolean
+  /** Free-form string from the grader, OR a structured `{ actual_value, expected_value }` object. */
+  detail: unknown
+}
 
 export interface ViewerManifestTaskPaths {
   attempt: string
@@ -15,6 +23,7 @@ export interface ViewerManifestTaskPaths {
   grades: string
   screenshots: string
   graderArtifacts: string
+  finishState?: string
 }
 
 export interface ViewerManifestTaskInput {
@@ -27,6 +36,9 @@ export interface ViewerManifestTaskInput {
   screenshotCount: number
   metrics?: EvalTaskMetrics
   graderResults: Record<string, GraderResult>
+  taskMetadata?: TaskDatasetMetadata
+  perCriterion?: ViewerCriterion[]
+  finalAnswer?: string | null
 }
 
 export interface ViewerManifestTask
@@ -70,6 +82,18 @@ function taskPaths(queryId: string): ViewerManifestTaskPaths {
     grades: `tasks/${queryId}/grades.json`,
     screenshots: `tasks/${queryId}/screenshots`,
     graderArtifacts: `tasks/${queryId}/grader-artifacts`,
+    finishState: `tasks/${queryId}/grader-artifacts/agisdk_state_diff/finish-state.json`,
+  }
+}
+
+function defaultMetrics(screenshotCount: number): EvalTaskMetrics {
+  return {
+    durationMs: 0,
+    steps: screenshotCount,
+    screenshots: screenshotCount,
+    toolCalls: 0,
+    toolErrors: 0,
+    perTool: {},
   }
 }
 
@@ -82,11 +106,8 @@ export function buildViewerManifest(
     const metrics =
       publicTask.metrics ??
       ({
+        ...defaultMetrics(publicTask.screenshotCount),
         durationMs: publicTask.durationMs,
-        steps: publicTask.screenshotCount,
-        screenshots: publicTask.screenshotCount,
-        toolCalls: 0,
-        toolErrors: 0,
       } satisfies EvalTaskMetrics)
 
     return {

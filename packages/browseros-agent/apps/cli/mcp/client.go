@@ -208,5 +208,5 @@ func connectionSetupInstructions() string {
 		"  Example:            browseros-cli init http://127.0.0.1:9000/mcp\n" +
 		"  Run once with:      browseros-cli --server <Server URL> health\n" +
 		"  If BrowserOS is closed:  browseros-cli launch\n" +
-		"  If not installed:        browseros-cli install"
+		"  If not installed:        download from https://browseros.com"
 }

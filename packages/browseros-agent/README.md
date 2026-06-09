@@ -86,8 +86,7 @@ bun run dev:setup
 bun run dev:watch
 ```
 
-`dev:watch` starts the server immediately. OpenClaw VM/image prewarm runs from
-the server startup path and pulls the configured GHCR image on demand.
+`dev:watch` starts the server and agent UI immediately.
 
 ### Environment Variables
 
@@ -119,7 +118,6 @@ Copy from `apps/server/.env.production.example` before running `build:server`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BROWSEROS_CONFIG_URL` | - | Remote config endpoint baked into prod binary |
-| `CODEGEN_SERVICE_URL` | - | Graph/codegen backend URL baked into prod binary |
 | `POSTHOG_API_KEY` | - | PostHog key baked into prod binary |
 | `SENTRY_DSN` | - | Sentry DSN baked into prod binary |
 | `R2_ACCOUNT_ID` | - | Cloudflare account id for production artifact downloads/uploads |
@@ -136,7 +134,6 @@ Copy from `apps/server/.env.production.example` before running `build:server`.
 | `BROWSEROS_SERVER_PORT` | 9100 | Passed to BrowserOS via CLI args |
 | `BROWSEROS_CDP_PORT` | 9000 | Passed to BrowserOS via CLI args |
 | `BROWSEROS_EXTENSION_PORT` | 9300 | Legacy BrowserOS CLI arg still passed for compatibility |
-| `VITE_BROWSEROS_SERVER_PORT` | 9100 | Agent UI connects to server (must match `BROWSEROS_SERVER_PORT`) |
 | `BROWSEROS_BINARY` | - | Path to BrowserOS binary |
 | `USE_BROWSEROS_BINARY` | true | Use BrowserOS instead of default Chrome |
 | `VITE_PUBLIC_POSTHOG_KEY` | - | Agent UI PostHog key |

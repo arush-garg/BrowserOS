@@ -31,7 +31,6 @@ function getNativeTarget(): { id: string; ext: string } {
 
 const REQUIRED_INLINE_ENV_KEYS = [
   'BROWSEROS_CONFIG_URL',
-  'CODEGEN_SERVICE_URL',
   'POSTHOG_API_KEY',
   'SENTRY_DSN',
 ] as const
@@ -47,7 +46,6 @@ const PROD_SECRET_KEYS = [...REQUIRED_INLINE_ENV_KEYS, ...R2_ENV_KEYS]
 
 const INLINE_ENV_STUBS: Record<string, string> = {
   BROWSEROS_CONFIG_URL: 'https://stub.test/config',
-  CODEGEN_SERVICE_URL: 'https://stub.test/codegen',
   POSTHOG_API_KEY: 'phc_test_stub',
   SENTRY_DSN: 'https://stub@sentry.test/0',
 }

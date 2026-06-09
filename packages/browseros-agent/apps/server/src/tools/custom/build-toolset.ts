@@ -6,7 +6,7 @@
 
 import type { ToolSet } from 'ai'
 import type { ResolvedAgentConfig } from '../../agent/types'
-import type { ToolContext } from '../framework'
+import type { ToolContext } from '../legacy/framework'
 import { createCodeExecutionTool } from './code-exec'
 import {
   createEditGoogleDocTool,

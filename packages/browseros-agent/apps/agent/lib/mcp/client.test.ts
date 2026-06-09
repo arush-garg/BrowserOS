@@ -3,6 +3,9 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { fetchMcpTools } from './client'
 
+const SCHEMA_COMPILATION_STACK_RE =
+  /node_modules[/\\](?:zod|@modelcontextprotocol[/\\]sdk)[/\\]/
+
 function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Uint8Array[] = []
 
@@ -49,7 +52,7 @@ describe('fetchMcpTools', () => {
 
   it('lists tools without invoking Function-based schema compilation', async () => {
     const requests: string[] = []
-    let evalCalls = 0
+    const functionCallStacks: string[] = []
     let getRequests = 0
     let initialized = false
 
@@ -139,11 +142,11 @@ describe('fetchMcpTools', () => {
     try {
       globalThis.Function = new Proxy(originalFunction, {
         apply(target, thisArg, argArray) {
-          evalCalls += 1
+          functionCallStacks.push(new Error().stack ?? '')
           return Reflect.apply(target, thisArg, argArray)
         },
         construct(target, argArray, newTarget) {
-          evalCalls += 1
+          functionCallStacks.push(new Error().stack ?? '')
           return Reflect.construct(target, argArray, newTarget)
         },
       }) as unknown as FunctionConstructor
@@ -157,7 +160,11 @@ describe('fetchMcpTools', () => {
           description: 'List tabs',
         },
       ])
-      expect(evalCalls).toBe(0)
+      expect(
+        functionCallStacks.filter((stack) =>
+          SCHEMA_COMPILATION_STACK_RE.test(stack),
+        ),
+      ).toEqual([])
       expect(getRequests).toBe(1)
       expect(initialized).toBe(true)
       expect(requests).toEqual([

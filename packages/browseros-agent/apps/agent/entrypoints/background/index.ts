@@ -1,4 +1,4 @@
-import { chatTargetSelectionStorage } from '@/entrypoints/sidepanel/index/sidepanel-chat-targets'
+import { storage } from '@wxt-dev/storage'
 import { sessionStorage } from '@/lib/auth/sessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
@@ -21,7 +21,22 @@ import {
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import { chatTargetSelectionStorage } from '@/modules/chat/sidepanel-chat-targets'
 import { scheduledJobRuns } from './scheduledJobRuns'
+
+const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
+  'local:tool-approval-config',
+  'local:pending-tool-approvals',
+  'local:approval-responses',
+  'local:tool-execution-log',
+] as const
+
+/**
+ * Removes persisted state for the unshipped Tool Approvals feature during extension updates.
+ */
+const cleanupLegacyToolApprovalStorage = async () => {
+  await storage.removeItems([...LEGACY_TOOL_APPROVAL_STORAGE_KEYS])
+}
 
 export default defineBackground(() => {
   chrome.sidePanel.setOptions({ enabled: false })
@@ -64,6 +79,7 @@ export default defineBackground(() => {
     }
 
     if (details.reason === chrome.runtime.OnInstalledReason.UPDATE) {
+      cleanupLegacyToolApprovalStorage().catch(() => null)
       checkAndShowChangelog().catch(() => null)
     }
   })

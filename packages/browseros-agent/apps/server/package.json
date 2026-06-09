@@ -1,6 +1,6 @@
 {
   "name": "@browseros/server",
-  "version": "0.0.94",
+  "version": "0.0.99",
   "description": "BrowserOS server",
   "type": "module",
   "main": "./src/index.ts",
@@ -19,14 +19,13 @@
     "test:browser": "bun run ./tests/__helpers__/run-test-group.ts browser",
     "test:cdp": "bun run test:browser",
     "test:core": "bun run ./tests/__helpers__/run-test-group.ts core",
+    "test:fixtures": "bun tests/__fixtures__/browser-fixtures/serve.ts",
     "test:integration": "bun run ./tests/__helpers__/run-test-group.ts integration",
     "test:lib": "bun run ./tests/__helpers__/run-test-group.ts lib",
     "test:root": "bun run ./tests/__helpers__/run-test-group.ts root",
-    "test:skills": "bun run ./tests/__helpers__/run-test-group.ts skills",
     "test:tools": "bun run ./tests/__helpers__/run-test-group.ts tools",
-    "test:tools:acl": "bun run test:cleanup && bun --env-file=.env.development test ./tests/tools/acl-scorer.test.ts",
     "test:tools:filesystem": "bun run test:cleanup && bun --env-file=.env.development test ./tests/tools/filesystem",
-    "test:tools:input": "bun run test:cleanup && bun --env-file=.env.development test ./tests/tools/input.test.ts",
+    "test:tools:input": "bun --env-file=.env.development test ./tests/tools/keyboard.test.ts",
     "test:cleanup": "./tests/__helpers__/cleanup.sh",
     "typecheck": "tsc --noEmit",
     "devtools": "bunx @ai-sdk/devtools"
@@ -67,10 +66,6 @@
     "./browser/backends/cdp": {
       "types": "./src/browser/backends/cdp.ts",
       "default": "./src/browser/backends/cdp.ts"
-    },
-    "./tools/registry": {
-      "types": "./src/tools/registry.ts",
-      "default": "./src/tools/registry.ts"
     }
   },
   "dependencies": {
@@ -91,7 +86,6 @@
     "@hono/mcp": "^0.2.3",
     "@hono/node-server": "^1.19.6",
     "@hono/zod-validator": "^0.4.3",
-    "@huggingface/transformers": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@openrouter/ai-sdk-provider": "^2.2.3",
     "@sentry/bun": "^10.31.0",
@@ -104,7 +98,6 @@
     "drizzle-orm": "^0.45.2",
     "eventsource-parser": "^3.0.0",
     "fuse.js": "^7.1.0",
-    "gray-matter": "^4.0.3",
     "hono": "^4.12.3",
     "jimp": "^1.6.0",
     "klavis": "^2.15.0",

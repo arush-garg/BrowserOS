@@ -9,7 +9,7 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { eq } from 'drizzle-orm'
-import { DbAgentStore } from '../../../src/lib/agents/db-agent-store'
+import { DbAgentStore } from '../../../src/lib/agents/storage/db-agent-store'
 import { closeDb, initializeDb } from '../../../src/lib/db'
 import { agentDefinitions } from '../../../src/lib/db/schema'
 
@@ -78,12 +78,12 @@ describe('DbAgentStore', () => {
     expect(new Set(listed.map((agent) => agent.id)).size).toBe(created.length)
   })
 
-  it('persists OpenClaw adapter config with the agent record', async () => {
+  it('persists adapter config with the agent record', async () => {
     const { db, store } = createStoreWithDb()
 
     const agent = await store.create({
-      name: 'OpenClaw bot',
-      adapter: 'openclaw',
+      name: 'Hermes bot',
+      adapter: 'hermes',
       providerType: 'openai-compatible',
       providerName: 'Kimi',
       baseUrl: 'https://api.fireworks.ai/inference/v1',
@@ -106,23 +106,45 @@ describe('DbAgentStore', () => {
     })
   })
 
-  it('upserts gateway-owned OpenClaw records idempotently', async () => {
+  it('upserts existing records idempotently', async () => {
     const store = createStore()
 
     const first = await store.upsertExisting({
-      id: 'oc-existing',
-      name: 'Gateway agent',
-      adapter: 'openclaw',
+      id: 'agent-existing',
+      name: 'Imported agent',
+      adapter: 'codex',
       modelId: 'openrouter/anthropic/claude-sonnet-4.5',
     })
     const second = await store.upsertExisting({
-      id: 'oc-existing',
-      name: 'Changed gateway name',
-      adapter: 'openclaw',
+      id: 'agent-existing',
+      name: 'Changed imported name',
+      adapter: 'codex',
     })
 
     expect(second).toEqual(first)
     expect(await store.list()).toEqual([first])
+  })
+
+  it('ignores stale rows with unsupported adapter ids', async () => {
+    const { db, store } = createStoreWithDb()
+    db.insert(agentDefinitions)
+      .values({
+        id: 'stale-agent',
+        name: 'Stale agent',
+        adapter: 'removed-adapter' as never,
+        modelId: 'default',
+        reasoningEffort: 'medium',
+        permissionMode: 'approve-all',
+        sessionKey: 'agent:stale-agent:main',
+        pinned: false,
+        adapterConfigJson: null,
+        createdAt: 1000,
+        updatedAt: 1000,
+      })
+      .run()
+
+    expect(await store.get('stale-agent')).toBeNull()
+    expect(await store.list()).toEqual([])
   })
 
   function createStore(): DbAgentStore {

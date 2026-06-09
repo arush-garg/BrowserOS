@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import {
   FileMessageQueue,
   MessageQueueFullError,
-} from '../../../src/lib/agents/message-queue'
+} from '../../../src/lib/agents/storage/message-queue'
 
 let tmp: string
 let queue: FileMessageQueue
@@ -35,6 +35,15 @@ describe('FileMessageQueue', () => {
     expect(popped?.message).toBe('one')
     expect(await queue.list('a')).toEqual([
       expect.objectContaining({ message: 'two' }),
+    ])
+  })
+
+  it('persists the target session id with queued messages', async () => {
+    const sessionId = '00000000-0000-4000-8000-000000000001'
+    await queue.append('a', { sessionId, message: 'one' })
+
+    expect(await queue.list('a')).toEqual([
+      expect.objectContaining({ sessionId, message: 'one' }),
     ])
   })
 

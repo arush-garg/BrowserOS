@@ -7,25 +7,20 @@
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
 import type { Browser } from '../../browser/browser'
+import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
-import { getMonitoringService } from '../../monitoring/service'
-import type { ToolRegistry } from '../../tools/tool-registry'
-import type { GlobalAclPolicyService } from '../services/acl/global-acl-policy'
-import { resolveAclPolicyForMcpRequest } from '../services/acl/resolve-acl-policy'
 import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { Env } from '../types'
 
 interface McpRouteDeps {
   version: string
-  registry: ToolRegistry
   browser: Browser
-  executionDir: string
-  resourcesDir: string
-  policyService: GlobalAclPolicyService
+  browserSession: BrowserSession
   klavisRef?: KlavisProxyRef
+  browserUseNewTools?: boolean
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
@@ -49,38 +44,30 @@ export function createMcpRoutes(deps: McpRouteDeps) {
 
   app.post('/', async (c) => {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
-    const monitoringService = getMonitoringService()
-    const explicitAgentId =
-      c.req.query('agentId') ??
-      c.req.header('X-BrowserOS-Agent-Id') ??
-      undefined
-    const activeSession =
-      monitoringService.resolveSessionForMcpRequest(explicitAgentId)
-    const agentId = activeSession?.agentId
     metrics.log('mcp.request', { scopeId })
-    const aclRules = await resolveAclPolicyForMcpRequest({
-      policyService: deps.policyService,
-    })
-    const monitoringSessionId = activeSession?.monitoringSessionId
-    const observer =
-      monitoringSessionId && agentId
-        ? monitoringService.createObserver(monitoringSessionId, agentId)
-        : undefined
 
     // Lets the host pin every browser tool call in this request to a
-    // specific window. register-mcp.ts injects this into args.windowId
-    // for any tool whose zod input schema has a windowId field.
+    // specific window for page-creating tools.
     const defaultWindowId = parseOptionalNumber(
       c.req.header('X-BrowserOS-Default-Window-Id'),
     )
 
+    // Same pattern for tab groups: the host pins every page-creating
+    // call to a specific tab group so concurrent agents don't race for
+    // the window's active group.
+    const defaultTabGroupId =
+      c.req.header('X-BrowserOS-Default-Tab-Group-Id') ?? undefined
+
     // Per-request server + transport: no shared state, no race conditions,
     // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
     const mcpServer = createMcpServer({
-      ...deps,
-      aclRules,
-      observer,
+      version: deps.version,
+      browser: deps.browser,
+      browserSession: deps.browserSession,
+      klavisRef: deps.klavisRef,
+      browserUseNewTools: deps.browserUseNewTools !== false,
       defaultWindowId,
+      defaultTabGroupId,
     })
     const transport = new StreamableHTTPTransport({
       sessionIdGenerator: undefined,
@@ -94,9 +81,6 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       Sentry.withScope((scope) => {
         scope.setTag('route', 'mcp')
         scope.setTag('scopeId', scopeId)
-        if (agentId) {
-          scope.setTag('agentId', agentId)
-        }
         Sentry.captureException(error)
       })
       logger.error('Error handling MCP request', {

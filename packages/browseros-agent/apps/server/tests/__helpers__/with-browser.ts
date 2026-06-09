@@ -2,10 +2,18 @@ import { existsSync } from 'node:fs'
 import { Mutex } from 'async-mutex'
 import { CdpBackend } from '../../src/browser/backends/cdp'
 import { Browser } from '../../src/browser/browser'
-import type { ToolDefinition } from '../../src/tools/framework'
-import { executeTool } from '../../src/tools/framework'
-import type { ToolResult } from '../../src/tools/response'
-import { type BrowserConfig, killBrowser, spawnBrowser } from './browser'
+import {
+  executeTool,
+  type ToolDefinition,
+  type ToolResult,
+  type ToolSessionContext,
+} from '../tools/browser/helpers'
+import {
+  type BrowserConfig,
+  isBrowserRunning,
+  killBrowser,
+  spawnBrowser,
+} from './browser'
 import { createTestRuntimePlan, type TestRuntimePlan } from './test-runtime'
 import { killProcessOnPort } from './utils'
 
@@ -14,8 +22,19 @@ let cachedCdp: CdpBackend | null = null
 let cachedBrowser: Browser | null = null
 let runtimePlan: TestRuntimePlan | null = null
 
+async function canReuseCachedBrowser(): Promise<boolean> {
+  if (!cachedBrowser || !cachedCdp?.isConnected() || !runtimePlan) return false
+  if (!(await isBrowserRunning(runtimePlan.ports.cdp))) return false
+  try {
+    await cachedCdp.Browser.getVersion()
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function getOrCreateBrowser(): Promise<Browser> {
-  if (cachedBrowser && cachedCdp?.isConnected()) return cachedBrowser
+  if (await canReuseCachedBrowser()) return cachedBrowser as Browser
 
   if (runtimePlan && !existsSync(runtimePlan.userDataDir)) {
     runtimePlan = null
@@ -40,7 +59,10 @@ async function getOrCreateBrowser(): Promise<Browser> {
   }
   await spawnBrowser(config)
 
-  cachedCdp = new CdpBackend({ port: runtimePlan.ports.cdp })
+  cachedCdp = new CdpBackend({
+    port: runtimePlan.ports.cdp,
+    exitOnReconnectFailure: false,
+  })
   await cachedCdp.connect()
 
   cachedBrowser = new Browser(cachedCdp)
@@ -58,7 +80,11 @@ export async function cleanupWithBrowser(): Promise<void> {
 
 export interface WithBrowserContext {
   browser: Browser
-  execute: (tool: ToolDefinition, args: unknown) => Promise<ToolResult>
+  execute: (
+    tool: ToolDefinition,
+    args: unknown,
+    session?: ToolSessionContext,
+  ) => Promise<ToolResult>
 }
 
 export async function withBrowser(
@@ -66,23 +92,19 @@ export async function withBrowser(
 ): Promise<void> {
   return await mutex.runExclusive(async () => {
     const browser = await getOrCreateBrowser()
-
-    const execute = async (
-      tool: ToolDefinition,
-      args: unknown,
-    ): Promise<ToolResult> => {
-      const signal = AbortSignal.timeout(30_000)
-      return executeTool(
-        tool,
-        args,
-        {
-          browser,
-          directories: { workingDir: process.cwd() },
-        },
-        signal,
-      )
-    }
-
-    await cb({ browser, execute })
+    await cb({
+      browser,
+      execute: (tool, args, session) =>
+        executeTool(
+          tool,
+          args,
+          {
+            browser,
+            directories: { workingDir: process.cwd() },
+            session,
+          },
+          AbortSignal.timeout(30_000),
+        ),
+    })
   })
 }

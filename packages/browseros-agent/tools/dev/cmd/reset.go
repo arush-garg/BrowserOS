@@ -16,16 +16,13 @@ import (
 )
 
 const (
-	limaVMName             = "browseros-vm"
-	openClawImage          = "ghcr.io/openclaw/openclaw:2026.4.12"
-	openClawContainerName  = "browseros-openclaw-openclaw-gateway-1"
-	openClawSetupContainer = openClawContainerName + "-setup"
+	limaVMName = "browseros-vm"
 )
 
 var resetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Guide destructive BrowserOS profile and VM resets",
-	Long:  "Walks through safe cleanup, VM shutdown/deletion, OpenClaw container/image removal, and target BrowserOS state reset.",
+	Long:  "Walks through safe cleanup, VM shutdown/deletion, and target BrowserOS state reset.",
 	RunE:  runReset,
 }
 
@@ -98,7 +95,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 
 	limactlPath, err := exec.LookPath("limactl")
 	if err != nil {
-		fmt.Fprintf(out, "%s Lima CLI not found; VM and OpenClaw reset steps are unavailable. Install with %s.\n", warnStyle.Sprint("Skipping:"), commandStyle.Sprint("brew install lima"))
+		fmt.Fprintf(out, "%s Lima CLI not found; VM reset steps are unavailable. Install with %s.\n", warnStyle.Sprint("Skipping:"), commandStyle.Sprint("brew install lima"))
 		if err := maybeResetLegacyPodman(out, reader); err != nil {
 			return err
 		}
@@ -123,9 +120,6 @@ func runReset(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(out, "%s %s %s\n", labelStyle.Sprint("Found VM:"), commandStyle.Sprint(vm.Name), dimStyle.Sprintf("(%s)", vm.Status))
 	if strings.EqualFold(vm.Status, "Running") {
-		if err := maybeResetOpenClaw(out, reader, limactlPath, target.LimaHome); err != nil {
-			return err
-		}
 		if ok, err := confirmYesNo(out, reader, resetPrompt{
 			Title:  "Stop VM?",
 			Body:   "This shuts down browseros-vm. The VM, containers, images, and profile data stay on disk.",
@@ -139,13 +133,11 @@ func runReset(cmd *cobra.Command, args []string) error {
 			fmt.Fprintln(out, successStyle.Sprint("VM stopped."))
 			vm.Status = "Stopped"
 		}
-	} else {
-		fmt.Fprintln(out, dimStyle.Sprint("OpenClaw container/image reset needs the VM running; skipping those steps."))
 	}
 
 	if ok, err := confirmYesNo(out, reader, resetPrompt{
 		Title:  "Delete VM?",
-		Body:   fmt.Sprintf("This deletes the Lima VM and its container store. %s remains. OpenClaw will be pulled again next time.", target.BrowserOSDir),
+		Body:   fmt.Sprintf("This deletes the Lima VM and its container store. %s remains.", target.BrowserOSDir),
 		Action: "Delete browseros-vm",
 	}); err != nil {
 		return err
@@ -170,8 +162,6 @@ func printResetOverview(out io.Writer, target resetTarget) {
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Stop VM:"), dimStyle.Sprint("Shuts down browseros-vm. Keeps data."))
 	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Delete VM:"), dimStyle.Sprint("Removes Lima/container state. Keeps the target state root."))
-	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Remove OpenClaw container:"), dimStyle.Sprint("Keeps the downloaded OpenClaw image."))
-	fmt.Fprintf(out, "  %s %s\n", labelStyle.Sprint("Remove OpenClaw image:"), dimStyle.Sprint("Next startup pulls it again."))
 	fmt.Fprintf(out, "  %s %s\n", warnStyle.Sprint(target.DeleteRootLabel), dimStyle.Sprint("Deletes the target BrowserOS state root."))
 	fmt.Fprintln(out)
 }
@@ -211,41 +201,6 @@ func confirmTyped(out io.Writer, r *bufio.Reader, title string, body string, tok
 		}
 		fmt.Fprintln(out, warnStyle.Sprint("Confirmation did not match. Press Enter to skip or try again."))
 	}
-}
-
-func maybeResetOpenClaw(out io.Writer, reader *bufio.Reader, limactlPath string, limaHome string) error {
-	if ok, err := confirmYesNo(out, reader, resetPrompt{
-		Title:  "Remove OpenClaw container?",
-		Body:   "This removes the current gateway/setup containers. The downloaded OpenClaw image stays in the VM.",
-		Action: "nerdctl rm -f " + openClawContainerName + " " + openClawSetupContainer,
-	}); err != nil {
-		return err
-	} else if ok {
-		script := fmt.Sprintf(
-			"nerdctl rm -f %s %s >/dev/null 2>&1 || true",
-			openClawContainerName,
-			openClawSetupContainer,
-		)
-		if err := runInVM(out, limactlPath, limaHome, "sh", "-lc", script); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, successStyle.Sprint("OpenClaw containers removed if present."))
-	}
-
-	if ok, err := confirmYesNo(out, reader, resetPrompt{
-		Title:  "Remove OpenClaw image?",
-		Body:   "This deletes ghcr.io/openclaw/openclaw:2026.4.12 from the VM. Next startup pulls it again.",
-		Action: "nerdctl image rm " + openClawImage,
-	}); err != nil {
-		return err
-	} else if ok {
-		script := fmt.Sprintf("nerdctl image rm %s >/dev/null 2>&1 || true", openClawImage)
-		if err := runInVM(out, limactlPath, limaHome, "sh", "-lc", script); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, successStyle.Sprint("OpenClaw image removed if present."))
-	}
-	return nil
 }
 
 func maybeDeleteTargetRoot(out io.Writer, reader *bufio.Reader, target resetTarget) error {

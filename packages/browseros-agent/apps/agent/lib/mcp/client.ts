@@ -1,107 +1,252 @@
-import type { ListToolsResult } from '@modelcontextprotocol/sdk/types.js'
-import * as z from 'zod/v4'
-
 /** @public */
 export interface McpTool {
   name: string
   description?: string
 }
 
+const JSONRPC_VERSION = '2.0'
+const MCP_PROTOCOL_VERSION = '2025-11-25'
 const MCP_CLIENT_INFO = {
   name: 'browseros-settings',
   version: '1.0.0',
 } as const
 
-type McpClientConstructor =
-  typeof import('@modelcontextprotocol/sdk/client/index.js').Client
-type McpListToolsResultSchema =
-  typeof import('@modelcontextprotocol/sdk/types.js').ListToolsResultSchema
-type McpTransportConstructor =
-  typeof import('@modelcontextprotocol/sdk/client/streamableHttp.js').StreamableHTTPClientTransport
-
-interface McpSdk {
-  Client: McpClientConstructor
-  ListToolsResultSchema: McpListToolsResultSchema
-  StreamableHTTPClientTransport: McpTransportConstructor
+interface JsonRpcError {
+  code: number
+  message: string
+  data?: unknown
 }
 
-let mcpSdkPromise: Promise<McpSdk> | undefined
+interface JsonRpcRequest {
+  jsonrpc: typeof JSONRPC_VERSION
+  id?: number
+  method: string
+  params?: unknown
+}
 
-async function loadMcpSdk(): Promise<McpSdk> {
-  if (!mcpSdkPromise) {
-    mcpSdkPromise = (async () => {
-      const previousJitless = z.config().jitless
+interface JsonRpcResponse<T> {
+  jsonrpc: typeof JSONRPC_VERSION
+  id: number
+  result?: T
+  error?: JsonRpcError
+}
 
-      // Zod v4 captures JIT settings when schemas are constructed, so this has
-      // to be set before the SDK modules create their schemas.
-      z.config({ jitless: true })
+interface McpRequestContext {
+  protocolVersion?: string
+  sessionId?: string
+}
 
-      try {
-        const [clientModule, transportModule, typesModule] = await Promise.all([
-          import('@modelcontextprotocol/sdk/client/index.js'),
-          import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
-          import('@modelcontextprotocol/sdk/types.js'),
-        ])
+interface InitializeResult {
+  protocolVersion?: unknown
+}
 
-        return {
-          Client: clientModule.Client,
-          StreamableHTTPClientTransport:
-            transportModule.StreamableHTTPClientTransport,
-          ListToolsResultSchema: typesModule.ListToolsResultSchema,
-        }
-      } finally {
-        z.config({ jitless: previousJitless })
-      }
-    })()
+interface ListToolsResult {
+  nextCursor?: unknown
+  tools?: unknown
+}
+
+function buildMcpHeaders(
+  context: McpRequestContext,
+  accept: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept,
   }
 
-  return mcpSdkPromise
+  if (context.sessionId) {
+    headers['mcp-session-id'] = context.sessionId
+  }
+  if (context.protocolVersion) {
+    headers['mcp-protocol-version'] = context.protocolVersion
+  }
+
+  return headers
 }
 
-function normalizeTools(tools: ListToolsResult['tools']): McpTool[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-  }))
+async function readErrorMessage(response: Response): Promise<string> {
+  const text = await response.text().catch(() => '')
+  return text || response.statusText || `HTTP ${response.status}`
 }
 
-async function listTools(
-  client: InstanceType<McpClientConstructor>,
-  listToolsResultSchema: McpListToolsResultSchema,
-): Promise<McpTool[]> {
+async function postJsonRpc<T>(
+  serverUrl: string,
+  message: JsonRpcRequest,
+  context: McpRequestContext,
+): Promise<{ result: T; sessionId?: string }> {
+  const response = await fetch(serverUrl, {
+    method: 'POST',
+    headers: {
+      ...buildMcpHeaders(context, 'application/json, text/event-stream'),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(message),
+  })
+  const sessionId = response.headers.get('mcp-session-id') ?? context.sessionId
+
+  if (!response.ok) {
+    throw new Error(`MCP request failed: ${await readErrorMessage(response)}`)
+  }
+
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      `MCP request returned unsupported content type: ${contentType}`,
+    )
+  }
+
+  const body = (await response.json()) as JsonRpcResponse<T>
+  if (body.error) {
+    throw new Error(`MCP request failed: ${body.error.message}`)
+  }
+  if (!('result' in body)) {
+    throw new Error('MCP request returned no result')
+  }
+
+  return { result: body.result as T, sessionId }
+}
+
+async function postJsonRpcNotification(
+  serverUrl: string,
+  message: JsonRpcRequest,
+  context: McpRequestContext,
+): Promise<void> {
+  const response = await fetch(serverUrl, {
+    method: 'POST',
+    headers: {
+      ...buildMcpHeaders(context, 'application/json, text/event-stream'),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(message),
+  })
+
+  if (!response.ok) {
+    throw new Error(
+      `MCP notification failed: ${await readErrorMessage(response)}`,
+    )
+  }
+
+  await response.body?.cancel()
+}
+
+async function openOptionalSseStream(
+  serverUrl: string,
+  context: McpRequestContext,
+): Promise<void> {
+  const response = await fetch(serverUrl, {
+    method: 'GET',
+    headers: buildMcpHeaders(context, 'text/event-stream'),
+  })
+
+  await response.body?.cancel()
+
+  if (response.status === 405) {
+    return
+  }
+  if (!response.ok) {
+    throw new Error(
+      `MCP SSE stream failed: ${await readErrorMessage(response)}`,
+    )
+  }
+}
+
+function normalizeTools(result: ListToolsResult): {
+  nextCursor?: string
+  tools: McpTool[]
+} {
+  if (!Array.isArray(result.tools)) {
+    throw new Error('MCP tools/list returned invalid tools')
+  }
+
+  const tools = result.tools.map((tool, index) => {
+    if (!tool || typeof tool !== 'object') {
+      throw new Error(`MCP tools/list returned invalid tool at index ${index}`)
+    }
+
+    const { name, description } = tool as {
+      description?: unknown
+      name?: unknown
+    }
+    if (typeof name !== 'string') {
+      throw new Error(`MCP tools/list returned unnamed tool at index ${index}`)
+    }
+
+    return {
+      name,
+      ...(typeof description === 'string' ? { description } : {}),
+    }
+  })
+
+  return {
+    tools,
+    ...(typeof result.nextCursor === 'string'
+      ? { nextCursor: result.nextCursor }
+      : {}),
+  }
+}
+
+/**
+ * Fetches available tools from the BrowserOS MCP server without importing the
+ * MCP SDK runtime, which can generate validators with `new Function` in tests
+ * and browser extension contexts.
+ * @public
+ */
+export async function fetchMcpTools(serverUrl: string): Promise<McpTool[]> {
+  let nextId = 1
+  const initialize = await postJsonRpc<InitializeResult>(
+    serverUrl,
+    {
+      jsonrpc: JSONRPC_VERSION,
+      id: nextId,
+      method: 'initialize',
+      params: {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: MCP_CLIENT_INFO,
+      },
+    },
+    {},
+  )
+
+  const protocolVersion = initialize.result.protocolVersion
+  if (typeof protocolVersion !== 'string') {
+    throw new Error('MCP initialize returned no protocol version')
+  }
+
+  const context: McpRequestContext = {
+    protocolVersion,
+    sessionId: initialize.sessionId,
+  }
+
+  await postJsonRpcNotification(
+    serverUrl,
+    {
+      jsonrpc: JSONRPC_VERSION,
+      method: 'notifications/initialized',
+    },
+    context,
+  )
+  await openOptionalSseStream(serverUrl, context)
+
   const tools: McpTool[] = []
   let cursor: string | undefined
 
   do {
-    const response: ListToolsResult = await client.request(
+    nextId += 1
+    const response = await postJsonRpc<ListToolsResult>(
+      serverUrl,
       {
+        jsonrpc: JSONRPC_VERSION,
+        id: nextId,
         method: 'tools/list',
         ...(cursor ? { params: { cursor } } : {}),
       },
-      listToolsResultSchema,
+      context,
     )
+    const page = normalizeTools(response.result)
 
-    tools.push(...normalizeTools(response.tools))
-    cursor = response.nextCursor
+    tools.push(...page.tools)
+    cursor = page.nextCursor
   } while (cursor)
 
   return tools
-}
-
-/**
- * Fetches available tools from an MCP server
- * @public
- */
-export async function fetchMcpTools(serverUrl: string): Promise<McpTool[]> {
-  const { Client, StreamableHTTPClientTransport, ListToolsResultSchema } =
-    await loadMcpSdk()
-  const client = new Client(MCP_CLIENT_INFO)
-  const transport = new StreamableHTTPClientTransport(new URL(serverUrl))
-
-  try {
-    await client.connect(transport)
-    return await listTools(client, ListToolsResultSchema)
-  } finally {
-    await client.close()
-  }
 }

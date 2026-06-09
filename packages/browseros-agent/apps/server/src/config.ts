@@ -24,12 +24,12 @@ export const ServerConfigSchema = z.object({
   resourcesDir: z.string(),
   executionDir: z.string(),
   mcpAllowRemote: z.boolean(),
-  codegenServiceUrl: z.string().optional(),
   instanceClientId: z.string().optional(),
   instanceInstallId: z.string().optional(),
   instanceBrowserosVersion: z.string().optional(),
   instanceChromiumVersion: z.string().optional(),
   aiSdkDevtoolsEnabled: z.boolean(),
+  browserUseNewTools: z.boolean(),
 })
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>
@@ -68,13 +68,10 @@ export function loadServerConfig(
     cli.value.overrides,
   )
 
-  // 5. Add build-time inlined values
-  merged.codegenServiceUrl = INLINED_ENV.CODEGEN_SERVICE_URL
-
-  // 6. agentPort is deprecated - always equals serverPort
+  // 5. agentPort is deprecated - always equals serverPort
   merged.agentPort = merged.serverPort
 
-  // 7. Validate with Zod
+  // 6. Validate with Zod
   const result = ServerConfigSchema.safeParse(merged)
   if (!result.success) {
     const errors = result.error.issues
@@ -86,7 +83,7 @@ export function loadServerConfig(
     }
   }
 
-  // 8. Validate required inlined env vars for production
+  // 7. Validate required inlined env vars for production
   const inlinedValidation = validateInlinedEnv()
   if (!inlinedValidation.ok) return inlinedValidation
 
@@ -272,6 +269,7 @@ function parseRuntimeEnv(): PartialConfig {
     instanceClientId: process.env.BROWSEROS_CLIENT_ID,
     aiSdkDevtoolsEnabled:
       process.env.BROWSEROS_AI_SDK_DEVTOOLS === 'true' ? true : undefined,
+    browserUseNewTools: parseOptionalBoolean(process.env.BROWSER_USE_NEW_TOOLS),
   })
 }
 
@@ -305,6 +303,7 @@ function getDefaults(cwd: string): PartialConfig {
     executionDir: cwd,
     mcpAllowRemote: false,
     aiSdkDevtoolsEnabled: false,
+    browserUseNewTools: true,
   }
 }
 
@@ -323,6 +322,14 @@ function mergeConfigs(...configs: PartialConfig[]): PartialConfig {
 function safeParseInt(value: string): number | undefined {
   const num = parseInt(value, 10)
   return Number.isNaN(num) ? undefined : num
+}
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined
+  const normalized = value.trim().toLowerCase()
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false
+  return undefined
 }
 
 function omitUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {

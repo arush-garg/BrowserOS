@@ -76,6 +76,9 @@ export const MCP_EXTERNAL_ACCESS_DISABLED_EVENT =
 export const MCP_SERVER_RESTARTED_EVENT = 'settings.mcp_server.restarted'
 
 /** @public */
+export const MCP_PROXY_PORT_CHANGED_EVENT = 'settings.mcp_proxy_port.changed'
+
+/** @public */
 export const AGENT_CREATED_EVENT = 'agents.agent.created'
 
 /** @public */
@@ -220,9 +223,6 @@ export const SCHEDULED_TASK_RETRIED_EVENT = 'settings.scheduled_task.retried'
 export const JTBD_POPUP_DISMISSED_EVENT = 'ui.jtbd_popup.dismissed'
 
 /** @public */
-export const SEARCH_PROVIDER_CHANGED_EVENT = 'settings.search_provider.changed'
-
-/** @public */
 export const ONBOARDING_STARTED_EVENT = 'onboarding.started'
 
 /** @public */
@@ -233,9 +233,6 @@ export const ONBOARDING_STEP_COMPLETED_EVENT = 'onboarding.step.completed'
 
 /** @public */
 export const ONBOARDING_ABOUT_SUBMITTED_EVENT = 'onboarding.about.submitted'
-
-/** @public */
-export const ONBOARDING_SOUL_SELECTED_EVENT = 'onboarding.soul.selected'
 
 /** @public */
 export const ONBOARDING_CONNECT_APPS_VIEWED_EVENT =

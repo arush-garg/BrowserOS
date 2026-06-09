@@ -31,6 +31,7 @@ type Config struct {
 	DevUserDataDir    string        `yaml:"dev_user_data_dir"`
 	DevProfileDir     string        `yaml:"dev_profile_dir"`
 	BrowserOSDir      string        `yaml:"browseros_dir"`
+	Branch            string        `yaml:"branch"`
 	Ports             Ports         `yaml:"ports"`
 	ProductionEnv     ProductionEnv `yaml:"production_env"`
 }
@@ -40,6 +41,7 @@ type packageJSON struct {
 }
 
 const LogDirName = "logs"
+const DefaultBranch = "main"
 
 func Path() (string, error) {
 	home, err := os.UserHomeDir()
@@ -64,6 +66,7 @@ func Defaults(home string) Config {
 		DevUserDataDir:    filepath.Join(DefaultConfigDir(home), "profile"),
 		DevProfileDir:     "Default",
 		BrowserOSDir:      filepath.Join(home, ".browseros-dogfood"),
+		Branch:            DefaultBranch,
 		Ports:             Ports{CDP: 9015, Server: 9115, Extension: 9315},
 		ProductionEnv:     DefaultProductionEnv(),
 	}
@@ -105,6 +108,10 @@ func (c *Config) Resolve() {
 	c.DevUserDataDir = ExpandTilde(c.DevUserDataDir, home)
 	c.BrowserOSDir = ExpandTilde(c.BrowserOSDir, home)
 	c.BrowserOSAppPath = ExpandTilde(c.BrowserOSAppPath, home)
+	c.Branch = strings.TrimSpace(c.Branch)
+	if c.Branch == "" {
+		c.Branch = DefaultBranch
+	}
 	if c.DevProfileDir == "" {
 		c.DevProfileDir = "Default"
 	}
@@ -199,7 +206,6 @@ func DefaultProductionEnv() ProductionEnv {
 	return ProductionEnv{
 		Server: map[string]string{
 			"BROWSEROS_CONFIG_URL": "https://llm.browseros.com/api/browseros-server/config",
-			"CODEGEN_SERVICE_URL":  "",
 			"POSTHOG_API_KEY":      "",
 			"SENTRY_DSN":           "",
 			"R2_ACCOUNT_ID":        "",

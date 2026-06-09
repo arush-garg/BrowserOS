@@ -11,6 +11,10 @@
  */
 
 import { logger } from '../../logger'
+import {
+  type ResolvedHostBinary,
+  resolveHostBinary,
+} from '../host-acp/binary-resolver'
 import type { AgentRuntime } from './agent-runtime'
 import { ActionNotSupportedError } from './errors'
 import type {
@@ -37,6 +41,14 @@ export interface HostProcessAgentRuntimeDeps {
     cmd: ReadonlyArray<string>,
     timeoutMs: number,
   ) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+  /** Test seam: resolve the command before spawning the real probe. */
+  resolveBinary?: (
+    name: string,
+    timeoutMs: number,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<ResolvedHostBinary | null>
+  /** Environment overrides for the version probe subprocess. */
+  probeEnv?: NodeJS.ProcessEnv
 }
 
 const DEFAULT_PROBE_CACHE_MS = 5 * 60 * 1000
@@ -99,12 +111,6 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
         return this.handleReinstallCli()
       case 'check-auth':
         return this.checkAuth()
-      default:
-        throw new ActionNotSupportedError(
-          this.descriptor.adapterId,
-          action.type,
-          this.getCapabilities(),
-        )
     }
   }
 
@@ -218,9 +224,18 @@ export abstract class HostProcessAgentRuntime implements AgentRuntime {
     timeoutMs: number,
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     if (this.deps.spawnProbe) return this.deps.spawnProbe(cmd, timeoutMs)
-    const proc = Bun.spawn(cmd as string[], {
+    const binaryName = cmd[0]
+    if (!binaryName) throw new Error('Host probe command is empty')
+    const env = { ...process.env, ...(this.deps.probeEnv ?? {}) }
+    const resolved =
+      (await this.deps.resolveBinary?.(binaryName, timeoutMs, env)) ??
+      (await resolveHostBinary(binaryName, { env, timeoutMs }))
+    if (!resolved) throw new Error(`${binaryName} not found on host PATH`)
+
+    const proc = Bun.spawn([resolved.path, ...cmd.slice(1)] as string[], {
       stdout: 'pipe',
       stderr: 'pipe',
+      env: resolved.env,
     })
     const timer = setTimeout(() => {
       try {

@@ -90,6 +90,72 @@ describe('ClaudeCodeStreamParser', () => {
     expect(parser.getLastText()).toBe('Final answer')
   })
 
+  it('returns null token usage when no usage data is seen', () => {
+    const parser = new ClaudeCodeStreamParser()
+    parser.pushLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'hi' }] },
+      }),
+    )
+    expect(parser.getTokenUsage()).toBeNull()
+  })
+
+  it('accumulates per-assistant usage and prefers the result-message aggregate', () => {
+    const parser = new ClaudeCodeStreamParser()
+    parser.pushLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'step 1' }],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 500,
+            cache_creation_input_tokens: 10,
+          },
+        },
+      }),
+    )
+    parser.pushLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'step 2' }],
+          usage: { input_tokens: 50, output_tokens: 30 },
+        },
+      }),
+    )
+    // No result usage → falls back to the running sum
+    expect(parser.getTokenUsage()).toEqual({
+      input_tokens: 150,
+      output_tokens: 55,
+      cache_read_tokens: 500,
+      cache_creation_tokens: 10,
+    })
+
+    // Result-line usage overrides the sum
+    parser.pushLine(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        result: 'done',
+        usage: {
+          input_tokens: 200,
+          output_tokens: 60,
+          cache_read_input_tokens: 1000,
+          cache_creation_input_tokens: 25,
+        },
+      }),
+    )
+    expect(parser.getTokenUsage()).toEqual({
+      input_tokens: 200,
+      output_tokens: 60,
+      cache_read_tokens: 1000,
+      cache_creation_tokens: 25,
+    })
+  })
+
   it('identifies BrowserOS MCP tools that should trigger screenshots', () => {
     expect(
       shouldCaptureScreenshotForTool('mcp__browseros__navigate_page'),

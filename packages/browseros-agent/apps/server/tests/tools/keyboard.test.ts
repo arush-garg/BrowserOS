@@ -4,7 +4,7 @@ import {
   modifierBitmask,
   normalizeKey,
   pressCombo,
-} from '../../src/browser/keyboard'
+} from '../../src/browser/core/input/keyboard'
 
 describe('normalizeKey', () => {
   it('returns exact KEY_MAP matches unchanged', () => {

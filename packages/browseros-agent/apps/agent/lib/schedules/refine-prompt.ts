@@ -5,20 +5,22 @@ import {
   providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import {
+  findChatProviderById,
+  resolveChatProvider,
+} from '../llm-providers/provider-runtime'
 
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
   const providers = await providersStorage.getValue()
-  if (providerId && providers?.length) {
-    const match = providers.find((p) => p.id === providerId)
-    if (match) return match
-  }
   if (providers?.length) {
+    const explicitProvider = findChatProviderById(providers, providerId)
+    if (explicitProvider) return explicitProvider
+
     const defaultProviderId = await defaultProviderIdStorage.getValue()
-    const defaultProvider = providers.find((p) => p.id === defaultProviderId)
-    if (defaultProvider) return defaultProvider
-    if (providers[0]) return providers[0]
+    const provider = resolveChatProvider(providers, defaultProviderId)
+    if (provider) return provider
   }
   return createDefaultBrowserOSProvider()
 }

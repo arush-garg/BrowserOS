@@ -7,7 +7,6 @@ import type { BuildConfig } from './types'
 
 const REQUIRED_PROD_VARS = [
   'BROWSEROS_CONFIG_URL',
-  'CODEGEN_SERVICE_URL',
   'POSTHOG_API_KEY',
   'SENTRY_DSN',
 ]

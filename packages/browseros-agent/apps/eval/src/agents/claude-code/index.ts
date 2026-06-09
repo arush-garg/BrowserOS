@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DEFAULT_TIMEOUT_MS } from '../../constants'
 import type { ClaudeCodeAgentConfig, UIMessageStreamEvent } from '../../types'
+import { extractDatasetMetadata } from '../../utils/dataset-metadata'
 import { withEvalTimeout } from '../../utils/with-eval-timeout'
 import type { AgentContext, AgentEvaluator, AgentResult } from '../types'
 import {
@@ -100,6 +101,8 @@ export class ClaudeCodeEvaluator implements AgentEvaluator {
 
     const endTime = Date.now()
     const finalAnswer = parser.getLastText() ?? capture.getLastAssistantText()
+    const tokenUsage = parser.getTokenUsage()
+    const datasetMetadata = extractDatasetMetadata(task.metadata)
     const metadata = {
       query_id: task.query_id,
       dataset: task.dataset,
@@ -118,6 +121,8 @@ export class ClaudeCodeEvaluator implements AgentEvaluator {
         model: agentConfig.model,
       },
       grader_results: {},
+      ...(tokenUsage ? { token_usage: tokenUsage } : {}),
+      ...(datasetMetadata ? { task_metadata: datasetMetadata } : {}),
     }
 
     await capture.trajectorySaver.saveMetadata(metadata)

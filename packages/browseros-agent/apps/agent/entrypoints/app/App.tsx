@@ -1,41 +1,32 @@
 import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
+import { AuthLayout } from '@/components/layout/AuthLayout'
+import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout'
+import { SidebarLayout } from '@/components/layout/SidebarLayout'
 import { Feature } from '@/lib/browseros/capabilities'
-import { useCapabilities } from '@/lib/browseros/useCapabilities'
-import { NewTab } from '../newtab/index/NewTab'
-import { NewTabChat } from '../newtab/index/NewTabChat'
-import { NewTabLayout } from '../newtab/layout/NewTabLayout'
-import { Personalize } from '../newtab/personalize/Personalize'
-import { OnboardingDemo } from '../onboarding/demo/OnboardingDemo'
-import { FeaturesPage } from '../onboarding/features/Features'
-import { Onboarding } from '../onboarding/index/Onboarding'
-import { StepsLayout } from '../onboarding/steps/StepsLayout'
-import { AclSettingsPage } from './acl-settings/AclSettingsPage'
-import { AdminDashboardPage } from './admin-dashboard/AdminDashboardPage'
-import { AgentCommandConversation } from './agent-command/AgentCommandConversation'
-import { AgentCommandHome } from './agent-command/AgentCommandHome'
-import { AgentCommandLayout } from './agent-command/agent-command-layout'
-import { AgentsPage } from './agents/AgentsPage'
-import { AISettingsPage } from './ai-settings/AISettingsPage'
-import { ConnectMCP } from './connect-mcp/ConnectMCP'
-import { CustomizationPage } from './customization/CustomizationPage'
-import { SurveyPage } from './jtbd-agent/SurveyPage'
-import { AuthLayout } from './layout/AuthLayout'
-import { SettingsSidebarLayout } from './layout/SettingsSidebarLayout'
-import { SidebarLayout } from './layout/SidebarLayout'
-import { LlmHubPage } from './llm-hub/LlmHubPage'
-import { LoginPage } from './login/LoginPage'
-import { LogoutPage } from './login/LogoutPage'
-import { MagicLinkCallback } from './login/MagicLinkCallback'
-import { MCPSettingsPage } from './mcp-settings/MCPSettingsPage'
-import { MemoryPage } from './memory/MemoryPage'
-import { ProfilePage } from './profile/ProfilePage'
-import { ScheduledTasksPage } from './scheduled-tasks/ScheduledTasksPage'
-import { SearchProviderPage } from './search-provider/SearchProviderPage'
-import { SkillsPage } from './skills/SkillsPage'
-import { SoulPage } from './soul/SoulPage'
-import { ToolApprovalsPage } from './tool-approvals/ToolApprovalsPage'
-import { UsagePage } from './usage/UsagePage'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
+import { AgentCommandConversation } from '@/screens/agent-command/AgentCommandConversation'
+import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
+import { AgentCommandLayout } from '@/screens/agent-command/AgentCommandLayout'
+import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
+import { LoginPage } from '@/screens/auth/LoginPage'
+import { LogoutPage } from '@/screens/auth/LogoutPage'
+import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
+import { CustomizationPage } from '@/screens/customization/CustomizationPage'
+import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
+import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
+import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
+import { NewTab } from '@/screens/newtab/index/NewTab'
+import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
+import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
+import { Personalize } from '@/screens/newtab/personalize/Personalize'
+import { OnboardingDemo } from '@/screens/onboarding/demo/OnboardingDemo'
+import { FeaturesPage } from '@/screens/onboarding/features/Features'
+import { Onboarding } from '@/screens/onboarding/index/Onboarding'
+import { StepsLayout } from '@/screens/onboarding/steps/StepsLayout'
+import { ProfilePage } from '@/screens/profile/ProfilePage'
+import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
+import { UsagePage } from '@/screens/usage/UsagePage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -43,6 +34,13 @@ function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const experimentId = params.get('experimentId') ?? 'default'
   const maxTurns = maxTurnsStr ? Number.parseInt(maxTurnsStr, 10) : 7
   return { maxTurns, experimentId }
+}
+
+// Agent management moved into AI & Agents settings; conversations live under
+// /home/agents. Keep old /agents links alive.
+const LegacyAgentRedirect: FC = () => {
+  const params = useParams()
+  return <Navigate to={`/home/agents/${params.agentId ?? ''}`} replace />
 }
 
 const OptionsRedirect: FC = () => {
@@ -55,9 +53,7 @@ const OptionsRedirect: FC = () => {
     'connect-mcp': '/connect-apps',
     mcp: '/settings/mcp',
     customization: '/settings/customization',
-    search: '/settings/search',
-    soul: '/home/soul',
-    skills: '/home/skills',
+    search: '/settings/ai',
     'jtbd-agent': '/settings/survey',
     scheduled: '/scheduled',
   }
@@ -79,7 +75,6 @@ export const App: FC = () => {
           <Route path="login" element={<LoginPage />} />
           <Route path="logout" element={<LogoutPage />} />
           <Route path="profile" element={<ProfilePage />} />
-          <Route path="auth/magic-link" element={<MagicLinkCallback />} />
         </Route>
 
         {/* Main app with sidebar */}
@@ -97,6 +92,10 @@ export const App: FC = () => {
                     path="agents/:agentId"
                     element={<AgentCommandConversation />}
                   />
+                  <Route
+                    path="agents/:agentId/sessions/:sessionId"
+                    element={<AgentCommandConversation />}
+                  />
                 </Route>
                 <Route path="chat" element={<NewTabChat />} />
                 <Route path="personalize" element={<Personalize />} />
@@ -104,35 +103,11 @@ export const App: FC = () => {
             ) : (
               <Route index element={<NewTab />} />
             )}
-            <Route path="soul" element={<SoulPage />} />
-            <Route path="skills" element={<SkillsPage />} />
-            <Route path="memory" element={<MemoryPage />} />
           </Route>
 
           {/* Primary nav routes */}
           <Route path="connect-apps" element={<ConnectMCP />} />
           <Route path="scheduled" element={<ScheduledTasksPage />} />
-          {alphaEnabled ? (
-            <>
-              <Route path="agents" element={<AgentsPage />} />
-              <Route element={<AgentCommandLayout />}>
-                <Route
-                  path="agents/:agentId"
-                  element={
-                    <AgentCommandConversation
-                      variant="page"
-                      backPath="/agents"
-                      agentPathPrefix="/agents"
-                      createAgentPath="/agents"
-                    />
-                  }
-                />
-              </Route>
-            </>
-          ) : null}
-          {alphaEnabled ? (
-            <Route path="admin" element={<AdminDashboardPage />} />
-          ) : null}
         </Route>
 
         {/* Settings with dedicated sidebar */}
@@ -143,15 +118,13 @@ export const App: FC = () => {
             <Route path="chat" element={<LlmHubPage />} />
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
-            <Route path="search" element={<SearchProviderPage />} />
+            <Route
+              path="search"
+              element={<Navigate to="/settings/ai" replace />}
+            />
             <Route path="survey" element={<SurveyPage {...surveyParams} />} />
             <Route path="usage" element={<UsagePage />} />
-            {alphaEnabled ? (
-              <>
-                <Route path="acl" element={<AclSettingsPage />} />
-                <Route path="approvals" element={<ToolApprovalsPage />} />
-              </>
-            ) : null}
+            <Route path="*" element={<Navigate to="/settings/ai" replace />} />
           </Route>
         </Route>
 
@@ -178,26 +151,17 @@ export const App: FC = () => {
           path="/settings/connect-mcp"
           element={<Navigate to="/connect-apps" replace />}
         />
-        <Route
-          path="/settings/soul"
-          element={<Navigate to="/home/soul" replace />}
-        />
-        <Route
-          path="/settings/skills"
-          element={<Navigate to="/home/skills" replace />}
-        />
-        <Route
-          path="/audit"
-          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
-        />
+        <Route path="/audit" element={<Navigate to="/home" replace />} />
         <Route
           path="/observability"
-          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
+          element={<Navigate to="/home" replace />}
         />
+        <Route path="/executions" element={<Navigate to="/home" replace />} />
         <Route
-          path="/executions"
-          element={<Navigate to={alphaEnabled ? '/admin' : '/home'} replace />}
+          path="/agents"
+          element={<Navigate to="/settings/ai" replace />}
         />
+        <Route path="/agents/:agentId" element={<LegacyAgentRedirect />} />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         {/* Fallback to home */}

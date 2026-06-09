@@ -1,7 +1,6 @@
 import { ZodError, z } from 'zod'
 
 const EnvSchema = z.object({
-  VITE_BROWSEROS_SERVER_PORT: z.coerce.number().optional(),
   VITE_ALPHA_FEATURES: z
     .string()
     .optional()

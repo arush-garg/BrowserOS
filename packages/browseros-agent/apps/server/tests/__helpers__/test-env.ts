@@ -26,6 +26,3 @@ if (!process.env.BROWSEROS_TEST_SERVER_PORT) {
 if (!process.env.BROWSEROS_TEST_EXTENSION_PORT) {
   process.env.BROWSEROS_TEST_EXTENSION_PORT = String(portBase + 2)
 }
-if (!process.env.BROWSEROS_TEST_OPENCLAW_GATEWAY_PORT) {
-  process.env.BROWSEROS_TEST_OPENCLAW_GATEWAY_PORT = String(portBase + 3)
-}

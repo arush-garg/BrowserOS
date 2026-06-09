@@ -37,6 +37,11 @@ var initCmd = &cobra.Command{
 		out := cmd.OutOrStdout()
 		printRepoPathHelp(out)
 		cfg.RepoPath = prompt(out, reader, "Repo path", cfg.RepoPath)
+		if branch := pipeline.Branch(cfg.RepoPath, pipeline.ExecRunner{}); branch != "" {
+			cfg.Branch = branch
+		}
+		printBranchHelp(out)
+		cfg.Branch = promptValue(out, reader, "Branch", cfg.Branch)
 		cfg.BrowserOSAppPath = prompt(out, reader, "BrowserOS binary", cfg.BrowserOSAppPath)
 		profiles, _ := profile.ReadProfiles(cfg.SourceUserDataDir)
 		if len(profiles) > 0 {
@@ -75,6 +80,10 @@ func printRepoPathHelp(out io.Writer) {
 	fmt.Fprintln(out, "Example: /Users/you/code/browseros-alpha, not packages/browseros-agent.")
 }
 
+func printBranchHelp(out io.Writer) {
+	fmt.Fprintln(out, "Branch is the BrowserOS branch dogfood should track during pull/restart --pull.")
+}
+
 func printSourceProfileHelp(out io.Writer) {
 	fmt.Fprintln(out, "Choose the installed BrowserOS profile you normally use.")
 	fmt.Fprintln(out, "  Dogfood copies it into a separate dev profile.")
@@ -89,6 +98,16 @@ func prompt(out io.Writer, r *bufio.Reader, label string, current string) string
 	}
 	home, _ := os.UserHomeDir()
 	return config.ExpandTilde(line, home)
+}
+
+func promptValue(out io.Writer, r *bufio.Reader, label string, current string) string {
+	fmt.Fprintf(out, "%s [%s]: ", labelStyle.Sprint(label), commandStyle.Sprint(current))
+	line, _ := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return current
+	}
+	return line
 }
 
 func chooseProfile(out io.Writer, r *bufio.Reader, profiles []profile.BrowserProfile) string {

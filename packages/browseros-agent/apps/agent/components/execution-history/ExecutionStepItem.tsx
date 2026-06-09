@@ -62,13 +62,6 @@ const getStateIcon = (step: ExecutionStepRecord) => {
   return <CircleDotDashed className="h-4 w-4 text-muted-foreground" />
 }
 
-const isAclBlocked = (step: ExecutionStepRecord) =>
-  Boolean(
-    step.errorText?.includes('Action blocked by ACL rule') ||
-      step.approval?.reason?.includes('Action blocked by ACL rule') ||
-      step.previewText === 'Blocked by ACL rule',
-  )
-
 const shouldShowPreview = (step: ExecutionStepRecord) =>
   step.state === 'input-streaming' ||
   step.state === 'input-available' ||
@@ -100,9 +93,6 @@ export const ExecutionStepItem: FC<{
                 <Badge variant="secondary">
                   {formatStateLabel(step.state)}
                 </Badge>
-                {isAclBlocked(step) && (
-                  <Badge variant="outline">ACL Blocked</Badge>
-                )}
               </div>
               {shouldShowPreview(step) && (
                 <p className="mt-1 text-muted-foreground text-xs">

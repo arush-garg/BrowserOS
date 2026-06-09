@@ -279,7 +279,12 @@ def find_components_to_sign(
     browseros_server_dir = join_paths(app_path, "Contents", "Resources", "BrowserOSServer")
     if browseros_server_dir.exists():
         for item in browseros_server_dir.rglob("*"):
-            if item.is_file() and not item.suffix and os.access(item, os.X_OK):
+            if (
+                item.is_file()
+                and not item.suffix
+                and os.access(item, os.X_OK)
+                and get_browseros_server_binary_info(item) is not None
+            ):
                 components["executables"].append(item)
 
     return components

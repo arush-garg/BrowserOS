@@ -1,177 +1,146 @@
-# CLAUDE.md
+# BrowserOS Agent UI contributor ground rules
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+The agent UI is a WXT React extension: side panel chat, app/settings pages, new tab, onboarding, background workers, and content scripts.
 
-## Coding guidelines
+## Before you push
 
-- Write minimal code comments. Only add comments for non-obvious logic, complex algorithms, or critical warnings. Skip comments for self-explanatory code, obvious function names, and simple operations.
+From the monorepo root:
 
-## File Naming Convention
+```
+bun run lint
+bun run typecheck
+bun run build:agent
+```
 
-| Type | Convention | Example |
-|------|------------|---------|
-| Folders | kebab-case | `ai-settings/`, `jtbd-popup/`, `llm-hub/` |
-| React components (.tsx) | PascalCase | `AISettingsPage.tsx`, `SurveyHeader.tsx` |
-| Hooks (.ts) | camelCase with `use` prefix | `useVoiceInput.ts`, `useMessageTree.ts` |
-| Non-component files (.ts) | lowercase | `types.ts`, `models.ts`, `storage.ts` |
+For focused agent UI work:
 
-## Project Overview
+```
+cd apps/agent && bun run typecheck
+cd apps/agent && bun run test
+cd apps/agent && bun run codegen
+```
 
-**BrowserOS Agent Chrome Extension** - This project contains the official chrome extension for BrowserOS Agent, enabling users to interact with the core functionalities of BrowserOS.
+## Project shape
 
-## Bun Preferences
+```
+apps/agent/
+|- entrypoints/
+|  |- sidepanel/     Chat UI
+|  |- app/           Settings, AI providers, agents, MCP, usage
+|  |- newtab/        BrowserOS new tab UI
+|  |- onboarding/    First-run flow
+|  |- background/    Extension background logic
+|  `- *.content*     Page/content integrations
+|- components/       Shared UI, including generated shadcn-style primitives
+|- generated/graphql GraphQL codegen output
+|- lib/              Auth, GraphQL, metrics, Sentry, BrowserOS clients, state
+|- schema/           Default GraphQL schema input
+`- wxt.config.ts     Manifest and WXT/Vite config
+```
 
-Default to using Bun instead of Node.js:
+## WXT and entrypoints
 
-- Use `bun <file>` instead of `node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun install` instead of `npm install`
-- Use `bun run <script>` instead of `npm run <script>`
-- Bun automatically loads .env (no dotenv needed)
+- `wxt.config.ts` owns manifest shape, permissions, side panel/new tab/options wiring, extension ID, externally connectable hosts, and Vite plugins.
+- `entrypoints/sidepanel/main.tsx` is the side panel entry.
+- `entrypoints/app/main.tsx` is the extension app/settings entry.
+- `entrypoints/newtab/` owns the new tab experience.
+- `entrypoints/background/` owns background jobs and extension-level listeners.
+- Content entrypoints live under `entrypoints/*.content*`; keep page integration logic there, not in shared UI components.
 
-## Project Structure
+## UI conventions
 
-This project user wxt.dev as its framework for building chrome extension.
+- Folders are kebab-case. React component files are PascalCase. Hooks use a `use` prefix. Single-word utility/model files stay lowercase.
+- Avoid `useCallback` and `useMemo` unless they solve a measured or obvious render problem.
+- Build UI from the shadcn-style primitives in `components/ui/` and the AI Elements in `components/ai-elements/`. Both are generated — fallow skips its unused/leak checks for them (`.fallowrc.json`) — so treat them as generated output and don't hand-edit them for feature work.
+- Feature UI lives in `components/<feature>/` or colocated with its entrypoint — keep `components/ui/` and `components/ai-elements/` for the generated primitives only.
+- Capture runtime errors with Sentry, not `console.error`:
 
-The chrome extension manifest is created via default wxt.dev setup along with some custom configuration provided via `wxt.config.ts` file
-
-The key directories of the project are:
-- `entrypoints/newtab`: Contains the code for the new tab page of the extension.
-- `entrypoints/popup`: Contains the code for the popup that appears when the extension icon is clicked.
-- `entrypoints/onboarding`: Contains the onboarding flow for new users which is triggered on first install.
-
-## React Coding patterns
-
-- Avoid using useCallback and useMemo as much as possible - only add them if their presence is absolutely necessary
-- When writing a graphql document, create a /graphql directory under the current directory where the file is present and create a file to contain the document.
-  - For example: if you want to create grapqhl queries in @apps/agent/entrypoints/sidepanel/history/ChatHistory.tsx then write the graphql document in @apps/agent/entrypoints/sidepanel/history/graphql/chatHistoryDocument.ts 
-- Shadcn UI is setup in this project and always use shadcn components for the UI
-- When need to record errors, do not use console.error -> instead use the sentry service to capture errors:
-```ts
+```
 import { sentry } from '@/lib/sentry/sentry'
 
 sentry.captureException(error, {
-  extra: {
-    message: 'Failed to fetch graph data from the server',
-    codeId: workflow.codeId,
-  },
+  extra: { message: 'Failed to fetch graph data from the server' },
 })
 ```
 
-## GraphQL Client
+## Server state and data fetching
 
-- The Graphql main schema file is in `@apps/agent/generated/graphql/schema.graphql` - this is the source of truth for constructing all graphql queries
+All server state goes through **TanStack Query** (`@tanstack/react-query`) — don't fetch with `useEffect` + `useState`, and don't call the network from a component body. There are two lanes:
 
-- The frontend uses React Query with `graphql-codegen` to interact with the backend GraphQL API. The types are generated and stored in `@apps/agent/generated/graphql`
+- **GraphQL (BrowserOS API)** — the default for app data. Colocated `graphql()` documents + the `lib/graphql/` helpers; see *GraphQL and codegen* below.
+- **Local REST (agent harness, credits)** — endpoints on the dynamic agent server wrap a small `fetch` in `useQuery`/`useMutation`. Reference: `entrypoints/app/agents/useAgents.ts`, `lib/credits/useCredits.ts`.
 
-- When working with React Query and GraphQL, some important utilities are already created to make the interaction simpler:
-  - `@apps/agent/lib/graphql/useGraphqlInfiniteQuery.ts`
-  - `@apps/agent/lib/graphql/useGraphqlMutation.ts`
-  - `@apps/agent/lib/graphql/useGraphqlQuery.ts`
-  - `@apps/agent/lib/graphql/getQueryKeyFromDocument.ts`
+Either lane: keep query keys in one place — derive GraphQL keys with `getQueryKeyFromDocument(Document)`, give REST hooks a module-level query-key const (e.g. `AGENT_QUERY_KEYS`) — and invalidate through that, never a hand-written string literal (`BrowserOsAiPane.tsx` invalidates via `getQueryKeyFromDocument(...)`). For instant-feeling mutations, do optimistic updates with `onMutate` -> `cancelQueries` + `getQueryData` + `setQueryData`, rolling back in `onError` — worked example: `useUpdateHarnessAgent` in `entrypoints/app/agents/useAgents.ts`.
 
-This is how a standard GraphQL query and mutation looks like:
+## GraphQL and codegen
 
-```ts
-import { graphql } from "~/graphql/gql";
-import { useGraphqlQuery } from "@/lib/graphql/useGraphqlQuery";
-import { useGraphqlMutation } from "@/lib/graphql/useGraphqlMutation";
-import { useSessionInfo } from '@/lib/auth/sessionStorage'
-import { getQueryKeyFromDocument } from "@/modules/graphql/getQueryKeyFromDocument";
-import { useQueryClient } from "@tanstack/react-query";
+- Codegen input defaults to `schema/schema.graphql`; set `GRAPHQL_SCHEMA_PATH` when you need an external schema.
+- Generated files live in `generated/graphql/`; do not hand-edit them.
+- Put GraphQL documents in a local `graphql/` folder near the feature using them.
+- Import documents with `graphql` from `@/generated/graphql/gql`.
+- Use the existing helpers in `lib/graphql/`: `useGraphqlQuery`, `useGraphqlMutation`, `useGraphqlInfiniteQuery`, and `getQueryKeyFromDocument`.
+- After adding or changing a document, run:
 
-export const GetProfileByUserIdDocument = graphql(`
-  query GetProfileByUserId($userId: String!) {
-    profileByUserId(userId: $userId) {
-      id
-      rowId
-      name
-      userId
-      meta
-      profilePictureUrl
-      linkedInUrl
-      updatedAt
-      createdAt
-      deletedAt
-    }
-  }
-`);
-
-const UpdateProfileIndustryDocument = graphql(`
-  mutation UpdateProfileIndustry($userId: String!, $meta: JSON) {
-    updateProfileByUserId(input: { userId: $userId, patch: { meta: $meta } }) {
-      profile {
-        id
-        rowId
-        meta
-      }
-    }
-  }
-`);
-
-  const { sessionInfo } = useSessionInfo()
-
-  const userId = sessionInfo.user?.id
-
-const queryClient = useQueryClient();
-
-const { data: profileData } = useGraphqlQuery(
-  GetProfileByUserIdDocument,
-  {
-    userId,
-  },
-  {
-    enabled: !!userId,
-  },
-);
-
-const updateProfileMutation = useGraphqlMutation(
-  UpdateProfileIndustryDocument,
-  {
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [getQueryKeyFromDocument(GetProfileByUserIdDocument)],
-      });
-    },
-  },
-);
+```
+cd apps/agent && bun run codegen
 ```
 
-To run codegen to generate graphql code after creating a query, you should run codegen using the command (since .env.development is necessary for codegen):
-```sh
-bun --env-file=.env.development run codegen
+## Forms
+
+Every form uses `react-hook-form` for state and submission plus a single `zod` schema for validation, bridged by `@hookform/resolvers/zod` — no `useState`-per-field. The UI is the shadcn `Form` set (`Form`, `FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormMessage`) from `@/components/ui/form`. The schema is the source of truth: derive `FormValues` with `z.infer`, pass `zodResolver(schema)` to `useForm`, and surface per-field errors through `<FormMessage />` instead of rolling your own error state.
+
+- Import `z` from `zod/v3`, not `zod`. The package ships zod 4, which exposes a `zod/v3` compatibility entry; every existing form standardizes on it, so match them.
+- Reference: `entrypoints/app/connect-mcp/AddCustomMCPDialog.tsx` (also `ai-settings/NewProviderDialog.tsx`, `scheduled-tasks/NewScheduledTaskDialog.tsx`).
+
+## Routing
+
+Each page entrypoint owns a `react-router` v7 `HashRouter` with one central route table — `entrypoints/app/App.tsx` for the app/settings pages, `entrypoints/sidepanel/App.tsx` for the side panel. Add a page by registering a `<Route>` there and colocating the screen under `entrypoints/<area>/<feature>/`; express redirects and back-compat paths as `<Navigate replace>` entries in the same table.
+
+## Dates and times
+
+`dayjs` is the one date library (already a dependency) — use it for parsing, comparison, and formatting; prefer it over ad-hoc `Date`/`Intl` math, and don't add a second date lib. There is no central date module: keep a reusable formatter in the owning feature's helper file (e.g. `entrypoints/sidepanel/history/components/utils.ts`) rather than re-deriving the same bucketing inline.
+
+## Module boundaries and formatting
+
+- From the monorepo root, run `bun run fallow` before pushing. It flags unused files/exports, circular dependencies, and private-type leaks (`.fallowrc.json`); `generated/**` is ignored, and fallow skips its unused/leak checks for `components/ui/**` and `components/ai-elements/**`.
+- Colocate a feature's pieces with the entrypoint that owns them — its `graphql/` documents, `*.helpers.ts`, and `*.test.ts` sit next to it. Only genuinely shared code goes in `lib/` or `components/`, imported via the `@/` alias.
+- Biome owns formatting and import order — run `bun run lint:fix` rather than hand-formatting.
+- Comments: default to none and explain *why*, not *what*; see `packages/browseros-agent/CLAUDE.md` for the full rule.
+
+## Analytics
+
+- Event constants live in `lib/constants/analyticsEvents.ts`.
+- Event constants use `SCREAMING_SNAKE_CASE` ending in `_EVENT`.
+- Add `/** @public */` above each exported event constant.
+- Event values follow `<area>.<entity>.<action>` such as `ui.message.like` or `settings.managed_mcp.added`.
+- Always call `track()` with an event constant; never pass raw event strings.
+
+## Self-testing UI changes
+
+Use the CDP inspector when changing extension UI. It can inspect extension pages that the agent tools cannot see.
+
+Start the dev environment and read the randomized CDP port:
+
+```
+bun run dev:watch -- --new
+export BROWSEROS_CDP_PORT=<port from output>
 ```
 
-## Analytics & Event Tracking
+Useful inspector commands:
 
-All user-facing events are tracked using a centralized pattern:
-
-- **Event constants** are defined in `lib/constants/analyticsEvents.ts`
-- **Tracking** is done via the `track()` utility from `lib/metrics/track.ts`
-
-**Event constant naming:**
-- Use `SCREAMING_SNAKE_CASE` ending with `_EVENT`
-- Add `/** @public */` JSDoc tag above each constant
-
-**Event value naming** follows the pattern `<area>.<entity>.<action>`:
-- `ui.*` - sidepanel/chat interactions (e.g. `ui.message.like`, `ui.conversation.reset`)
-- `settings.*` - settings page actions (e.g. `settings.scheduled_task.created`, `settings.managed_mcp.added`)
-- `newtab.*` - new tab page actions (e.g. `newtab.opened`, `newtab.ai.triggered`)
-- `sidepanel.*` - sidepanel-specific actions (e.g. `sidepanel.ai.triggered`)
-
-**Usage:**
-```ts
-import { MY_EVENT } from '@/lib/constants/analyticsEvents'
-import { track } from '@/lib/metrics/track'
-
-// Without properties
-track(MY_EVENT)
-
-// With properties
-track(MY_EVENT, {
-  mode,
-  provider_type: selectedLlmProvider?.type,
-})
+```
+bun scripts/dev/inspect-ui.ts targets
+bun scripts/dev/inspect-ui.ts open-sidepanel
+bun scripts/dev/inspect-ui.ts snapshot sidepanel
+bun scripts/dev/inspect-ui.ts screenshot sidepanel /tmp/panel.png
+bun scripts/dev/inspect-ui.ts click sidepanel <backendDOMNodeId>
+bun scripts/dev/inspect-ui.ts fill sidepanel <backendDOMNodeId> "search query"
+bun scripts/dev/inspect-ui.ts press_key sidepanel Enter
+bun scripts/dev/inspect-ui.ts eval sidepanel "document.title"
 ```
 
-Always use event constants from `analyticsEvents.ts` — never pass raw string event names to `track()`.
+The normal loop is `snapshot -> click/fill/press_key -> screenshot`. Element IDs are the `[number]` values from the snapshot output.
+
+## When in doubt, read a sibling
+
+Most features are a vertical slice you can copy. The AI settings slice is the GraphQL template end to end: `entrypoints/app/ai-settings/graphql/aiSettingsDocument.ts` (documents) -> consumed via `lib/graphql` hooks in `ai-settings/BrowserOsAiPane.tsx` -> `ai-settings/NewProviderDialog.tsx` (the `zod` + shadcn `Form` dialog). For the REST lane plus optimistic mutations, `entrypoints/app/agents/useAgents.ts` is the worked example.

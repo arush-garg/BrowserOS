@@ -150,7 +150,6 @@ function createEnv(ports: Ports): NodeJS.ProcessEnv {
     BROWSEROS_CDP_PORT: String(ports.cdp),
     BROWSEROS_SERVER_PORT: String(ports.server),
     BROWSEROS_EXTENSION_PORT: String(ports.extension),
-    VITE_BROWSEROS_SERVER_PORT: String(ports.server),
   }
 }
 

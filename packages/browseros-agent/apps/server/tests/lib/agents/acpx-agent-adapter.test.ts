@@ -4,10 +4,12 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { prepareAcpxAgentContext } from '../../../src/lib/agents/acpx-agent-adapter'
+import { prepareAcpxAgentContext } from '../../../src/lib/agents/acpx/agent-adapter'
+import { resolveAgentRuntimePaths } from '../../../src/lib/agents/acpx/runtime-context'
+import { loadLatestRuntimeState } from '../../../src/lib/agents/acpx/runtime-state'
 import type { AgentDefinition } from '../../../src/lib/agents/agent-types'
 import { HERMES_MODEL_COMMAND_ENV } from '../../../src/lib/agents/runtime'
 
@@ -50,7 +52,6 @@ describe('prepareAcpxAgentContext', () => {
     expect(prepared.commandEnv).not.toHaveProperty('CLAUDE_CONFIG_DIR')
     expect(prepared.commandEnv).not.toHaveProperty('CODEX_HOME')
     expect(prepared.useBrowserosMcp).toBe(true)
-    expect(prepared.openclawSessionKey).toBeNull()
     expect(prepared.runtimeSessionKey).toMatch(
       /^agent:claude-agent:main:[a-f0-9]{16}$/,
     )
@@ -81,40 +82,61 @@ describe('prepareAcpxAgentContext', () => {
     )
     expect(prepared.commandEnv).not.toHaveProperty('CLAUDE_CONFIG_DIR')
     expect(prepared.useBrowserosMcp).toBe(true)
-    expect(prepared.openclawSessionKey).toBeNull()
     expect(prepared.runPrompt).toContain('AGENT_HOME=')
   })
 
-  it('prepares OpenClaw without BrowserOS memory, host cwd, skills, or MCP', async () => {
+  it('prepares a UUID session with separate runtime-state files', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
     tempDirs.push(browserosDir)
-    const ignoredSelectedCwd = join(browserosDir, 'missing-selected-workspace')
+    const sessionId = '00000000-0000-4000-8000-000000000001'
+
     const prepared = await prepareAcpxAgentContext({
       browserosDir,
-      agent: makeAgent('openclaw'),
-      sessionId: 'main',
-      sessionKey: 'agent:openclaw-agent:main',
-      cwdOverride: ignoredSelectedCwd,
-      isSelectedCwd: true,
-      message: 'browse',
+      agent: makeAgent('claude'),
+      sessionId,
+      sessionKey: 'agent:claude-agent:main',
+      cwdOverride: null,
+      isSelectedCwd: false,
+      message: 'hi',
+    })
+    const paths = resolveAgentRuntimePaths({
+      browserosDir,
+      agentId: 'claude-agent',
+      sessionId,
     })
 
-    expect(prepared.cwd).toBe(
-      join(browserosDir, 'agents', 'harness', 'workspace'),
+    expect(prepared.runtimeSessionKey).toMatch(
+      /^agent:claude-agent:00000000-0000-4000-8000-000000000001:[a-f0-9]{16}$/,
     )
-    expect(prepared.commandEnv).toEqual({})
-    expect(prepared.useBrowserosMcp).toBe(false)
-    expect(prepared.openclawSessionKey).toBe('agent:openclaw-agent:main')
-    expect(prepared.runtimeSessionKey).toBe('agent:openclaw-agent:main')
-    expect(prepared.runPrompt).not.toContain('SOUL.md stores')
-    expect(prepared.runPrompt).not.toContain('BrowserOS memory skill')
-    expect(prepared.runPrompt).not.toContain('AGENT_HOME/MEMORY.md')
-    expect(prepared.runPrompt).not.toContain('Available skills:')
+    expect(await loadLatestRuntimeState(paths.runtimeSessionStatePath)).toEqual(
+      expect.objectContaining({
+        sessionId,
+        runtimeSessionKey: prepared.runtimeSessionKey,
+      }),
+    )
+    expect(await loadLatestRuntimeState(paths.runtimeStatePath)).toEqual(
+      expect.objectContaining({
+        sessionId,
+        runtimeSessionKey: prepared.runtimeSessionKey,
+      }),
+    )
   })
 
-  it('prepares host-mode Hermes against ~/.hermes (no HERMES_HOME, host MCP) when no container runtime is registered', async () => {
+  it('prepares Hermes with HERMES_HOME pointing at the host agent home', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
     tempDirs.push(browserosDir)
+    const legacyHome = join(
+      browserosDir,
+      'vm',
+      'hermes',
+      'harness',
+      'hermes-agent',
+      'home',
+    )
+    await mkdir(legacyHome, { recursive: true })
+    await writeFile(join(legacyHome, 'config.yaml'), 'legacy config\n')
+    await writeFile(join(legacyHome, '.env'), 'LEGACY_KEY=1\n')
+
     const prepared = await prepareAcpxAgentContext({
       browserosDir,
       agent: makeAgent('hermes'),
@@ -125,14 +147,19 @@ describe('prepareAcpxAgentContext', () => {
       message: 'remember this',
     })
 
-    // Host mode lets the local hermes binary use ~/.hermes — no per-agent
-    // HERMES_HOME, no provider env. The MCP server is on the host loopback.
-    expect(prepared.commandEnv).not.toHaveProperty('HERMES_HOME')
+    expect(prepared.commandEnv.HERMES_HOME).toBe(
+      join(browserosDir, 'agents', 'hermes', 'harness', 'hermes-agent', 'home'),
+    )
+    await expect(
+      readFile(join(prepared.commandEnv.HERMES_HOME, 'config.yaml'), 'utf8'),
+    ).resolves.toBe('legacy config\n')
+    await expect(
+      readFile(join(prepared.commandEnv.HERMES_HOME, '.env'), 'utf8'),
+    ).resolves.toBe('LEGACY_KEY=1\n')
     expect(prepared.commandEnv).not.toHaveProperty('AGENT_HOME')
     expect(prepared.commandEnv).not.toHaveProperty(HERMES_MODEL_COMMAND_ENV)
     expect(prepared.browserosMcpHost).toBe('127.0.0.1')
     expect(prepared.useBrowserosMcp).toBe(true)
-    expect(prepared.openclawSessionKey).toBeNull()
     expect(prepared.runtimeSessionKey).toMatch(
       /^agent:hermes-agent:main:[a-f0-9]{16}$/,
     )

@@ -238,9 +238,9 @@ def generate_server_appcast(
 def create_server_bundle_zip(resources_dir: Path, output_zip: Path) -> bool:
     """Zip an extracted ``resources/`` tree into a Sparkle payload.
 
-    Produces entries like ``resources/bin/browseros_server``,
-    ``resources/bin/third_party/lima/limactl`` — mirroring what the agent
-    build staged and what the Chromium build bakes into the installed app.
+    Produces entries like ``resources/bin/browseros_server`` and
+    ``resources/bin/third_party/codex`` — mirroring what the agent build
+    staged and what the Chromium build bakes into the installed app.
     File modes are preserved by ``ZipFile.write`` so executable bits survive.
     """
     if not resources_dir.is_dir():

@@ -4,6 +4,7 @@ export interface CdpBackend extends ProtocolApi {
   connect(): Promise<void>
   disconnect(): Promise<void>
   isConnected(): boolean
+  connectionEpoch(): number
   getTargets(): Promise<CdpTarget[]>
   session(sessionId: string): ProtocolApi
   onSessionEvent(

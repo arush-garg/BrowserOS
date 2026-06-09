@@ -29,18 +29,21 @@ MACOS_SERVER_BINARIES: Dict[str, SignSpec] = {
         "browseros_server", "runtime", "browseros-executable-entitlements.plist"
     ),
     "bun": SignSpec("bun", "runtime", "browseros-executable-entitlements.plist"),
+    "codex": SignSpec("codex", "runtime"),
+    "claude": SignSpec("claude", "runtime"),
     "rg": SignSpec("rg", "runtime"),
-    "limactl": SignSpec("limactl", "runtime", "lima-vz-entitlements.plist"),
 }
 
 
 WINDOWS_SERVER_BINARIES: List[str] = [
     "browseros_server.exe",
+    "third_party/codex.exe",
+    "third_party/claude.exe",
 ]
 
 
 def macos_sign_spec_for(binary_path: Path) -> Optional[SignSpec]:
-    """Look up sign metadata by file stem (e.g., ``limactl``)."""
+    """Look up sign metadata by file stem, such as ``codex`` or ``claude``."""
     return MACOS_SERVER_BINARIES.get(binary_path.stem)
 
 

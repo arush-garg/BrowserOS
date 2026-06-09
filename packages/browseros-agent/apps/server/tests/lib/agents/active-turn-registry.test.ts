@@ -8,7 +8,7 @@ import {
   RingBuffer,
   type TurnFrame,
   TurnRegistry,
-} from '../../../src/lib/agents/active-turn-registry'
+} from '../../../src/lib/agents/turns/active-turn-registry'
 
 const registries: TurnRegistry[] = []
 afterEach(() => {
@@ -158,6 +158,31 @@ describe('TurnRegistry', () => {
     expect(registry.getActiveFor('agent-1')?.turnId).toBe(turn.turnId)
     registry.pushEvent(turn.turnId, { type: 'done', stopReason: 'end_turn' })
     expect(registry.getActiveFor('agent-1')).toBeUndefined()
+  })
+
+  it('tracks separate active turns for the same agent in different sessions', () => {
+    const registry = makeRegistry()
+    const sidepanelSession = '00000000-0000-4000-8000-000000000001'
+
+    const mainTurn = registry.register('agent-1', 'main')
+    const sidepanelTurn = registry.register('agent-1', sidepanelSession)
+
+    expect(registry.getActiveFor('agent-1', 'main')?.turnId).toBe(
+      mainTurn.turnId,
+    )
+    expect(registry.getActiveFor('agent-1', sidepanelSession)?.turnId).toBe(
+      sidepanelTurn.turnId,
+    )
+
+    registry.pushEvent(mainTurn.turnId, {
+      type: 'done',
+      stopReason: 'end_turn',
+    })
+
+    expect(registry.getActiveFor('agent-1', 'main')).toBeUndefined()
+    expect(registry.getActiveFor('agent-1', sidepanelSession)?.turnId).toBe(
+      sidepanelTurn.turnId,
+    )
   })
 
   it('evicts terminal turns past the retain window via sweep', () => {

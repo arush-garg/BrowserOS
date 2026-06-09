@@ -34,7 +34,7 @@ describe('process-lock', () => {
     })
 
     const first = withProcessLock(
-      'openclaw-lifecycle',
+      'runtime-lifecycle',
       { lockDir },
       async () => {
         events.push('first:start')
@@ -46,7 +46,7 @@ describe('process-lock', () => {
     while (!events.includes('first:start')) await Bun.sleep(1)
 
     const second = withProcessLock(
-      'openclaw-lifecycle',
+      'runtime-lifecycle',
       {
         lockDir,
         retryMinTimeoutMs: 5,
@@ -67,13 +67,13 @@ describe('process-lock', () => {
 
   it('releases the lock when the callback throws', async () => {
     await expect(
-      withProcessLock('openclaw-lifecycle', { lockDir }, async () => {
+      withProcessLock('runtime-lifecycle', { lockDir }, async () => {
         throw new Error('boom')
       }),
     ).rejects.toThrow('boom')
 
     await expect(
-      withProcessLock('openclaw-lifecycle', { lockDir }, async () => 'ok'),
+      withProcessLock('runtime-lifecycle', { lockDir }, async () => 'ok'),
     ).resolves.toBe('ok')
   })
 
@@ -84,7 +84,7 @@ describe('process-lock', () => {
     })
 
     const first = withProcessLock(
-      'openclaw-lifecycle',
+      'runtime-lifecycle',
       { lockDir },
       async () => {
         await firstMayFinish
@@ -96,7 +96,7 @@ describe('process-lock', () => {
     try {
       await expect(
         withProcessLock(
-          'openclaw-lifecycle',
+          'runtime-lifecycle',
           {
             lockDir,
             timeoutMs: 25,
@@ -113,12 +113,12 @@ describe('process-lock', () => {
   })
 
   it('sanitizes lock names into the lock directory', async () => {
-    const path = resolveProcessLockPath(lockDir, '../OpenClaw Lifecycle!')
+    const path = resolveProcessLockPath(lockDir, '../Runtime Lifecycle!')
 
-    expect(path).toBe(join(lockDir, 'OpenClaw-Lifecycle.lock'))
+    expect(path).toBe(join(lockDir, 'Runtime-Lifecycle.lock'))
 
     await withProcessLock(
-      '../OpenClaw Lifecycle!',
+      '../Runtime Lifecycle!',
       { lockDir },
       async () => undefined,
     )

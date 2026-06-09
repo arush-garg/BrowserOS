@@ -162,7 +162,6 @@ func BuildEnv(p Ports, nodeEnv string) []string {
 		fmt.Sprintf("BROWSEROS_CDP_PORT=%d", p.CDP),
 		fmt.Sprintf("BROWSEROS_SERVER_PORT=%d", p.Server),
 		fmt.Sprintf("BROWSEROS_EXTENSION_PORT=%d", p.Extension),
-		fmt.Sprintf("VITE_BROWSEROS_SERVER_PORT=%d", p.Server),
 		fmt.Sprintf("NODE_ENV=%s", nodeEnv),
 	)
 	return env

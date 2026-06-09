@@ -4,12 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { AclRule } from '@browseros/shared/types/acl'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Browser } from '../../../browser/browser'
-import type { ToolExecutionObserver } from '../../../monitoring/observer'
-import type { ToolRegistry } from '../../../tools/tool-registry'
+import type { BrowserSession } from '../../../browser/core/session'
 import {
   type KlavisProxyRef,
   registerKlavisTools,
@@ -19,20 +17,12 @@ import { registerTools } from './register-mcp'
 
 export interface McpServiceDeps {
   version: string
-  registry: ToolRegistry
   browser: Browser
-  executionDir: string
-  resourcesDir: string
-  aclRules?: AclRule[]
+  browserSession: BrowserSession
   klavisRef?: KlavisProxyRef
-  observer?: ToolExecutionObserver
-  // Per-request default windowId from the X-BrowserOS-Default-Window-Id
-  // header. When set, tool handlers inject this into args.windowId for
-  // any tool whose zod input schema has a `windowId` field and whose
-  // caller-supplied args didn't include one. Lets a host application
-  // bind every browser tool call to a specific window without the
-  // agent needing to be aware of it.
+  browserUseNewTools: boolean
   defaultWindowId?: number
+  defaultTabGroupId?: string
 }
 
 export function createMcpServer(deps: McpServiceDeps): McpServer {
@@ -49,21 +39,16 @@ export function createMcpServer(deps: McpServiceDeps): McpServer {
     return {}
   })
 
-  // Register browser tools
-  registerTools(server, deps.registry, {
+  registerTools(server, {
     browser: deps.browser,
-    directories: {
-      workingDir: deps.executionDir,
-      resourcesDir: deps.resourcesDir,
-    },
-    aclRules: deps.aclRules,
-    observer: deps.observer,
+    browserSession: deps.browserSession,
+    useNewTools: deps.browserUseNewTools,
     defaultWindowId: deps.defaultWindowId,
+    defaultTabGroupId: deps.defaultTabGroupId,
   })
 
-  // Register Klavis proxy tools (if connected via background init)
   if (deps.klavisRef?.handle) {
-    registerKlavisTools(server, deps.klavisRef.handle, deps.observer)
+    registerKlavisTools(server, deps.klavisRef.handle)
   }
 
   return server

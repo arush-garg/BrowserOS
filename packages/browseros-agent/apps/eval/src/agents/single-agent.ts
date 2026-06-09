@@ -6,11 +6,16 @@ import {
 import type { ResolvedAgentConfig } from '@browseros/server/agent/types'
 import { Browser } from '@browseros/server/browser'
 import { CdpBackend } from '@browseros/server/browser/backends/cdp'
-import { registry } from '@browseros/server/tools/registry'
 import { CaptchaWaiter } from '../capture/captcha-waiter'
 import { DEFAULT_TIMEOUT_MS } from '../constants'
-import type { TaskMetadata } from '../types'
+import type { TaskMetadata, TokenUsage } from '../types'
+import { extractDatasetMetadata } from '../utils/dataset-metadata'
 import { resolveProviderConfig } from '../utils/resolve-provider-config'
+import {
+  addTokenUsageFromAiSdkStep,
+  emptyTokenUsage,
+  hasAnyTokenUsage,
+} from '../utils/token-usage'
 import { withEvalTimeout } from '../utils/with-eval-timeout'
 import type { AgentContext, AgentEvaluator, AgentResult } from './types'
 
@@ -50,6 +55,7 @@ export class SingleAgentEvaluator implements AgentEvaluator {
     await cdp.connect()
 
     const browser = new Browser(cdp)
+    const browserSession = browser.session
     capture.screenshot.setBrowser(browser)
 
     // Build browser context so the agent knows the correct starting page ID
@@ -74,12 +80,18 @@ export class SingleAgentEvaluator implements AgentEvaluator {
       : null
 
     let agent: AiSdkAgent | null = null
+    const tokenUsage: TokenUsage = emptyTokenUsage()
+    // Screenshots are taken in onToolCallFinish (per tool call). Track them by
+    // toolCallId so we can stamp the matching tool-output event in messages.jsonl
+    // with `screenshot: N` — this is what lets the viewer sync the agent stream
+    // to the currently displayed screenshot.
+    const screenshotByToolCallId = new Map<string, number>()
+    let currentToolCallId: string | null = null
 
     try {
       agent = await AiSdkAgent.create({
         resolvedConfig: agentConfig,
-        browser,
-        registry,
+        browserSession,
         browserContext,
       })
 
@@ -97,6 +109,7 @@ export class SingleAgentEvaluator implements AgentEvaluator {
             abortSignal: signal,
 
             experimental_onToolCallStart: ({ toolCall }) => {
+              currentToolCallId = toolCall.toolCallId
               const input = toolCall.input as
                 | Record<string, unknown>
                 | undefined
@@ -116,6 +129,9 @@ export class SingleAgentEvaluator implements AgentEvaluator {
                 const screenshotNum = await capture.screenshot.capture(
                   capture.getActivePageId(),
                 )
+                if (currentToolCallId) {
+                  screenshotByToolCallId.set(currentToolCallId, screenshotNum)
+                }
                 capture.emitEvent(task.query_id, {
                   type: 'screenshot-captured',
                   screenshot: screenshotNum,
@@ -125,7 +141,9 @@ export class SingleAgentEvaluator implements AgentEvaluator {
               }
             },
 
-            onStepFinish: async ({ toolCalls, toolResults, text }) => {
+            onStepFinish: async (step) => {
+              const { toolCalls, toolResults, text } = step
+              addTokenUsageFromAiSdkStep(tokenUsage, step)
               if (toolCalls) {
                 for (const tc of toolCalls) {
                   const inputEvent = {
@@ -146,8 +164,18 @@ export class SingleAgentEvaluator implements AgentEvaluator {
                     toolCallId: tr.toolCallId,
                     output: tr.output,
                   } as any
-                  await capture.messageLogger.logStreamEvent(outputEvent)
-                  capture.emitEvent(task.query_id, outputEvent)
+                  const screenshot = screenshotByToolCallId.get(tr.toolCallId)
+                  await capture.messageLogger.logStreamEvent(
+                    outputEvent,
+                    screenshot,
+                  )
+                  capture.emitEvent(task.query_id, {
+                    ...outputEvent,
+                    ...(screenshot !== undefined && { screenshot }),
+                  })
+                  if (screenshot !== undefined) {
+                    screenshotByToolCallId.delete(tr.toolCallId)
+                  }
                 }
               }
 
@@ -173,6 +201,7 @@ export class SingleAgentEvaluator implements AgentEvaluator {
       )
 
       const endTime = Date.now()
+      const datasetMetadata = extractDatasetMetadata(task.metadata)
 
       const metadata: TaskMetadata = {
         query_id: task.query_id,
@@ -191,6 +220,8 @@ export class SingleAgentEvaluator implements AgentEvaluator {
           model: agentConfig.model,
         },
         grader_results: {},
+        ...(hasAnyTokenUsage(tokenUsage) ? { token_usage: tokenUsage } : {}),
+        ...(datasetMetadata ? { task_metadata: datasetMetadata } : {}),
       }
 
       await capture.trajectorySaver.saveMetadata(metadata)

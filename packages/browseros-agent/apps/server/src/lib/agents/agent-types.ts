@@ -4,9 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type AgentAdapter = 'claude' | 'codex' | 'openclaw' | 'hermes'
+export type AgentAdapter = 'claude' | 'codex' | 'hermes'
 
 export type AgentPermissionMode = 'approve-all'
+
+export const MAIN_AGENT_SESSION_ID = 'main'
+export type AgentSessionId = string
 
 export interface AgentDefinition {
   id: string
@@ -58,7 +61,7 @@ export interface AgentHistoryToolCall {
 export interface AgentHistoryEntry {
   id: string
   agentId: string
-  sessionId: 'main'
+  sessionId: AgentSessionId
   role: 'user' | 'assistant'
   text: string
   createdAt: number

@@ -29,8 +29,6 @@ export enum Feature {
   MANAGED_MCP_SUPPORT = 'MANAGED_MCP_SUPPORT',
   // Chat personalization via system prompt
   PERSONALIZATION_SUPPORT = 'PERSONALIZATION_SUPPORT',
-  // Unified port: agent uses MCP port instead of separate agent port
-  UNIFIED_PORT_SUPPORT = 'UNIFIED_PORT_SUPPORT',
   // Toolbar customization settings
   CUSTOMIZATION_SUPPORT = 'CUSTOMIZATION_SUPPORT',
   // Workspace folder selection with full path support requires new browserOS.choosePath API
@@ -39,16 +37,10 @@ export enum Feature {
   PROXY_SUPPORT = 'PROXY_SUPPORT',
   // previousConversation as structured array (older servers only accept string)
   PREVIOUS_CONVERSATION_ARRAY = 'PREVIOUS_CONVERSATION_ARRAY',
-  // Soul page: agent personality viewer and editor
-  SOUL_SUPPORT = 'SOUL_SUPPORT',
   // Inline chat in the new tab page
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
   // Vertical tabs preference and customization
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
-  // Memory page: core memory viewer and editor
-  MEMORY_SUPPORT = 'MEMORY_SUPPORT',
-  // Skills page: agent skills viewer and editor
-  SKILLS_SUPPORT = 'SKILLS_SUPPORT',
   // ChatGPT Pro OAuth LLM provider
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
   // GitHub Copilot OAuth LLM provider
@@ -57,6 +49,10 @@ export enum Feature {
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
   // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
+  // Claude Code / Codex agent-harness adapters in the unified picker + settings
+  AGENT_HARNESS_SUPPORT = 'AGENT_HARNESS_SUPPORT',
+  // VM-backed Hermes agent adapter
+  HERMES_AGENT_SUPPORT = 'HERMES_AGENT_SUPPORT',
 }
 
 /**
@@ -75,20 +71,18 @@ const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.OPENAI_COMPATIBLE_SUPPORT]: { minBrowserOSVersion: '0.33.0.1' },
   [Feature.MANAGED_MCP_SUPPORT]: { minBrowserOSVersion: '0.34.0.0' },
   [Feature.PERSONALIZATION_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
-  [Feature.UNIFIED_PORT_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
   [Feature.CUSTOMIZATION_SUPPORT]: { minBrowserOSVersion: '0.36.1.0' },
   [Feature.WORKSPACE_FOLDER_SUPPORT]: { minBrowserOSVersion: '0.36.4.0' },
-  [Feature.PROXY_SUPPORT]: { minBrowserOSVersion: '0.39.0.1' },
+  [Feature.PROXY_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
   [Feature.PREVIOUS_CONVERSATION_ARRAY]: { minServerVersion: '0.0.64' },
-  [Feature.SOUL_SUPPORT]: { minServerVersion: '0.0.67' },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
-  [Feature.MEMORY_SUPPORT]: { minServerVersion: '0.0.73' },
-  [Feature.SKILLS_SUPPORT]: { minBrowserOSVersion: '0.43.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
+  [Feature.AGENT_HARNESS_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
+  [Feature.HERMES_AGENT_SUPPORT]: { requiresAlphaFlag: true },
 }
 
 function parseVersion(version: string): number[] {
@@ -216,7 +210,9 @@ function ensureInitialized(): Promise<CapabilitiesState> {
   return initPromise
 }
 
-function checkFeatureSupport(
+// Exported for unit tests: resolves a feature's version gate directly,
+// bypassing the dev-mode/static short-circuit in `supports`.
+export function checkFeatureSupport(
   state: CapabilitiesState,
   feature: Feature,
 ): boolean {

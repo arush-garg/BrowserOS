@@ -23,6 +23,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.BrowserOSDir != filepath.Join(home, ".browseros-dogfood") {
 		t.Fatalf("unexpected BrowserOS dir: %s", cfg.BrowserOSDir)
 	}
+	if cfg.Branch != "main" {
+		t.Fatalf("unexpected branch: %s", cfg.Branch)
+	}
 	if cfg.LogDir() != filepath.Join(home, ".config/browseros-dogfood/profile/logs") {
 		t.Fatalf("unexpected log dir: %s", cfg.LogDir())
 	}
@@ -66,6 +69,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		DevUserDataDir:    "/dev",
 		DevProfileDir:     "Default",
 		BrowserOSDir:      "/browseros-dogfood",
+		Branch:            "dogfood",
 		Ports:             Ports{CDP: 9015, Server: 9115, Extension: 9315},
 		ProductionEnv: ProductionEnv{
 			Server: map[string]string{"NODE_ENV": "production"},
@@ -89,8 +93,21 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got.BrowserOSDir != cfg.BrowserOSDir {
 		t.Fatalf("BrowserOS dir mismatch: %q", got.BrowserOSDir)
 	}
+	if got.Branch != cfg.Branch {
+		t.Fatalf("branch mismatch: %q", got.Branch)
+	}
 	if got.ProductionEnv.CLI["R2_BUCKET"] != "browseros" {
 		t.Fatalf("production env mismatch: %#v", got.ProductionEnv)
+	}
+}
+
+func TestResolveDefaultsBranch(t *testing.T) {
+	cfg := Config{}
+
+	cfg.Resolve()
+
+	if cfg.Branch != "main" {
+		t.Fatalf("branch got %q want main", cfg.Branch)
 	}
 }
 

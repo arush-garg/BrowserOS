@@ -2,10 +2,6 @@
 
 Publishes BrowserOS release artifacts to R2 and owns the Lima VM template used by the server.
 
-OpenClaw images are no longer repackaged by BrowserOS. The server pulls
-`ghcr.io/openclaw/openclaw:<version>` directly into the BrowserOS Lima VM's
-rootless containerd cache using `nerdctl pull`.
-
 The BrowserOS VM is defined by a committed Lima template at `template/browseros-vm.yaml`. There is no custom disk build step; `limactl` consumes the template directly at runtime.
 
 ## Setup
@@ -56,6 +52,25 @@ artifacts/vendor/third_party/lima/lima-guestagent.Linux-x86_64.gz
 ```
 
 Server resource staging uses relative manifest keys such as `third_party/lima/limactl-darwin-arm64`; set `R2_DOWNLOAD_PREFIX=artifacts/vendor` in `apps/server/.env.production` so those keys resolve to the uploaded objects.
+
+## Upload bundled Bun runtime files
+
+BrowserOS also ships Bun for macOS server artifacts so ACP adapter packages can run without relying on host `npx`:
+
+```bash
+cd packages/browseros
+uv run browseros upload bun --version bun-v1.3.6 --dry-run
+uv run browseros upload bun --version bun-v1.3.6
+```
+
+The upload stores two R2 objects:
+
+```text
+artifacts/vendor/third_party/bun/bun-darwin-arm64
+artifacts/vendor/third_party/bun/bun-darwin-x64
+```
+
+Server resource staging uses relative manifest keys such as `third_party/bun/bun-darwin-arm64`; with `R2_DOWNLOAD_PREFIX=artifacts/vendor`, those keys resolve to the uploaded Bun binaries.
 
 The final server resource zip must contain real files, not a nested Lima runtime archive. Lima finds its runtime data by walking from `bin/limactl` to the sibling `share/lima` directory:
 

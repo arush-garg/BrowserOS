@@ -11,7 +11,6 @@ interface MockAgent {
   toolNames: Set<string>
   messages: MockMessage[]
   appendUserMessage(text: string): void
-  updateAclRules(rules: unknown): void
   dispose(): Promise<void>
 }
 
@@ -114,7 +113,6 @@ function createFakeAgent() {
         parts: [{ type: 'text', text }],
       })
     },
-    updateAclRules: mock(() => {}),
     dispose: mock(async () => {}),
   }
 }

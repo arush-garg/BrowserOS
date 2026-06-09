@@ -45,7 +45,7 @@ If BrowserOS is already running, reports the server URL.`,
 
 			if !isBrowserOSInstalled() {
 				output.Error("BrowserOS is not installed.\n\n"+
-					"  To install:  browseros-cli install", 1)
+					"  Download it from https://browseros.com", 1)
 			}
 
 			fmt.Println("Launching BrowserOS...")

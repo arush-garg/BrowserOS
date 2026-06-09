@@ -9,6 +9,7 @@ Internal BrowserOS dogfooding CLI for running the current checkout against a cop
 High level:
 
 - You point it at a BrowserOS repo clone used for alpha dogfooding.
+- It tracks a configured branch for that clone and switches to it before builds and update commands.
 - It imports your normal BrowserOS profile into a separate dev profile.
 - It keeps BrowserOS state under `~/.browseros-dogfood`, separate from your normal app state.
 - It builds the local extension, starts the local server, and launches the installed BrowserOS app with the alpha Dock icon against them.
@@ -50,6 +51,7 @@ browseros-dogfood init
 `init` asks for:
 
 - `Repo path`: the full path to the root BrowserOS git repo clone.
+- `Branch`: the branch dogfood should track. It defaults to the selected repo's current branch, or `main`.
 - `BrowserOS binary`: defaults to `/Applications/BrowserOS.app/Contents/MacOS/BrowserOS`.
 - `Source profile`: your main installed BrowserOS profile.
 
@@ -83,8 +85,9 @@ browseros-dogfood logs tail
 browseros-dogfood stop
 ```
 
-- `pull` updates the configured repo for the next sync start.
-- `restart --pull` updates the configured repo, rebuilds, and restarts when new changes land upstream.
+- `start` switches a clean checkout to the configured branch before building. It still does not pull.
+- `pull` switches to the configured branch and updates the configured repo for the next sync start.
+- `restart --pull` switches to the configured branch, updates the configured repo, rebuilds, and restarts when new changes land upstream.
 - `logs` prints log file paths; `logs tail` follows background dogfood, BrowserOS, and server logs.
 - `start` and `start-background` use the same lock, so only one dogfood environment runs at a time.
 
@@ -112,6 +115,6 @@ If BrowserOS appears to be using the source profile during import, the CLI asks 
 browseros-dogfood config edit
 ```
 
-Config lives at `~/.config/browseros-dogfood/config.yaml`. Most people should only need to edit it when changing the alpha repo clone, ports, or env values.
+Config lives at `~/.config/browseros-dogfood/config.yaml`. Most people should only need to edit it when changing the alpha repo clone, tracked branch, ports, or env values.
 
 Browser launch passes `--browseros-dock-icon=alpha` so dogfood sessions are visually distinct in the Dock.

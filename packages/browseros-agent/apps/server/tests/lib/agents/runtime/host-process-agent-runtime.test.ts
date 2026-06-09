@@ -4,6 +4,9 @@
  */
 
 import { describe, expect, it, mock } from 'bun:test'
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ActionNotSupportedError,
   HostProcessAgentRuntime,
@@ -192,6 +195,34 @@ describe('HostProcessAgentRuntime', () => {
       await r.probeHealth()
       expect(spawnProbe.mock.calls[0]?.[0]).toEqual(['custom-bin', '-V'])
     })
+
+    it('passes probeEnv overrides to the spawned version probe', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'host-probe-'))
+      try {
+        const bin = join(dir, 'fake-cli')
+        await writeFile(bin, '#!/bin/sh\necho "$PATH"\n')
+        await chmod(bin, 0o755)
+        let resolverEnv: NodeJS.ProcessEnv | null = null
+        const r = new TestRuntime({
+          binaryName: 'fake-cli',
+          probeEnv: { PATH: '/custom/bin' },
+          resolveBinary: async (_name, _timeoutMs, env) => {
+            resolverEnv = env
+            return {
+              path: bin,
+              env: { PATH: `${dir}:/custom/bin` },
+            }
+          },
+        })
+        await r.probeHealth()
+        const snap = r.getStatusSnapshot()
+        expect(snap.state).toBe('cli_present')
+        expect(snap.details?.binaryVersion).toBe(`${dir}:/custom/bin`)
+        expect(resolverEnv?.PATH).toBe('/custom/bin')
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('subscribe', () => {
@@ -225,19 +256,6 @@ describe('HostProcessAgentRuntime', () => {
       expect(r.authCalls).toBe(1)
     })
 
-    it('throws ActionNotSupportedError for container-only actions', async () => {
-      const r = makeRuntime()
-      await expect(r.executeAction({ type: 'install' })).rejects.toBeInstanceOf(
-        ActionNotSupportedError,
-      )
-      await expect(r.executeAction({ type: 'start' })).rejects.toBeInstanceOf(
-        ActionNotSupportedError,
-      )
-      await expect(
-        r.executeAction({ type: 'reset-soft' }),
-      ).rejects.toBeInstanceOf(ActionNotSupportedError)
-    })
-
     it('gates on getCapabilities() — subclass-filtered actions throw', async () => {
       class FilteredRuntime extends TestRuntime {
         override getCapabilities() {
@@ -249,7 +267,6 @@ describe('HostProcessAgentRuntime', () => {
         r.executeAction({ type: 'reinstall-cli' }),
       ).rejects.toBeInstanceOf(ActionNotSupportedError)
       expect(r.reinstallCalls).toBe(0)
-      // Whitelisted action still goes through.
       await r.executeAction({ type: 'check-auth' })
       expect(r.authCalls).toBe(1)
     })

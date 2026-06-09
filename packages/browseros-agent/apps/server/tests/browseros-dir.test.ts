@@ -4,14 +4,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { homedir } from 'node:os'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PATHS } from '@browseros/shared/constants/paths'
 import {
+  ensureBrowserosDir,
   getBrowserosDir,
   getCacheDir,
   getDbPath,
-  getVmCacheDir,
+  getSessionsDir,
   logDevelopmentBrowserosDir,
 } from '../src/lib/browseros-dir'
 import { logger } from '../src/lib/logger'
@@ -28,17 +30,15 @@ describe('getBrowserosDir', () => {
   afterEach(() => {
     if (originalNodeEnv === undefined) {
       delete process.env.NODE_ENV
-      return
+    } else {
+      process.env.NODE_ENV = originalNodeEnv
     }
-
-    process.env.NODE_ENV = originalNodeEnv
 
     if (originalBrowserosDir === undefined) {
       delete process.env.BROWSEROS_DIR
-      return
+    } else {
+      process.env.BROWSEROS_DIR = originalBrowserosDir
     }
-
-    process.env.BROWSEROS_DIR = originalBrowserosDir
   })
 
   it('uses a separate home directory in development', () => {
@@ -124,12 +124,22 @@ describe('getBrowserosDir', () => {
       join(homedir(), PATHS.BROWSEROS_DIR_NAME, 'cache'),
     )
   })
+  it('creates only the startup-owned directories during startup setup', async () => {
+    const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-dir-test-'))
+    process.env.BROWSEROS_DIR = browserosDir
 
-  it('uses a vm cache directory below cache', () => {
-    process.env.NODE_ENV = 'development'
+    try {
+      await ensureBrowserosDir()
 
-    expect(getVmCacheDir()).toBe(
-      join(homedir(), '.browseros-dev', 'cache', 'vm'),
-    )
+      expect(existsSync(getSessionsDir())).toBe(true)
+      expect(existsSync(join(browserosDir, 'cache', 'vm'))).toBe(false)
+      expect(existsSync(join(browserosDir, 'vm'))).toBe(false)
+      expect(existsSync(join(browserosDir, 'lazy-monitoring'))).toBe(false)
+      expect(existsSync(join(browserosDir, 'lazy-monitoring', 'runs'))).toBe(
+        false,
+      )
+    } finally {
+      rmSync(browserosDir, { recursive: true, force: true })
+    }
   })
 })

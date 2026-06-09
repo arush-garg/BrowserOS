@@ -1,5 +1,4 @@
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
-import type { ChatMode } from '@/entrypoints/sidepanel/index/chatTypes'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   createDefaultBrowserOSProvider,
@@ -9,6 +8,11 @@ import {
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
+import type { ChatMode } from '@/modules/chat/chat-types'
+import {
+  findChatProviderById,
+  resolveChatProvider,
+} from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
@@ -86,17 +90,15 @@ const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
   if (!providers?.length) return null
 
   const defaultProviderId = await defaultProviderIdStorage.getValue()
-  const defaultProvider = providers.find((p) => p.id === defaultProviderId)
-  return defaultProvider ?? providers[0] ?? null
+  return resolveChatProvider(providers, defaultProviderId)
 }
 
-// Resolve provider by ID, falling back to global default
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
   if (providerId) {
     const providers = await providersStorage.getValue()
-    const match = providers?.find((p) => p.id === providerId)
+    const match = findChatProviderById(providers ?? [], providerId)
     if (match) return match
   }
   return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()

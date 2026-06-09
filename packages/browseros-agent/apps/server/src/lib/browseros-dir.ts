@@ -23,36 +23,8 @@ export function logDevelopmentBrowserosDir(): void {
   logger.info(`Using development BrowserOS directory: ${getBrowserosDir()}`)
 }
 
-export function getMemoryDir(): string {
-  return join(getBrowserosDir(), PATHS.MEMORY_DIR_NAME)
-}
-
 export function getSessionsDir(): string {
   return join(getBrowserosDir(), PATHS.SESSIONS_DIR_NAME)
-}
-
-export function getSoulPath(): string {
-  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
-}
-
-export function getCoreMemoryPath(): string {
-  return join(getMemoryDir(), PATHS.CORE_MEMORY_FILE_NAME)
-}
-
-export function getSkillsDir(): string {
-  return join(getBrowserosDir(), PATHS.SKILLS_DIR_NAME)
-}
-
-export function getBuiltinSkillsDir(): string {
-  return join(getSkillsDir(), PATHS.BUILTIN_DIR_NAME)
-}
-
-export function getOpenClawDir(): string {
-  return join(getVmStateDir(), PATHS.OPENCLAW_DIR_NAME)
-}
-
-export function getLegacyOpenClawDir(): string {
-  return join(getBrowserosDir(), PATHS.OPENCLAW_DIR_NAME)
 }
 
 export function getCacheDir(): string {
@@ -64,36 +36,13 @@ export function getDbPath(): string {
   return join(getBrowserosDir(), PATHS.DB_DIR_NAME, PATHS.DB_FILE_NAME)
 }
 
-export function getVmCacheDir(): string {
-  return join(getCacheDir(), 'vm')
-}
-
-export function getLimaHomeDir(): string {
-  return join(getBrowserosDir(), 'lima')
-}
-
-export function getVmStateDir(): string {
-  return join(getBrowserosDir(), 'vm')
-}
-
-export function getVmDisksDir(): string {
-  return getVmCacheDir()
-}
-
-export function getLazyMonitoringDir(): string {
-  return join(getBrowserosDir(), 'lazy-monitoring')
-}
-
-export function getLazyMonitoringRunsDir(): string {
-  return join(getLazyMonitoringDir(), 'runs')
-}
-
-export function getLazyMonitoringRunDir(runId: string): string {
-  return join(getLazyMonitoringRunsDir(), runId)
-}
-
 export function getServerConfigPath(): string {
   return join(getBrowserosDir(), PATHS.SERVER_CONFIG_FILE_NAME)
+}
+
+/** Returns the user-managed SOUL.md path used as passive agent prompt context. */
+export function getSoulPath(): string {
+  return join(getBrowserosDir(), PATHS.SOUL_FILE_NAME)
 }
 
 export async function writeServerConfig(
@@ -106,18 +55,13 @@ export function removeServerConfigSync(): void {
   try {
     unlinkSync(getServerConfigPath())
   } catch {
-    // File may not exist or already be removed
+    return
   }
 }
 
 export async function ensureBrowserosDir(): Promise<void> {
   logDevelopmentBrowserosDir()
-  await mkdir(getMemoryDir(), { recursive: true })
-  await mkdir(getSkillsDir(), { recursive: true })
-  await mkdir(getBuiltinSkillsDir(), { recursive: true })
   await mkdir(getSessionsDir(), { recursive: true })
-  await mkdir(getLazyMonitoringRunsDir(), { recursive: true })
-  await mkdir(getVmDisksDir(), { recursive: true })
 }
 
 export async function cleanOldSessions(): Promise<void> {

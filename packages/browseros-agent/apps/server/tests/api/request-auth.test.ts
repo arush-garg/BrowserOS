@@ -22,9 +22,9 @@ describe('request auth', () => {
   it('blocks requests from untrusted origins', async () => {
     const app = new Hono()
       .use('/*', requireTrustedAppOrigin())
-      .get('/claw/status', (c) => c.json({ ok: true }))
+      .get('/agents/status', (c) => c.json({ ok: true }))
 
-    const res = await app.request('http://localhost/claw/status', {
+    const res = await app.request('http://localhost/agents/status', {
       headers: { Origin: 'https://evil.example' },
     })
 
@@ -35,9 +35,9 @@ describe('request auth', () => {
   it('allows requests from trusted origins', async () => {
     const app = new Hono()
       .use('/*', requireTrustedAppOrigin())
-      .get('/claw/status', (c) => c.json({ ok: true }))
+      .get('/agents/status', (c) => c.json({ ok: true }))
 
-    const res = await app.request('http://localhost/claw/status', {
+    const res = await app.request('http://localhost/agents/status', {
       headers: { Origin: 'chrome-extension://browseros' },
     })
 

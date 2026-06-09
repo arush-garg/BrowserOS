@@ -6,8 +6,10 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3'
 import { readTaskMetrics } from '../reporting/task-metrics'
+import type { TaskDatasetMetadata } from '../types'
 import {
   buildViewerManifest,
+  type ViewerCriterion,
   type ViewerManifestTaskInput,
 } from '../viewer/viewer-manifest'
 import type {
@@ -173,6 +175,33 @@ async function collectRunRootFiles(runDir: string): Promise<UploadJob[]> {
     })
 }
 
+function extractPerCriterion(
+  meta: Record<string, unknown>,
+): ViewerCriterion[] | undefined {
+  const graders = meta.grader_results as
+    | Record<string, { details?: { per_criterion?: unknown } }>
+    | undefined
+  const list = graders?.agisdk_state_diff?.details?.per_criterion
+  if (!Array.isArray(list) || list.length === 0) return undefined
+
+  const out: ViewerCriterion[] = []
+  for (const entry of list) {
+    if (entry && typeof entry === 'object') {
+      const e = entry as {
+        passed?: unknown
+        softened?: unknown
+        detail?: unknown
+      }
+      out.push({
+        passed: e.passed === true,
+        ...(e.softened === true ? { softened: true } : {}),
+        detail: e.detail,
+      })
+    }
+  }
+  return out
+}
+
 function statusFromMetadata(meta: Record<string, unknown>): string {
   return meta.termination_reason === 'completed'
     ? 'completed'
@@ -304,6 +333,9 @@ export class R2Publisher {
         })
       }
 
+      const taskMetadata = meta.task_metadata as TaskDatasetMetadata | undefined
+      const perCriterion = extractPerCriterion(meta)
+      const finalAnswer = meta.final_answer
       manifestTasks.push({
         queryId: (meta.query_id as string | undefined) || taskId,
         artifactId: taskId,
@@ -317,6 +349,11 @@ export class R2Publisher {
           (meta.grader_results as ViewerManifestTaskInput['graderResults']) ||
           {},
         metrics: await readTaskMetrics(taskPath, meta, screenshotCount),
+        ...(taskMetadata ? { taskMetadata } : {}),
+        ...(perCriterion ? { perCriterion } : {}),
+        ...(typeof finalAnswer === 'string' || finalAnswer === null
+          ? { finalAnswer: finalAnswer as string | null }
+          : {}),
       })
     }
 

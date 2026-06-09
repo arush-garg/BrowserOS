@@ -194,7 +194,6 @@ export class BrowserOSAppManager {
       BROWSEROS_CDP_PORT: String(cdp),
       BROWSEROS_SERVER_PORT: String(server),
       BROWSEROS_EXTENSION_PORT: String(extension),
-      VITE_BROWSEROS_SERVER_PORT: String(server),
     }
 
     // Capture both stdout and stderr to a per-worker file so we can

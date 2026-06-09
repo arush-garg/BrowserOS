@@ -9,14 +9,13 @@ import {
   getAgentAdapterDescriptor,
   isSupportedAgentModel,
   isSupportedReasoningEffort,
-} from '../../../src/lib/agents/agent-catalog'
+} from '../../../src/lib/agents/adapters/catalog'
 
 describe('AGENT_ADAPTER_CATALOG', () => {
-  it('exposes Claude, Codex, OpenClaw, and Hermes adapters with model and effort options', () => {
+  it('exposes shipped adapters with model and effort options', () => {
     expect(AGENT_ADAPTER_CATALOG.map((adapter) => adapter.id)).toEqual([
       'claude',
       'codex',
-      'openclaw',
       'hermes',
     ])
 
@@ -36,17 +35,6 @@ describe('AGENT_ADAPTER_CATALOG', () => {
       modelControl: 'best-effort',
     })
 
-    expect(getAgentAdapterDescriptor('openclaw')).toMatchObject({
-      id: 'openclaw',
-      name: 'OpenClaw',
-      defaultModelId: 'default',
-      defaultReasoningEffort: 'medium',
-      modelControl: 'best-effort',
-    })
-    // OpenClaw has no per-session model picker; the model lives in the
-    // gateway-side agent record and is sourced from the LlmProviderConfig.
-    expect(getAgentAdapterDescriptor('openclaw')?.models).toEqual([])
-
     expect(isSupportedAgentModel('claude', 'haiku')).toBe(true)
     expect(isSupportedAgentModel('claude', 'claude-opus-4-7')).toBe(true)
     expect(isSupportedAgentModel('claude', 'claude-sonnet-4-6')).toBe(true)
@@ -55,14 +43,8 @@ describe('AGENT_ADAPTER_CATALOG', () => {
     expect(isSupportedAgentModel('codex', 'gpt-5.5')).toBe(true)
     expect(isSupportedAgentModel('codex', 'gpt-5.4-mini')).toBe(true)
     expect(isSupportedAgentModel('codex', 'codex-auto-review')).toBe(false)
-    // Empty models list → all model ids are accepted ("default" passthrough).
-    expect(isSupportedAgentModel('openclaw', undefined)).toBe(true)
-    expect(isSupportedAgentModel('openclaw', 'default')).toBe(true)
-    expect(isSupportedAgentModel('openclaw', 'gpt-5.5')).toBe(false)
 
     expect(isSupportedReasoningEffort('codex', 'xhigh')).toBe(true)
     expect(isSupportedReasoningEffort('claude', 'banana')).toBe(false)
-    expect(isSupportedReasoningEffort('openclaw', 'adaptive')).toBe(true)
-    expect(isSupportedReasoningEffort('openclaw', 'xhigh')).toBe(false)
   })
 })

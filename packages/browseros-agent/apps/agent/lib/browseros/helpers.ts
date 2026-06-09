@@ -1,4 +1,3 @@
-import { env } from '@/lib/env'
 import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
@@ -6,13 +5,6 @@ import { BROWSEROS_PREFS } from './prefs'
 const PREF_READ_TIMEOUT_MS = 1500
 const PREF_READ_MAX_ATTEMPTS = 5
 const PREF_RETRY_BASE_DELAY_MS = 200
-
-export class AgentPortError extends Error {
-  constructor() {
-    super('Agent server port not configured.')
-    this.name = 'AgentPortError'
-  }
-}
 
 export class McpPortError extends Error {
   constructor() {
@@ -22,17 +14,11 @@ export class McpPortError extends Error {
 }
 
 /**
- * @public
+ * Returns the local BrowserOS server base URL for chat and agent APIs.
+ * BrowserOS publishes this through the unified MCP/server-port preference.
  */
 export async function getAgentServerUrl(): Promise<string> {
-  const supportsUnifiedPort = await Capabilities.supports(
-    Feature.UNIFIED_PORT_SUPPORT,
-  )
-  if (supportsUnifiedPort) {
-    const port = await getMcpPort()
-    return `http://127.0.0.1:${port}`
-  }
-  const port = await getAgentPort()
+  const port = await getMcpPort()
   return `http://127.0.0.1:${port}`
 }
 
@@ -79,24 +65,6 @@ async function getPrefNumberWithRetry(prefKey: string): Promise<number | null> {
   }
 
   return null
-}
-
-async function getAgentPort(): Promise<number> {
-  if (env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
-  }
-
-  const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.AGENT_PORT)
-  if (prefPort !== null) {
-    return prefPort
-  }
-
-  // Final fallback for local development where prefs can lag at startup.
-  if (import.meta.env.NODE_ENV === 'development') {
-    return 9100
-  }
-
-  throw new AgentPortError()
 }
 
 async function getMcpPort(): Promise<number> {

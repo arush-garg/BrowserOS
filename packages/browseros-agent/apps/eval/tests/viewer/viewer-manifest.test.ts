@@ -25,6 +25,7 @@ describe('buildViewerManifest', () => {
             screenshots: 42,
             toolCalls: 19,
             toolErrors: 2,
+            perTool: { click: { calls: 12, errors: 1 } },
           },
           graderResults: {
             agisdk_state_diff: {
@@ -39,7 +40,7 @@ describe('buildViewerManifest', () => {
     })
 
     const publishManifest: R2RunManifest = manifest
-    expect(publishManifest.schemaVersion).toBe(2)
+    expect(publishManifest.schemaVersion).toBe(3)
     expect(manifest.reportPath).toBe('report.html')
     expect(manifest.tasks[0].paths.messages).toBe(
       'tasks/agisdk-dashdish-4/messages.jsonl',
@@ -64,6 +65,7 @@ describe('buildViewerManifest', () => {
       screenshots: 42,
       toolCalls: 19,
       toolErrors: 2,
+      perTool: { click: { calls: 12, errors: 1 } },
     })
     expect(manifest.tasks[0].graderResults.agisdk_state_diff.details).toEqual({
       missing: ['checkout item'],
@@ -87,7 +89,7 @@ describe('buildViewerManifest', () => {
     })
 
     expect(manifest).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: 'run-2',
       uploadedAt: '2026-04-29T06:00:00.000Z',
       tasks: [
@@ -102,6 +104,8 @@ describe('buildViewerManifest', () => {
             grades: 'tasks/task-with-minimal-fields/grades.json',
             screenshots: 'tasks/task-with-minimal-fields/screenshots',
             graderArtifacts: 'tasks/task-with-minimal-fields/grader-artifacts',
+            finishState:
+              'tasks/task-with-minimal-fields/grader-artifacts/agisdk_state_diff/finish-state.json',
           },
         },
       ],

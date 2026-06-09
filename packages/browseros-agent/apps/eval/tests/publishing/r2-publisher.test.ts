@@ -134,7 +134,7 @@ describe('R2Publisher', () => {
       ).toString('utf-8'),
     )
     expect(manifest).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId,
       uploadedAt: '2026-04-29T12:00:00.000Z',
       agentConfig: { type: 'single', model: 'kimi' },
@@ -313,7 +313,7 @@ describe('R2Publisher', () => {
     expect(keys).toContain(`runs/${runId}/task-1/metadata.json`)
     expect(keys).toContain(`runs/${runId}/tasks/task-1/metadata.json`)
     expect(manifest).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       tasks: [
         {
           queryId: 'task-1',

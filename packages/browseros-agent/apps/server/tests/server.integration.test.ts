@@ -154,6 +154,18 @@ describe('HTTP Server Integration Tests', () => {
     })
   })
 
+  describe('Removed endpoints', () => {
+    it('does not expose the removed /monitoring endpoint', async () => {
+      const response = await fetch(`${getBaseUrl()}/monitoring/runs`)
+
+      assert.strictEqual(
+        response.status,
+        404,
+        'Removed /monitoring should return 404',
+      )
+    })
+  })
+
   describe('Chat endpoint', () => {
     it(
       'streams a mocked chat response for BrowserOS provider requests in test mode',

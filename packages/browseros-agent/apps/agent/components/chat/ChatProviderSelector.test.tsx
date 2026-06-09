@@ -39,12 +39,12 @@ describe('groupProviderOptions', () => {
     expect(groupProviderOptions(options)).toEqual([
       {
         key: 'llm',
-        label: 'AI Providers',
+        label: 'BrowserOS agent + your LLM',
         options: [options[0], options[1]],
       },
       {
         key: 'acp',
-        label: 'Agents',
+        label: '3p agents',
         options: [options[2], options[3]],
       },
     ])
@@ -53,9 +53,13 @@ describe('groupProviderOptions', () => {
 
 describe('getProviderSearchValue', () => {
   it('matches created-agent group labels and item labels', () => {
-    expect(getProviderSearchValue(options[2], 'Agents')).toContain('Agents')
-    expect(getProviderSearchValue(options[2], 'Agents')).toContain('Review Bot')
-    expect(getProviderSearchValue(options[2], 'Agents')).toContain(
+    expect(getProviderSearchValue(options[2], '3p agents')).toContain(
+      '3p agents',
+    )
+    expect(getProviderSearchValue(options[2], '3p agents')).toContain(
+      'Review Bot',
+    )
+    expect(getProviderSearchValue(options[2], '3p agents')).toContain(
       'Claude Code',
     )
   })

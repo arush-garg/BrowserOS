@@ -25,8 +25,7 @@ curl -fsSL https://cdn.browseros.com/cli/install.sh | bash
 ## Quick Start
 
 ```bash
-# Download BrowserOS
-browseros-cli install
+# Download BrowserOS from https://browseros.com
 
 # Start BrowserOS
 browseros-cli launch

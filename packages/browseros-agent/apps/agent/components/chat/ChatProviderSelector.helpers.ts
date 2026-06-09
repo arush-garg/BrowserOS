@@ -14,10 +14,16 @@ export function groupProviderOptions(
 
   return [
     ...(llm.length
-      ? [{ key: 'llm' as const, label: 'AI Providers', options: llm }]
+      ? [
+          {
+            key: 'llm' as const,
+            label: 'BrowserOS agent + your LLM',
+            options: llm,
+          },
+        ]
       : []),
     ...(acp.length
-      ? [{ key: 'acp' as const, label: 'Agents', options: acp }]
+      ? [{ key: 'acp' as const, label: '3p agents', options: acp }]
       : []),
   ]
 }

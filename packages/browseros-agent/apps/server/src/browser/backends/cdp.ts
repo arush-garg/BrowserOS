@@ -38,6 +38,7 @@ class CdpBackend implements ICdpBackend {
   private messageId = 0
   private pending = new Map<number, PendingRequest>()
   private connected = false
+  private epoch = 0
   private disconnecting = false
   private reconnecting = false
   private reconnectRequested = false
@@ -114,6 +115,7 @@ class CdpBackend implements ICdpBackend {
         opened = true
         this.ws = ws
         this.connected = true
+        this.epoch += 1
         this.disconnecting = false
         resolve()
       }
@@ -362,6 +364,10 @@ class CdpBackend implements ICdpBackend {
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  connectionEpoch(): number {
+    return this.epoch
   }
 
   session(sessionId: string): ProtocolApi {

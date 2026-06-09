@@ -341,6 +341,6 @@ func validateServerURL(raw string) (string, error) {
 			"  Save it with:       browseros-cli init <Server URL>\n" +
 			"  Example:            browseros-cli init http://127.0.0.1:9000/mcp\n" +
 			"  If BrowserOS is closed:  browseros-cli launch\n" +
-			"  If not installed:        browseros-cli install",
+			"  If not installed:        download from https://browseros.com",
 	)
 }

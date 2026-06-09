@@ -1,14 +1,4 @@
-import {
-  Brain,
-  CalendarClock,
-  Cpu,
-  Home,
-  PlugZap,
-  Settings,
-  Shield,
-  Sparkles,
-  Wand2,
-} from 'lucide-react'
+import { CalendarClock, Home, PlugZap, Settings } from 'lucide-react'
 import type { FC } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -18,8 +8,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Feature } from '@/lib/browseros/capabilities'
-import { useCapabilities } from '@/lib/browseros/useCapabilities'
 import { cn } from '@/lib/utils'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 
 interface SidebarNavigationProps {
   expanded?: boolean
@@ -42,45 +32,15 @@ const primaryNavItems: NavItem[] = [
   },
   { name: 'Scheduled Tasks', to: '/scheduled', icon: CalendarClock },
   {
-    name: 'Agents',
-    to: '/agents',
-    icon: Cpu,
-    feature: Feature.ALPHA_FEATURES_SUPPORT,
+    name: 'Settings',
+    to: '/settings/ai',
+    icon: Settings,
   },
-  {
-    name: 'Skills',
-    to: '/home/skills',
-    icon: Wand2,
-    feature: Feature.SKILLS_SUPPORT,
-  },
-  {
-    name: 'Memory',
-    to: '/home/memory',
-    icon: Brain,
-    feature: Feature.MEMORY_SUPPORT,
-  },
-  {
-    name: 'Soul',
-    to: '/home/soul',
-    icon: Sparkles,
-    feature: Feature.SOUL_SUPPORT,
-  },
-  {
-    name: 'Governance',
-    to: '/admin',
-    icon: Shield,
-    feature: Feature.ALPHA_FEATURES_SUPPORT,
-  },
-  { name: 'Settings', to: '/settings/ai', icon: Settings },
 ]
 
 function isNavItemActive(item: NavItem, pathname: string): boolean {
   if (item.to === '/settings/ai') {
     return pathname.startsWith('/settings')
-  }
-
-  if (item.to === '/agents') {
-    return pathname === '/agents' || pathname.startsWith('/agents/')
   }
 
   return pathname === item.to

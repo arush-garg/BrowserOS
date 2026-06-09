@@ -3,16 +3,17 @@ import assert from 'node:assert'
 import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { close_page, navigate_page, new_page } from '../../src/tools/navigation'
+import { withBrowser } from '../__helpers__/with-browser'
 import {
+  close_page,
   evaluate_script,
   get_page_content,
   get_page_links,
-  take_enhanced_snapshot,
+  navigate_page,
+  new_page,
   take_screenshot,
   take_snapshot,
-} from '../../src/tools/snapshot'
-import { withBrowser } from '../__helpers__/with-browser'
+} from './browser/helpers'
 
 function textOf(result: {
   content: { type: string; text?: string }[]
@@ -72,15 +73,15 @@ describe('observation tools', () => {
     })
   }, 60_000)
 
-  it('take_enhanced_snapshot returns structural context', async () => {
+  it('take_snapshot returns structural context', async () => {
     await withBrowser(async ({ execute }) => {
       const newResult = await execute(new_page, { url: 'https://example.com' })
       const pageId = pageIdOf(newResult)
 
-      const snapResult = await execute(take_enhanced_snapshot, { page: pageId })
+      const snapResult = await execute(take_snapshot, { page: pageId })
       assert.ok(!snapResult.isError, textOf(snapResult))
       const text = textOf(snapResult)
-      assert.ok(text.length > 0, 'Enhanced snapshot should not be empty')
+      assert.ok(text.length > 0, 'Snapshot should not be empty')
 
       await execute(close_page, { page: pageId })
     })
@@ -208,7 +209,7 @@ describe('observation tools', () => {
         assert.ok(existsSync(savedPath), 'Saved page content file should exist')
         assert.ok(
           dirname(savedPath).startsWith(
-            join(tmpdir(), 'browseros-tool-output-'),
+            join(tmpdir(), 'browseros-browser-tool-'),
           ),
           'Saved page content should be written to an OS temp directory',
         )
@@ -244,13 +245,11 @@ describe('observation tools', () => {
         expression: `document.body.innerHTML = ${JSON.stringify(html)}`,
       })
 
-      // navigate forces a new AX tree fetch
       await execute(navigate_page, {
         page: pageId,
         action: 'reload',
       })
 
-      // set body content again after reload
       await execute(evaluate_script, {
         page: pageId,
         expression: `document.body.innerHTML = ${JSON.stringify(html)}`,
@@ -270,18 +269,15 @@ describe('observation tools', () => {
       assert.ok(text.includes('example.com/one'), 'Expected first link URL')
       assert.ok(text.includes('example.com/two'), 'Expected second link URL')
 
-      // should deduplicate by URL
       const oneCount = (text.match(/example\.com\/one/g) || []).length
       assert.strictEqual(oneCount, 1, 'Expected deduplication of same URL')
       assert.ok(linksData.count >= 3, 'Expected structured links count')
 
-      // should skip javascript: links
       assert.ok(
         !text.includes('javascript:'),
         'Should not include javascript: links',
       )
 
-      // should not include non-link elements
       assert.ok(!text.includes('Not a link'), 'Should not include spans')
 
       await execute(close_page, { page: pageId })

@@ -48,6 +48,54 @@ func TestResetHardToUpstream(t *testing.T) {
 	}
 }
 
+func TestEnsureBranchSwitchesWhenCurrentBranchDiffers(t *testing.T) {
+	r := &FakeRunner{Output: map[string]string{
+		"git branch --show-current": "feature\n",
+	}}
+
+	if err := EnsureBranch(context.Background(), "/repo", "dogfood", r, false); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"git branch --show-current", "git switch dogfood"}
+	for i := range want {
+		if r.Commands[i] != want[i] {
+			t.Fatalf("command %d got %q want %q", i, r.Commands[i], want[i])
+		}
+	}
+}
+
+func TestEnsureBranchSkipsSwitchWhenAlreadyOnBranch(t *testing.T) {
+	r := &FakeRunner{Output: map[string]string{
+		"git branch --show-current": "dogfood\n",
+	}}
+
+	if err := EnsureBranch(context.Background(), "/repo", "dogfood", r, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(r.Commands) != 1 || r.Commands[0] != "git branch --show-current" {
+		t.Fatalf("commands got %#v", r.Commands)
+	}
+}
+
+func TestEnsureBranchForceSwitchesWhenRequested(t *testing.T) {
+	r := &FakeRunner{Output: map[string]string{
+		"git branch --show-current": "feature\n",
+	}}
+
+	if err := EnsureBranch(context.Background(), "/repo", "dogfood", r, true); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"git branch --show-current", "git switch --force dogfood"}
+	for i := range want {
+		if r.Commands[i] != want[i] {
+			t.Fatalf("command %d got %q want %q", i, r.Commands[i], want[i])
+		}
+	}
+}
+
 type FakeRunner struct {
 	Commands []string
 	Output   map[string]string

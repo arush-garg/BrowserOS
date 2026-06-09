@@ -51,6 +51,10 @@ features:
       - chrome/browser/resources/settings/about_page/about_page.html
       - chrome/browser/resources/settings/about_page/about_page.ts
       - chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+      # Dock icon variants
+      - chrome/browser/chrome_browser_application_mac.mm
+      - chrome/browser/ui/cocoa/dock_icon.h
+      - chrome/browser/ui/cocoa/dock_icon.mm
       # Updater branding
       - chrome/updater/branding.gni
       # Custom vector icons
@@ -100,6 +104,7 @@ features:
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
       - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
       - chrome/browser/ui/webui/help/version_updater_mac.mm
+      - chrome/browser/lifetime/application_lifetime.cc
       - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
 
   sparkle-third-party:
@@ -171,6 +176,7 @@ features:
       - chrome/browser/extensions/browseros_external_loader.h
       - chrome/browser/extensions/chrome_extension_registrar_delegate.cc
       - chrome/browser/extensions/extension_web_ui_override_registrar.cc
+      - chrome/browser/extensions/extension_url_overrides_registrar.cc
       - chrome/browser/extensions/external_provider_impl.cc
       - chrome/browser/extensions/updater/extension_updater.cc
       - chrome/browser/extensions/updater/extension_updater.h
@@ -247,9 +253,10 @@ features:
       - chrome/browser/ui/ui_features.h
       - chrome/browser/ui/views/accelerator_table.cc
       - chrome/browser/ui/views/side_panel/BUILD.gn
-      - chrome/browser/ui/views/side_panel/side_panel_entry_id.h
-      - chrome/browser/ui/views/side_panel/side_panel_prefs.cc
+      - chrome/browser/ui/side_panel/side_panel_entry_id.h
+      - chrome/browser/ui/side_panel/side_panel_prefs.cc
       - chrome/browser/ui/views/side_panel/side_panel_util.cc
+      - chrome/browser/ui/views/side_panel/side_panel_helper.cc
       - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
       - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
       # Chat-specific files
@@ -279,6 +286,7 @@ features:
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
       - chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
       - chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h
+      - tools/metrics/histograms/metadata/sync/enums.xml
 
   pin-extensions-toolbar:
     description: "feat: pin browseros extensions to toolbar"
@@ -287,8 +295,8 @@ features:
       - chrome/browser/extensions/extension_management.cc
       - chrome/browser/ui/toolbar/toolbar_actions_model.cc
       - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-      - chrome/browser/ui/views/side_panel/side_panel_action_callback.cc
-      - chrome/browser/ui/views/side_panel/side_panel_action_callback.h
+      - chrome/browser/ui/side_panel/side_panel_action_callback.cc
+      - chrome/browser/ui/side_panel/side_panel_action_callback.h
 
   flags:
     description: "feat: browser flags"
@@ -324,6 +332,32 @@ features:
       - components/infobars/core/infobar_delegate.h
       - tools/metrics/histograms/metadata/browser/enums.xml
 
+  hidden-agent-windows:
+    description: "feat: hidden agent windows"
+    files:
+      - chrome/browser/sessions/session_service_base.cc
+      - chrome/browser/ui/browser.cc
+      - chrome/browser/ui/browser.h
+      - chrome/browser/ui/browser_finder.cc
+      - chrome/browser/ui/browser_list.cc
+      - chrome/browser/ui/browser_list.h
+      - chrome/browser/ui/browser_unittest.cc
+      - chrome/browser/ui/views/frame/browser_native_widget_ash.cc
+      - chrome/browser/ui/views/frame/browser_native_widget_aura.cc
+      - chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+      - components/remote_cocoa/app_shim/native_widget_ns_window_bridge.mm
+      - components/remote_cocoa/common/native_widget_ns_window.mojom
+      - ui/ozone/platform/x11/x11_window.cc
+      - ui/ozone/platform/x11/x11_window.h
+      - ui/platform_window/platform_window_init_properties.h
+      - ui/views/cocoa/native_widget_mac_ns_window_host.mm
+      - ui/views/widget/desktop_aura/desktop_window_tree_host_platform.cc
+      - ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
+      - ui/views/widget/desktop_aura/desktop_window_tree_host_win.h
+      - ui/views/widget/widget.h
+      - ui/views/widget/widget_hwnd_utils.cc
+      - ui/views/widget/widget_unittest.cc
+
   cdp-api:
     description: "feat: chrome devtools protocol API"
     files:
@@ -343,6 +377,7 @@ features:
       - chrome/browser/devtools/protocol/browser_handler_android.h
       - chrome/browser/devtools/protocol/browser_handler_mac.h
       - chrome/browser/devtools/protocol/browser_handler_mac.mm
+      - chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
       - chrome/browser/devtools/protocol/history_handler.cc
       - chrome/browser/devtools/protocol/history_handler.h
       # Content-level delegate

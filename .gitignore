@@ -35,3 +35,4 @@ packages/browseros/build/tools/
 .omc/
 
 .github/agents/*
+.llm/

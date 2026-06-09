@@ -49,8 +49,12 @@ export {
   AgentResultSchema,
   type GraderResult,
   GraderResultSchema,
+  type TaskDatasetMetadata,
+  TaskDatasetMetadataSchema,
   type TaskMetadata,
   TaskMetadataSchema,
+  type TokenUsage,
+  TokenUsageSchema,
 } from './result'
 // Task types
 export {

@@ -1,45 +1,25 @@
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
-import type { ElementProperties } from '@browseros/shared/types/acl'
 import { logger } from '../lib/logger'
 import type { CdpBackend } from './backends/types'
 import type { BookmarkNode } from './bookmarks'
 import * as bookmarks from './bookmarks'
 import {
-  ConsoleCollector,
-  type GetConsoleLogsOptions,
-  type GetConsoleLogsResult,
-} from './console-collector'
-import {
   buildContentMarkdownExpression,
   type ContentMarkdownOptions,
 } from './content-markdown'
+import { fetchLegacyAxTreeWithFrames } from './core/observer/ax-tree'
+import type { PageInfo } from './core/pages'
+import { BrowserSession } from './core/session'
+import * as snapshot from './core/snapshot/legacy'
 import { type DomSearchResult, parseNodeAttributes } from './dom'
 import * as elements from './elements'
 import * as extraction from './extraction'
 import type { HistoryEntry } from './history'
 import * as history from './history'
-import * as keyboard from './keyboard'
-import * as mouse from './mouse'
-import type { AXNode } from './snapshot'
-import * as snapshot from './snapshot'
 import type { TabGroup } from './tab-groups'
 import * as tabGroups from './tab-groups'
 
-export interface PageInfo {
-  pageId: number
-  targetId: string
-  tabId: number
-  url: string
-  title: string
-  isActive: boolean
-  isLoading: boolean
-  loadProgress: number
-  isPinned: boolean
-  isHidden: boolean
-  windowId?: number
-  index?: number
-  groupId?: string
-}
+export type { PageInfo } from './core/pages'
 
 export interface WindowInfo {
   windowId: number
@@ -69,459 +49,73 @@ export interface SetWindowVisibilityResult {
   previousWindowId: number
 }
 
-interface TabInfo {
-  tabId: number
-  targetId: string
-  url: string
-  title: string
-  isActive: boolean
-  isLoading: boolean
-  loadProgress: number
-  isPinned: boolean
-  isHidden: boolean
-  windowId?: number
-  index?: number
-  groupId?: string
-}
-
-const EXCLUDED_URL_PREFIXES = [
-  'chrome-extension://',
-  // chrome://new-tab comes in this let's keep it
-  // 'chrome://',
-  'chrome-untrusted://',
-  'chrome-search://',
-  'devtools://',
-]
-
-const ACTIONABLE_SELECTOR = [
-  'button',
-  'a[href]',
-  'input',
-  'select',
-  'textarea',
-  'summary',
-  '[role="button"]',
-  '[role="link"]',
-  '[role="checkbox"]',
-  '[role="radio"]',
-  '[role="switch"]',
-  '[role="tab"]',
-  '[role="option"]',
-  '[onclick]',
-  '[tabindex]',
-].join(',')
-
 export class Browser {
   private cdp: CdpBackend
-  private consoleCollector: ConsoleCollector
-  private pages = new Map<number, PageInfo>()
-  private sessions = new Map<string, string>()
-  private nextPageId = 1
+  private core: BrowserSession
 
   constructor(cdp: CdpBackend) {
     this.cdp = cdp
-    this.consoleCollector = new ConsoleCollector(cdp)
-    this.setupEventHandlers()
+    this.core = new BrowserSession(cdp)
   }
 
   isCdpConnected(): boolean {
-    return this.cdp.isConnected()
+    return this.core.isConnected()
   }
 
-  private setupEventHandlers(): void {
-    this.cdp.Target.on('detachedFromTarget', (params) => {
-      if (params.sessionId) {
-        for (const [targetId, sid] of this.sessions) {
-          if (sid === params.sessionId) {
-            this.sessions.delete(targetId)
-            break
-          }
-        }
-      }
-    })
+  /** Browser-core session shared by MCP and the in-process agent. */
+  get session(): BrowserSession {
+    return this.core
   }
-
-  // --- Session management ---
 
   private async resolveSession(page: number): Promise<ProtocolApi> {
-    let info = this.pages.get(page)
-    if (!info) {
-      await this.listPages()
-      info = this.pages.get(page)
-    }
-    if (!info)
-      throw new Error(
-        `Unknown page ${page}. Use list_pages to see available pages.`,
-      )
-    const sessionId = await this.attachToPage(info.targetId, page)
-    return this.cdp.session(sessionId)
+    return (await this.core.pages.getSession(page)).session
   }
 
-  private async attachToPage(
-    targetId: string,
-    pageId: number,
-  ): Promise<string> {
-    const cached = this.sessions.get(targetId)
-    if (cached) return cached
+  async getActivePageForWindow(windowId: number): Promise<{
+    targetId: string
+    session: ProtocolApi
+    url: string
+  }> {
+    return this.core.pages.getActiveSessionForWindow(windowId)
+  }
 
-    const result = await this.cdp.Target.attachToTarget({
-      targetId,
-      flatten: true,
-    })
-
-    const sessionId = result.sessionId
-    const session = this.cdp.session(sessionId)
-
-    await Promise.all([
-      session.Page.enable(),
-      session.DOM.enable(),
-      session.Runtime.enable(),
-      session.Log.enable(),
-      session.Accessibility.enable(),
-    ])
-
-    this.sessions.set(targetId, sessionId)
-    this.consoleCollector.attach(pageId, sessionId)
-
-    return sessionId
+  /** Resolve a Browser-internal pageId to a CDP session bound to its tab. */
+  async getPageSession(pageId: number): Promise<{
+    targetId: string
+    session: ProtocolApi
+    url: string
+  }> {
+    return this.core.pages.getSession(pageId)
   }
 
   // --- Pages ---
 
   async listPages(): Promise<PageInfo[]> {
-    const result = await this.cdp.Browser.getTabs({ includeHidden: true })
-    const tabs = (result.tabs as TabInfo[]).filter(
-      (t) => !EXCLUDED_URL_PREFIXES.some((prefix) => t.url.startsWith(prefix)),
-    )
-
-    const seenTargetIds = new Set<string>()
-
-    for (const tab of tabs) {
-      seenTargetIds.add(tab.targetId)
-
-      let found = false
-      for (const info of this.pages.values()) {
-        if (info.targetId === tab.targetId) {
-          info.url = tab.url
-          info.title = tab.title
-          info.tabId = tab.tabId
-          info.isActive = tab.isActive
-          info.isLoading = tab.isLoading
-          info.loadProgress = tab.loadProgress
-          info.isPinned = tab.isPinned
-          info.isHidden = tab.isHidden
-          info.windowId = tab.windowId
-          info.index = tab.index
-          info.groupId = tab.groupId
-          found = true
-          break
-        }
-      }
-
-      if (!found) {
-        const pageId = this.nextPageId++
-        this.pages.set(pageId, {
-          pageId,
-          targetId: tab.targetId,
-          tabId: tab.tabId,
-          url: tab.url,
-          title: tab.title,
-          isActive: tab.isActive,
-          isLoading: tab.isLoading,
-          loadProgress: tab.loadProgress,
-          isPinned: tab.isPinned,
-          isHidden: tab.isHidden,
-          windowId: tab.windowId,
-          index: tab.index,
-          groupId: tab.groupId,
-        })
-      }
-    }
-
-    for (const [pageId, info] of this.pages) {
-      if (!seenTargetIds.has(info.targetId)) {
-        this.consoleCollector.detach(pageId)
-        this.pages.delete(pageId)
-      }
-    }
-
-    return [...this.pages.values()].sort((a, b) => a.pageId - b.pageId)
+    return this.core.pages.list()
   }
 
   getTabIdForPage(pageId: number): number | undefined {
-    return this.pages.get(pageId)?.tabId
+    return this.core.pages.getTabId(pageId)
   }
 
   getPageInfo(pageId: number): PageInfo | undefined {
-    return this.pages.get(pageId)
+    return this.core.pages.getInfo(pageId)
   }
 
   async refreshPageInfo(pageId: number): Promise<PageInfo | undefined> {
-    let info = this.pages.get(pageId)
-    if (!info) {
-      await this.listPages()
-      info = this.pages.get(pageId)
-    }
-    if (!info) return undefined
-
-    try {
-      const result = await this.cdp.Browser.getTabInfo({ tabId: info.tabId })
-      const tab = result.tab as TabInfo
-      const updated: PageInfo = {
-        ...info,
-        targetId: tab.targetId,
-        tabId: tab.tabId,
-        url: tab.url,
-        title: tab.title,
-        isActive: tab.isActive,
-        isLoading: tab.isLoading,
-        loadProgress: tab.loadProgress,
-        isPinned: tab.isPinned,
-        isHidden: tab.isHidden,
-        windowId: tab.windowId,
-        index: tab.index,
-        groupId: tab.groupId,
-      }
-      this.pages.set(pageId, updated)
-      return updated
-    } catch {
-      await this.listPages()
-      return this.pages.get(pageId)
-    }
+    return this.core.pages.refresh(pageId)
   }
 
   async getSession(pageId: number): Promise<ProtocolApi | null> {
-    const info = this.pages.get(pageId)
-    if (!info) return null
-    const sessionId = this.sessions.get(info.targetId)
-    if (!sessionId) return null
-    return this.cdp.session(sessionId)
-  }
-
-  async resolveActionableElement(
-    pageId: number,
-    backendNodeId: number,
-  ): Promise<number | null> {
-    const session = await this.resolveSession(pageId)
-    try {
-      const resolved = await session.DOM.resolveNode({ backendNodeId })
-      const objectId = resolved.object?.objectId
-      if (!objectId) return backendNodeId
-
-      const actionable = await session.Runtime.callFunctionOn({
-        functionDeclaration: `function(selector){
-          var element = this instanceof Element
-            ? this
-            : this && this.parentElement
-              ? this.parentElement
-              : this && this.parentNode instanceof Element
-                ? this.parentNode
-                : null;
-          if (!element) return null;
-          return element.closest(selector) || element;
-        }`,
-        objectId,
-        arguments: [{ value: ACTIONABLE_SELECTOR }],
-      })
-
-      const actionableObjectId = actionable.result?.objectId
-      if (!actionableObjectId) return backendNodeId
-
-      const desc = await session.DOM.describeNode({
-        objectId: actionableObjectId,
-      })
-      return desc.node?.backendNodeId ?? backendNodeId
-    } catch {
-      return null
-    }
-  }
-
-  async resolveElementAtPoint(
-    pageId: number,
-    x: number,
-    y: number,
-  ): Promise<number | null> {
-    const session = await this.resolveSession(pageId)
-    try {
-      const fromDom = await session.Runtime.evaluate({
-        expression: `document.elementFromPoint(${Math.round(x)}, ${Math.round(y)})`,
-      })
-      const objectId = fromDom.result?.objectId
-      if (objectId) {
-        const desc = await session.DOM.describeNode({ objectId })
-        const backendNodeId = desc.node?.backendNodeId
-        if (backendNodeId) {
-          return await this.resolveActionableElement(pageId, backendNodeId)
-        }
-      }
-    } catch {
-      // fall through to CDP hit-testing
-    }
-
-    try {
-      const located = await session.DOM.getNodeForLocation({
-        x: Math.round(x),
-        y: Math.round(y),
-        includeUserAgentShadowDOM: true,
-        ignorePointerEventsNone: true,
-      })
-      return await this.resolveActionableElement(pageId, located.backendNodeId)
-    } catch {
-      return null
-    }
-  }
-
-  async resolveElementProperties(
-    pageId: number,
-    backendNodeId: number,
-  ): Promise<ElementProperties | null> {
-    const session = await this.resolveSession(pageId)
-    try {
-      const targetNodeId =
-        (await this.resolveActionableElement(pageId, backendNodeId)) ??
-        backendNodeId
-      const desc = await session.DOM.describeNode({
-        backendNodeId: targetNodeId,
-        depth: 0,
-      })
-      const node = desc.node
-      const attrs = parseNodeAttributes(node)
-
-      const resolved = await session.DOM.resolveNode({
-        backendNodeId: targetNodeId,
-      })
-      const objectId = resolved.object?.objectId
-      let textContent = ''
-      let labelText = ''
-      if (objectId) {
-        const textResult = await session.Runtime.callFunctionOn({
-          functionDeclaration: `function(){
-            var text = (this.innerText || this.textContent || '').trim();
-            var aria = this.getAttribute('aria-label') || '';
-            var placeholder = this.getAttribute('placeholder') || '';
-            var title = this.getAttribute('title') || '';
-            var value = typeof this.value === 'string' ? this.value : '';
-            var labels = Array.from(this.labels || [])
-              .map(function(label){ return (label.innerText || label.textContent || '').trim(); })
-              .filter(Boolean)
-              .join(' ');
-            return {
-              textContent: text.substring(0, 200),
-              labelText: [aria, labels, placeholder, title, value, text]
-                .filter(Boolean)
-                .join(' ')
-                .trim()
-                .substring(0, 400),
-            };
-          }`,
-          objectId,
-          returnByValue: true,
-        })
-        const value = (textResult.result?.value ?? {}) as {
-          textContent?: string
-          labelText?: string
-        }
-        textContent = value.textContent ?? ''
-        labelText = value.labelText ?? ''
-      }
-
-      return {
-        tagName: node.localName ?? '',
-        textContent,
-        attributes: attrs,
-        labelText,
-        ariaLabel: attrs['aria-label'],
-        role: attrs.role,
-      }
-    } catch {
-      return null
-    }
-  }
-
-  async highlightBlockedElement(
-    pageId: number,
-    backendNodeId: number,
-    reason: string,
-  ): Promise<void> {
-    const session = await this.resolveSession(pageId)
-    const targetNodeId =
-      (await this.resolveActionableElement(pageId, backendNodeId)) ??
-      backendNodeId
-
-    try {
-      const resolved = await session.DOM.resolveNode({
-        backendNodeId: targetNodeId,
-      })
-      const objectId = resolved.object?.objectId
-      if (!objectId) return
-
-      await session.Runtime.callFunctionOn({
-        functionDeclaration: `function(reason){
-          var existing = document.getElementById('__browseros_acl_block_overlay');
-          if (existing) existing.remove();
-          var existingStyle = document.getElementById('__browseros_acl_block_style');
-          if (!existingStyle) {
-            var style = document.createElement('style');
-            style.id = '__browseros_acl_block_style';
-            style.textContent = [
-              '#__browseros_acl_block_overlay{position:absolute;pointer-events:none;z-index:2147483647;}',
-              '#__browseros_acl_block_overlay .ring{position:absolute;inset:0;border:2px solid rgba(220,38,38,0.95);background:rgba(220,38,38,0.14);border-radius:10px;box-shadow:0 0 0 3px rgba(255,255,255,0.75);}',
-              '#__browseros_acl_block_overlay .badge{position:absolute;top:-10px;right:-10px;background:rgba(153,27,27,0.96);color:white;font:600 11px/1.2 system-ui,sans-serif;padding:6px 8px;border-radius:999px;white-space:nowrap;box-shadow:0 6px 18px rgba(0,0,0,0.2);}',
-            ].join('');
-            document.head.appendChild(style);
-          }
-          var rect = this.getBoundingClientRect();
-          if (!rect.width || !rect.height) return;
-          var overlay = document.createElement('div');
-          overlay.id = '__browseros_acl_block_overlay';
-          overlay.style.left = (rect.left + window.scrollX) + 'px';
-          overlay.style.top = (rect.top + window.scrollY) + 'px';
-          overlay.style.width = rect.width + 'px';
-          overlay.style.height = rect.height + 'px';
-          var ring = document.createElement('div');
-          ring.className = 'ring';
-          var badge = document.createElement('div');
-          badge.className = 'badge';
-          badge.textContent = reason || 'Blocked';
-          overlay.appendChild(ring);
-          overlay.appendChild(badge);
-          document.body.appendChild(overlay);
-          window.setTimeout(function(){
-            var current = document.getElementById('__browseros_acl_block_overlay');
-            if (current) current.remove();
-          }, 2500);
-        }`,
-        objectId,
-        arguments: [{ value: reason }],
-      })
-    } catch {
-      // best-effort visual feedback
-    }
+    return this.core.pages.getAttachedSession(pageId)
   }
 
   async resolveTabIds(tabIds: number[]): Promise<Map<number, number>> {
-    await this.listPages()
-    const tabToPage = new Map<number, number>()
-    for (const info of this.pages.values()) {
-      if (tabIds.includes(info.tabId)) {
-        tabToPage.set(info.tabId, info.pageId)
-      }
-    }
-    return tabToPage
+    return this.core.pages.resolveTabIds(tabIds)
   }
 
   async getActivePage(): Promise<PageInfo | null> {
-    const result = await this.cdp.Browser.getActiveTab()
-
-    if (!result.tab) return null
-
-    await this.listPages()
-
-    for (const info of this.pages.values()) {
-      if (info.targetId === (result.tab as TabInfo).targetId) return info
-    }
-
-    return null
+    return this.core.pages.getActive()
   }
 
   private async resolveWindowIdForNewPage(opts?: {
@@ -529,7 +123,15 @@ export class Browser {
     windowId?: number
   }): Promise<number | undefined> {
     if (!opts?.hidden) {
-      return opts?.windowId
+      if (opts?.windowId !== undefined) return opts.windowId
+
+      const windows = await this.listWindows()
+      const visibleWindow =
+        windows.find((window) => window.isVisible && window.isActive) ??
+        windows.find((window) => window.isVisible)
+      if (visibleWindow) return visibleWindow.windowId
+
+      return (await this.createWindow({ hidden: false })).windowId
     }
 
     if (opts.windowId !== undefined) {
@@ -564,276 +166,39 @@ export class Browser {
     },
   ): Promise<number> {
     const windowId = await this.resolveWindowIdForNewPage(opts)
-    const createResult = await this.cdp.Browser.createTab({
-      url,
-      ...(opts?.background !== undefined && { background: opts.background }),
-      ...(windowId !== undefined && { windowId }),
+    return this.core.pages.newPage(url, {
+      background: opts?.background,
+      windowId,
     })
-
-    const tabId = (createResult.tab as TabInfo).tabId
-    let tabInfo: TabInfo | undefined
-    for (let i = 0; i < 10; i++) {
-      try {
-        const infoResult = await this.cdp.Browser.getTabInfo({ tabId })
-        tabInfo = infoResult.tab as TabInfo
-        break
-      } catch {
-        await new Promise((r) => setTimeout(r, 100))
-      }
-    }
-    if (!tabInfo) throw new Error(`Tab ${tabId} not found after creation`)
-
-    const pageId = this.nextPageId++
-    this.pages.set(pageId, {
-      pageId,
-      targetId: tabInfo.targetId,
-      tabId: tabInfo.tabId,
-      url: tabInfo.url || url,
-      title: tabInfo.title || '',
-      isActive: tabInfo.isActive,
-      isLoading: tabInfo.isLoading,
-      loadProgress: tabInfo.loadProgress,
-      isPinned: tabInfo.isPinned,
-      isHidden: tabInfo.isHidden,
-      windowId: tabInfo.windowId ?? windowId,
-      index: tabInfo.index,
-      groupId: tabInfo.groupId,
-    })
-
-    // Auto-group: if originPageId is provided and this is not a hidden tab,
-    // group the new tab with the origin tab.
-    if (opts?.originPageId !== undefined && !opts?.hidden) {
-      const originPage = this.pages.get(opts.originPageId)
-      if (originPage && originPage.pageId !== pageId) {
-        try {
-          if (originPage.groupId) {
-            await this.groupTabs([opts.originPageId, pageId], {
-              groupId: originPage.groupId,
-            })
-          } else {
-            await this.groupTabs([opts.originPageId, pageId])
-          }
-        } catch {
-          // Grouping is best-effort; don't fail tab creation if it fails
-        }
-      }
-    }
-
-    return pageId
   }
 
   async closePage(page: number): Promise<void> {
-    const info = this.pages.get(page)
-    if (!info)
-      throw new Error(
-        `Unknown page ${page}. Use list_pages to see available pages.`,
-      )
-    await this.cdp.Browser.closeTab({ tabId: info.tabId })
-    this.consoleCollector.detach(page)
-    this.pages.delete(page)
-    this.sessions.delete(info.targetId)
+    await this.core.pages.close(page)
   }
 
   // --- Navigation ---
 
-  private async waitForLoad(
-    session: ProtocolApi,
-    timeout = 30000,
-  ): Promise<void> {
-    const deadline = Date.now() + timeout
-    await new Promise((r) => setTimeout(r, 50))
-
-    while (Date.now() < deadline) {
-      try {
-        const result = await session.Runtime.evaluate({
-          expression: 'document.readyState',
-          returnByValue: true,
-        })
-        if ((result.result?.value as string) === 'complete') return
-      } catch {
-        // Context torn down during navigation — expected
-      }
-      await new Promise((r) => setTimeout(r, 150))
-    }
-  }
-
   async goto(page: number, url: string): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.Page.navigate({ url })
-    await this.waitForLoad(session)
+    await this.core.nav(page).goto(url)
   }
 
   async goBack(page: number): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.Runtime.evaluate({
-      expression: 'history.back()',
-      awaitPromise: true,
-    })
-    await this.waitForLoad(session)
+    await this.core.nav(page).back()
   }
 
   async goForward(page: number): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.Runtime.evaluate({
-      expression: 'history.forward()',
-      awaitPromise: true,
-    })
-    await this.waitForLoad(session)
+    await this.core.nav(page).forward()
   }
 
   async reload(page: number): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.Page.reload()
-    await this.waitForLoad(session)
-  }
-
-  async waitFor(
-    page: number,
-    opts: { text?: string; selector?: string; timeout: number },
-  ): Promise<boolean> {
-    const session = await this.resolveSession(page)
-    const deadline = Date.now() + opts.timeout
-    const interval = 500
-
-    while (Date.now() < deadline) {
-      if (opts.text) {
-        const result = await session.Runtime.evaluate({
-          expression: `document.body?.innerText?.includes(${JSON.stringify(opts.text)}) ?? false`,
-          returnByValue: true,
-        })
-        if (result.result?.value === true) return true
-      }
-
-      if (opts.selector) {
-        const result = await session.Runtime.evaluate({
-          expression: `!!document.querySelector(${JSON.stringify(opts.selector)})`,
-          returnByValue: true,
-        })
-        if (result.result?.value === true) return true
-      }
-
-      await new Promise((r) => setTimeout(r, interval))
-    }
-
-    return false
+    await this.core.nav(page).reload()
   }
 
   // --- Observation ---
 
-  private async getFrameIds(session: ProtocolApi): Promise<string[]> {
-    try {
-      const result = await session.Page.getFrameTree()
-      const ids: string[] = []
-      type Tree = { frame: { id: string }; childFrames?: Tree[] }
-      function collect(tree: Tree) {
-        ids.push(tree.frame.id)
-        if (tree.childFrames)
-          for (const child of tree.childFrames) collect(child)
-      }
-      collect(result.frameTree as Tree)
-      return ids
-    } catch {
-      return []
-    }
-  }
-
-  private async fetchAXTree(session: ProtocolApi): Promise<AXNode[]> {
-    const frameIds = await this.getFrameIds(session)
-
-    if (frameIds.length <= 1) {
-      const result = await session.Accessibility.getFullAXTree()
-      return (result.nodes as AXNode[]) ?? []
-    }
-
-    const allNodes: AXNode[] = []
-    for (const frameId of frameIds) {
-      try {
-        const result = await session.Accessibility.getFullAXTree({ frameId })
-        const nodes = (result.nodes as AXNode[]) ?? []
-        for (const node of nodes) {
-          allNodes.push({
-            ...node,
-            nodeId: `${frameId}:${node.nodeId}`,
-            childIds: node.childIds?.map((id) => `${frameId}:${id}`),
-          })
-        }
-      } catch {
-        // Cross-origin or detached frames may fail — skip
-      }
-    }
-    return allNodes
-  }
-
   async snapshot(page: number): Promise<string> {
     const session = await this.resolveSession(page)
-    const nodes = await this.fetchAXTree(session)
-    if (nodes.length === 0) return ''
-
-    const lines = snapshot.buildInteractiveTree(nodes)
-
-    try {
-      const cursorElements =
-        await snapshot.findCursorInteractiveElements(session)
-
-      if (cursorElements.length > 0) {
-        const includedIds = new Set<number>()
-        for (const line of lines) {
-          const match = line.match(/^\[(\d+)\]/)
-          if (match) includedIds.add(Number(match[1]))
-        }
-
-        for (const el of cursorElements) {
-          if (includedIds.has(el.backendNodeId)) continue
-          lines.push(`[${el.backendNodeId}] clickable "${el.text}"`)
-        }
-      }
-    } catch {
-      // cursor detection is best-effort; AX tree results are still returned
-    }
-
-    return lines.join('\n')
-  }
-
-  async getPageLinks(
-    page: number,
-  ): Promise<Array<{ text: string; href: string }>> {
-    const session = await this.resolveSession(page)
-    const nodes = await this.fetchAXTree(session)
-    const linkNodes = snapshot.extractLinkNodes(nodes)
-    if (linkNodes.length === 0) return []
-
-    const results: Array<{ text: string; href: string }> = []
-    const seen = new Set<string>()
-
-    for (const link of linkNodes) {
-      try {
-        const resolved = await session.DOM.resolveNode({
-          backendNodeId: link.backendDOMNodeId,
-        })
-        if (!resolved.object?.objectId) continue
-
-        const hrefResult = await session.Runtime.callFunctionOn({
-          objectId: resolved.object.objectId,
-          functionDeclaration:
-            'function() { return this.href || this.getAttribute("href") || ""; }',
-          returnByValue: true,
-        })
-
-        const href = hrefResult.result?.value as string
-        if (!href || href.startsWith('javascript:') || seen.has(href)) continue
-        seen.add(href)
-        results.push({ text: link.text, href })
-      } catch {
-        // skip unresolvable nodes
-      }
-    }
-
-    return results
-  }
-
-  async enhancedSnapshot(page: number): Promise<string> {
-    const session = await this.resolveSession(page)
-    const nodes = await this.fetchAXTree(session)
+    const nodes = await fetchLegacyAxTreeWithFrames(session)
     if (nodes.length === 0) return ''
 
     const treeLines = snapshot.buildEnhancedTree(nodes)
@@ -906,7 +271,6 @@ export class Browser {
     } = { url: info?.url, title: info?.title, elements: [] }
 
     if (!nodes || nodes.length === 0) {
-      // still return page text if available
       result.pageText = await this.contentAsMarkdown(page, {
         selector: opts?.selector,
         viewportOnly: opts?.viewportOnly,
@@ -916,7 +280,6 @@ export class Browser {
       return result
     }
 
-    // Use the AX interactive tree to pick candidate backend node ids.
     const lines = snapshot.buildInteractiveTree(nodes)
     const ids = new Set<number>()
     for (const line of lines) {
@@ -924,7 +287,6 @@ export class Browser {
       if (m) ids.add(Number(m[1]))
     }
 
-    // Include cursor-interactive detections as a best-effort supplement
     try {
       const cursorEls = await snapshot.findCursorInteractiveElements(session)
       for (const el of cursorEls) ids.add(el.backendNodeId)
@@ -933,7 +295,6 @@ export class Browser {
     }
 
     const max = opts?.maxElements ?? 150
-    // Fetch a slightly larger candidate set then prune by score
     const candidateIds = Array.from(ids).slice(0, Math.max(max * 3, max + 50))
     const candidates: extraction.StructuredElement[] = []
 
@@ -975,6 +336,43 @@ export class Browser {
     })
 
     return result
+  }
+
+  async getPageLinks(
+    page: number,
+  ): Promise<Array<{ text: string; href: string }>> {
+    const session = await this.resolveSession(page)
+    const nodes = await fetchLegacyAxTreeWithFrames(session)
+    const linkNodes = snapshot.extractLinkNodes(nodes)
+    if (linkNodes.length === 0) return []
+
+    const results: Array<{ text: string; href: string }> = []
+    const seen = new Set<string>()
+
+    for (const link of linkNodes) {
+      try {
+        const resolved = await session.DOM.resolveNode({
+          backendNodeId: link.backendDOMNodeId,
+        })
+        if (!resolved.object?.objectId) continue
+
+        const hrefResult = await session.Runtime.callFunctionOn({
+          objectId: resolved.object.objectId,
+          functionDeclaration:
+            'function() { return this.href || this.getAttribute("href") || ""; }',
+          returnByValue: true,
+        })
+
+        const href = hrefResult.result?.value as string
+        if (!href || href.startsWith('javascript:') || seen.has(href)) continue
+        seen.add(href)
+        results.push({ text: link.text, href })
+      } catch {
+        // skip unresolvable nodes
+      }
+    }
+
+    return results
   }
 
   async content(page: number, selector?: string): Promise<string> {
@@ -1178,28 +576,7 @@ export class Browser {
     element: number,
     opts?: { button?: string; clickCount?: number },
   ): Promise<{ x: number; y: number } | undefined> {
-    const session = await this.resolveSession(page)
-
-    await elements.scrollIntoView(session, element)
-
-    try {
-      const { x, y } = await elements.getElementCenter(session, element)
-      await mouse.dispatchClick(
-        session,
-        x,
-        y,
-        opts?.button ?? 'left',
-        opts?.clickCount ?? 1,
-        0,
-      )
-      return { x, y }
-    } catch {
-      logger.debug(
-        `CDP click failed for element=${element}, falling back to JS click`,
-      )
-      await elements.jsClick(session, element)
-      return undefined
-    }
+    return this.core.input(page).clickBackendNode(element, opts)
   }
 
   async clickAt(
@@ -1208,20 +585,11 @@ export class Browser {
     y: number,
     opts?: { button?: string; clickCount?: number },
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    await mouse.dispatchClick(
-      session,
-      x,
-      y,
-      opts?.button ?? 'left',
-      opts?.clickCount ?? 1,
-      0,
-    )
+    await this.core.input(page).clickAt(x, y, opts)
   }
 
   async hoverAt(page: number, x: number, y: number): Promise<void> {
-    const session = await this.resolveSession(page)
-    await mouse.dispatchHover(session, x, y)
+    await this.core.input(page).hoverAt(x, y)
   }
 
   async typeAt(
@@ -1231,10 +599,7 @@ export class Browser {
     text: string,
     clear = false,
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    await mouse.dispatchClick(session, x, y, 'left', 1, 0)
-    if (clear) await keyboard.clearField(session)
-    await keyboard.typeText(session, text)
+    await this.core.input(page).typeAt(x, y, text, clear)
   }
 
   async dragAt(
@@ -1242,20 +607,14 @@ export class Browser {
     from: { x: number; y: number },
     to: { x: number; y: number },
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    await mouse.dispatchDrag(session, from, to)
+    await this.core.input(page).dragAt(from, to)
   }
 
   async hover(
     page: number,
     element: number,
   ): Promise<{ x: number; y: number }> {
-    const session = await this.resolveSession(page)
-
-    await elements.scrollIntoView(session, element)
-    const { x, y } = await elements.getElementCenter(session, element)
-    await mouse.dispatchHover(session, x, y)
-    return { x, y }
+    return this.core.input(page).hoverBackendNode(element)
   }
 
   async fill(
@@ -1264,59 +623,11 @@ export class Browser {
     text: string,
     clear = true,
   ): Promise<{ x: number; y: number } | undefined> {
-    const session = await this.resolveSession(page)
-
-    await elements.scrollIntoView(session, element)
-
-    // If the field already contains the requested value, make the
-    // tool idempotent and avoid retriggering validation / autosubmit
-    // flows with the same input.
-    try {
-      const currentValue = await elements.getInputValue(session, element)
-      if (currentValue === text) {
-        return undefined
-      }
-    } catch {
-      // Fall through and do the normal fill path.
-    }
-
-    // Always click to guarantee real keyboard focus.
-    // DOM.focus() is unreliable for shadow DOM, iframes, and custom components.
-    let coords: { x: number; y: number } | undefined
-    try {
-      const { x, y } = await elements.getElementCenter(session, element)
-      await mouse.dispatchClick(session, x, y, 'left', 1, 0)
-      coords = { x, y }
-    } catch {
-      // Fallback to DOM.focus() if we can't get coordinates
-      try {
-        await elements.focusElement(session, element)
-      } catch {
-        logger.warn('Could not focus element via click or DOM.focus()')
-      }
-    }
-
-    if (clear) {
-      // Primary: keyboard select-all + backspace
-      await keyboard.clearField(session)
-
-      // Fallback: if field still has content, triple-click to select all
-      // then typeText will overwrite the selection
-      if (coords) {
-        const value = await elements.getInputValue(session, element)
-        if (value) {
-          await mouse.dispatchClick(session, coords.x, coords.y, 'left', 3, 0)
-        }
-      }
-    }
-
-    await keyboard.typeText(session, text)
-    return coords
+    return this.core.input(page).fillBackendNode(element, text, { clear })
   }
 
   async pressKey(page: number, key: string): Promise<void> {
-    const session = await this.resolveSession(page)
-    await keyboard.pressCombo(session, key)
+    await this.core.input(page).press(key)
   }
 
   async drag(
@@ -1327,24 +638,7 @@ export class Browser {
     from: { x: number; y: number }
     to: { x: number; y: number }
   }> {
-    const session = await this.resolveSession(page)
-
-    await elements.scrollIntoView(session, sourceElement)
-    const from = await elements.getElementCenter(session, sourceElement)
-
-    let to: { x: number; y: number }
-    if (target.element !== undefined) {
-      to = await elements.getElementCenter(session, target.element)
-    } else if (target.x !== undefined && target.y !== undefined) {
-      to = { x: target.x, y: target.y }
-    } else {
-      throw new Error(
-        'Provide either target element or both targetX and targetY.',
-      )
-    }
-
-    await mouse.dispatchDrag(session, from, to)
-    return { from, to }
+    return this.core.input(page).dragBackendNode(sourceElement, target)
   }
 
   async scroll(
@@ -1353,85 +647,7 @@ export class Browser {
     amount: number,
     element?: number,
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    const pixels = amount * 120
-    const deltaX =
-      direction === 'left' ? -pixels : direction === 'right' ? pixels : 0
-    const deltaY =
-      direction === 'up' ? -pixels : direction === 'down' ? pixels : 0
-
-    if (deltaX === 0 && deltaY === 0) return
-
-    let x: number
-    let y: number
-    if (element !== undefined) {
-      const center = await elements.getElementCenter(session, element)
-      x = center.x
-      y = center.y
-    } else {
-      const metrics = await session.Page.getLayoutMetrics()
-      x = metrics.layoutViewport.clientWidth / 2
-      y = metrics.layoutViewport.clientHeight / 2
-    }
-
-    const beforeWindowPosition =
-      element === undefined
-        ? await this.getWindowScrollPosition(session)
-        : undefined
-
-    await mouse.dispatchScroll(session, x, y, deltaX, deltaY)
-
-    if (beforeWindowPosition === undefined) return
-
-    const afterWindowPosition = await this.getWindowScrollPosition(session)
-    const moved = this.didScrollInExpectedDirection(
-      beforeWindowPosition,
-      afterWindowPosition,
-      deltaX,
-      deltaY,
-    )
-    if (moved) return
-
-    await this.fallbackWindowScroll(session, deltaX, deltaY)
-  }
-
-  private async getWindowScrollPosition(
-    session: ProtocolApi,
-  ): Promise<{ x: number; y: number }> {
-    const result = await session.Runtime.evaluate({
-      expression:
-        '({ x: window.scrollX ?? window.pageXOffset ?? 0, y: window.scrollY ?? window.pageYOffset ?? 0 })',
-      returnByValue: true,
-    })
-    const value = (result.result?.value ?? {}) as { x?: number; y?: number }
-    return {
-      x: typeof value.x === 'number' ? value.x : 0,
-      y: typeof value.y === 'number' ? value.y : 0,
-    }
-  }
-
-  private didScrollInExpectedDirection(
-    before: { x: number; y: number },
-    after: { x: number; y: number },
-    deltaX: number,
-    deltaY: number,
-  ): boolean {
-    if (deltaX > 0 && after.x > before.x) return true
-    if (deltaX < 0 && after.x < before.x) return true
-    if (deltaY > 0 && after.y > before.y) return true
-    if (deltaY < 0 && after.y < before.y) return true
-    return false
-  }
-
-  private async fallbackWindowScroll(
-    session: ProtocolApi,
-    deltaX: number,
-    deltaY: number,
-  ): Promise<void> {
-    await session.Runtime.evaluate({
-      expression: `window.scrollBy(${deltaX}, ${deltaY})`,
-      returnByValue: true,
-    })
+    await this.core.input(page).scrollLegacy(direction, amount, element)
   }
 
   async handleDialog(
@@ -1439,11 +655,7 @@ export class Browser {
     accept: boolean,
     promptText?: string,
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.Page.handleJavaScriptDialog({
-      accept,
-      ...(promptText !== undefined && { promptText }),
-    })
+    await this.core.input(page).handleDialog(accept, promptText)
   }
 
   async selectOption(
@@ -1451,55 +663,21 @@ export class Browser {
     element: number,
     value: string,
   ): Promise<string | null> {
-    const session = await this.resolveSession(page)
-
-    const selected = await elements.callOnElement(
-      session,
-      element,
-      `function(val){
-				for(var i=0;i<this.options.length;i++){
-					if(this.options[i].value===val||this.options[i].textContent.trim()===val){
-						this.selectedIndex=i;
-						this.dispatchEvent(new Event('change',{bubbles:true}));
-						return this.options[i].textContent.trim();
-					}
-				}
-				return null;
-			}`,
-      [value],
-    )
-
-    return selected as string | null
+    return this.core.input(page).selectBackendNode(element, value)
   }
 
   // --- Form helpers ---
 
   async focus(page: number, element: number): Promise<void> {
-    const session = await this.resolveSession(page)
-    await elements.scrollIntoView(session, element)
-    await elements.focusElement(session, element)
+    await this.core.input(page).focusBackendNode(element)
   }
 
   async check(page: number, element: number): Promise<boolean> {
-    const session = await this.resolveSession(page)
-    const checked = await elements.callOnElement(
-      session,
-      element,
-      'function(){return this.checked}',
-    )
-    if (!checked) await this.click(page, element)
-    return true
+    return this.core.input(page).checkBackendNode(element)
   }
 
   async uncheck(page: number, element: number): Promise<boolean> {
-    const session = await this.resolveSession(page)
-    const checked = await elements.callOnElement(
-      session,
-      element,
-      'function(){return this.checked}',
-    )
-    if (checked) await this.click(page, element)
-    return false
+    return this.core.input(page).uncheckBackendNode(element)
   }
 
   async uploadFile(
@@ -1507,8 +685,7 @@ export class Browser {
     element: number,
     files: string[],
   ): Promise<void> {
-    const session = await this.resolveSession(page)
-    await session.DOM.setFileInputFiles({ files, backendNodeId: element })
+    await this.core.input(page).uploadFile(element, files)
   }
 
   // --- File operations ---
@@ -1596,7 +773,7 @@ export class Browser {
 
   async createWindow(opts?: { hidden?: boolean }): Promise<WindowInfo> {
     const result = await this.cdp.Browser.createWindow({
-      ...(opts?.hidden !== undefined && { hidden: opts.hidden }),
+      hidden: opts?.hidden ?? false,
     })
     return result.window as WindowInfo
   }
@@ -1633,55 +810,14 @@ export class Browser {
     page: number,
     opts?: { windowId?: number; index?: number; activate?: boolean },
   ): Promise<PageInfo> {
-    const info = this.pages.get(page)
-    if (!info)
-      throw new Error(
-        `Unknown page ${page}. Use list_pages to see available pages.`,
-      )
-
-    const result = await this.cdp.Browser.showTab({
-      tabId: info.tabId,
-      ...(opts?.windowId !== undefined && { windowId: opts.windowId }),
-      ...(opts?.index !== undefined && { index: opts.index }),
-      ...(opts?.activate !== undefined && { activate: opts.activate }),
-    })
-
-    const tab = result.tab as TabInfo
-    const updated: PageInfo = {
-      ...info,
-      isHidden: tab.isHidden,
-      isActive: tab.isActive,
-      windowId: tab.windowId,
-      index: tab.index,
-    }
-    this.pages.set(page, updated)
-    return updated
+    return this.core.pages.show(page, opts)
   }
 
   async movePage(
     page: number,
     opts?: { windowId?: number; index?: number },
   ): Promise<PageInfo> {
-    const info = this.pages.get(page)
-    if (!info)
-      throw new Error(
-        `Unknown page ${page}. Use list_pages to see available pages.`,
-      )
-
-    const result = await this.cdp.Browser.moveTab({
-      tabId: info.tabId,
-      ...(opts?.windowId !== undefined && { windowId: opts.windowId }),
-      ...(opts?.index !== undefined && { index: opts.index }),
-    })
-
-    const tab = result.tab as TabInfo
-    const updated: PageInfo = {
-      ...info,
-      windowId: tab.windowId,
-      index: tab.index,
-    }
-    this.pages.set(page, updated)
-    return updated
+    return this.core.pages.move(page, opts)
   }
 
   // --- Bookmarks ---
@@ -1745,7 +881,7 @@ export class Browser {
 
   private resolvePageIdsToTabIds(pageIds: number[]): number[] {
     return pageIds.map((pageId) => {
-      const info = this.pages.get(pageId)
+      const info = this.getPageInfo(pageId)
       if (!info)
         throw new Error(
           `Unknown page ${pageId}. Use list_pages to see available pages.`,
@@ -1757,11 +893,11 @@ export class Browser {
   async listTabGroups(): Promise<
     (Omit<TabGroup, 'tabIds'> & { pageIds: number[] })[]
   > {
-    await this.listPages()
+    const pages = await this.listPages()
     const groups = await tabGroups.listTabGroups(this.cdp)
 
     const tabToPage = new Map<number, number>()
-    for (const info of this.pages.values()) {
+    for (const info of pages) {
       tabToPage.set(info.tabId, info.pageId)
     }
 
@@ -1780,12 +916,12 @@ export class Browser {
     pageIds: number[],
     opts?: { title?: string; groupId?: string },
   ): Promise<Omit<TabGroup, 'tabIds'> & { pageIds: number[] }> {
-    await this.listPages()
+    const pages = await this.listPages()
     const tabIds = this.resolvePageIdsToTabIds(pageIds)
     const group = await tabGroups.groupTabs(this.cdp, tabIds, opts)
 
     const tabToPage = new Map<number, number>()
-    for (const info of this.pages.values()) {
+    for (const info of pages) {
       tabToPage.set(info.tabId, info.pageId)
     }
 
@@ -1813,15 +949,5 @@ export class Browser {
 
   async closeTabGroup(groupId: string): Promise<void> {
     return tabGroups.closeTabGroup(this.cdp, groupId)
-  }
-
-  // --- Console ---
-
-  async getConsoleLogs(
-    page: number,
-    opts?: GetConsoleLogsOptions,
-  ): Promise<GetConsoleLogsResult> {
-    await this.resolveSession(page)
-    return this.consoleCollector.getLogs(page, opts)
   }
 }

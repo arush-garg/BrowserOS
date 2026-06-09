@@ -7,6 +7,7 @@ with the feature name and description.
 
 import yaml
 from pathlib import Path
+import subprocess
 from typing import List, Tuple, Optional, Dict
 
 from ..apply.utils import run_git_command
@@ -24,6 +25,78 @@ def load_features(features_file: Path) -> Dict:
     except Exception as e:
         log_error(f"Failed to load features file: {e}")
         return {}
+
+
+def _git_index_lock_path(chromium_src: Path) -> Path:
+    """Resolve the git index lock path from git metadata when possible."""
+    result = run_git_command(
+        ["git", "rev-parse", "--git-path", "index.lock"],
+        cwd=chromium_src,
+    )
+    if result.returncode != 0:
+        return chromium_src / ".git" / "index.lock"
+
+    relative_path = (result.stdout or "").strip()
+    lock_path = Path(relative_path)
+    if not lock_path.is_absolute():
+        return chromium_src / lock_path
+    return lock_path
+
+
+def _is_git_index_lock_error(stderr: str) -> bool:
+    """Detect git errors caused by an existing index.lock file."""
+    normalized = (stderr or "").lower()
+    return "index.lock" in normalized and "file exists" in normalized
+
+
+def _clear_git_index_lock(chromium_src: Path) -> bool:
+    """Remove a stale git index lock file if it exists."""
+    lock_path = _git_index_lock_path(chromium_src)
+    if not lock_path.exists():
+        return False
+
+    try:
+        lock_path.unlink()
+        return True
+    except OSError as e:
+        log_warning(f"   Failed to remove index.lock at {lock_path}: {e}")
+        return False
+
+
+def _run_git_with_lock_retry(
+    cmd: List[str], chromium_src: Path, max_retries: int = 1
+) -> subprocess.CompletedProcess:
+    """Run git command and retry once after removing an unexpected index lock."""
+    result = run_git_command(cmd, cwd=chromium_src)
+
+    if result.returncode == 0:
+        return result
+
+    if not _is_git_index_lock_error(result.stderr):
+        return result
+
+    for _ in range(max_retries):
+        cleared_lock = _clear_git_index_lock(chromium_src)
+        if cleared_lock:
+            log_warning("   Git lock existed; removed stale index.lock and retrying")
+
+        result = run_git_command(cmd, cwd=chromium_src)
+        if result.returncode == 0:
+            return result
+        if not _is_git_index_lock_error(result.stderr):
+            return result
+
+    return result
+
+
+def _format_git_error(
+    cmd_result: subprocess.CompletedProcess, action: str, target: str
+) -> str:
+    """Build a compact git failure message for logging."""
+    error = (cmd_result.stderr or cmd_result.stdout or "").strip()
+    if not error:
+        return f"Failed to {action}: {target}"
+    return f"Failed to {action} {target}: {error}"
 
 
 def get_modified_files(chromium_src: Path, files: List[str]) -> List[str]:
@@ -68,27 +141,26 @@ def git_add_and_commit(
     Returns:
         True if commit was created successfully
     """
-    # Add all specified files
     for file_path in files:
-        result = run_git_command(
+        result = _run_git_with_lock_retry(
             ["git", "add", str(file_path)],
-            cwd=chromium_src,
+            chromium_src,
         )
         if result.returncode != 0:
-            log_error(f"Failed to add file: {file_path}")
+            log_error(_format_git_error(result, "add file", file_path))
             return False
 
     # Create commit
-    result = run_git_command(
+    result = _run_git_with_lock_retry(
         ["git", "commit", "-m", commit_message],
-        cwd=chromium_src,
+        chromium_src,
     )
 
     if result.returncode != 0:
         stderr = result.stderr or ""
         if "nothing to commit" in stderr or "nothing added to commit" in stderr:
             return False
-        log_error(f"Failed to commit: {stderr}")
+        log_error(_format_git_error(result, "create commit with message", f"`{commit_message}`"))
         return False
 
     return True

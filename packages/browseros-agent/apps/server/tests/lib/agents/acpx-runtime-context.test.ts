@@ -22,7 +22,7 @@ import {
   materializeCodexHome,
   resolveAgentRuntimePaths,
   wrapCommandWithEnv,
-} from '../../../src/lib/agents/acpx-runtime-context'
+} from '../../../src/lib/agents/acpx/runtime-context'
 import type { AgentDefinition } from '../../../src/lib/agents/agent-types'
 
 describe('acpx runtime context helpers', () => {
@@ -51,6 +51,16 @@ describe('acpx runtime context helpers', () => {
     expect(paths.effectiveCwd).toBe(paths.defaultWorkspaceCwd)
     expect(paths.runtimeStatePath).toBe(
       join(browserosDir, 'agents', 'harness', 'runtime-state', 'agent-1.json'),
+    )
+    expect(paths.runtimeSessionStatePath).toBe(
+      join(
+        browserosDir,
+        'agents',
+        'harness',
+        'runtime-state',
+        'agent-1',
+        'main.json',
+      ),
     )
     expect(paths.runtimeSkillsDir).toBe(
       join(browserosDir, 'agents', 'harness', 'runtime-skills'),
@@ -82,6 +92,31 @@ describe('acpx runtime context helpers', () => {
     })
 
     expect(paths.effectiveCwd).toBe(selected)
+  })
+
+  it('resolves a stable runtime-state path for UUID sessions', async () => {
+    const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-context-'))
+    tempDirs.push(browserosDir)
+
+    const paths = resolveAgentRuntimePaths({
+      browserosDir,
+      agentId: 'agent-1',
+      sessionId: '00000000-0000-4000-8000-000000000001',
+    })
+
+    expect(paths.runtimeStatePath).toBe(
+      join(browserosDir, 'agents', 'harness', 'runtime-state', 'agent-1.json'),
+    )
+    expect(paths.runtimeSessionStatePath).toBe(
+      join(
+        browserosDir,
+        'agents',
+        'harness',
+        'runtime-state',
+        'agent-1',
+        '00000000-0000-4000-8000-000000000001.json',
+      ),
+    )
   })
 
   it('seeds agent home and does not overwrite edited files', async () => {

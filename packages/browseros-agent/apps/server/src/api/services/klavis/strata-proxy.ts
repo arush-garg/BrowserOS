@@ -20,10 +20,6 @@ import { KlavisClient } from '../../../lib/clients/klavis/klavis-client'
 import { OAUTH_MCP_SERVERS } from '../../../lib/clients/klavis/oauth-mcp-servers'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
-import {
-  buildMonitoringToolOutput,
-  type ToolExecutionObserver,
-} from '../../../monitoring/observer'
 import { klavisStrataCache } from './strata-cache'
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -241,7 +237,6 @@ export function buildKlavisToolSet(handle: KlavisProxyHandle): ToolSet {
 export function registerKlavisTools(
   mcpServer: McpServer,
   handle: KlavisProxyHandle,
-  observer?: ToolExecutionObserver,
 ): void {
   mcpServer.registerTool(
     'connector_mcp_servers',
@@ -252,18 +247,9 @@ export function registerKlavisTools(
     },
     async (args: Record<string, unknown>) => {
       const startTime = performance.now()
-      const toolCallId = crypto.randomUUID()
       const server_name = args.server_name as string
 
       try {
-        await observer?.onToolStart({
-          toolCallId,
-          toolName: 'connector_mcp_servers',
-          toolDescription:
-            'Check whether an external connector is connected and ready for use.',
-          source: 'klavis-tool',
-          args,
-        })
         const klavisClient = new KlavisClient()
         const integrations = await klavisClient.getUserIntegrations(
           handle.browserosId,
@@ -278,14 +264,6 @@ export function registerKlavisTools(
             source: 'mcp',
             duration_ms: Math.round(performance.now() - startTime),
             success: true,
-          })
-
-          await observer?.onToolEnd({
-            toolCallId,
-            output: {
-              connected: true,
-              server_name,
-            },
           })
 
           return {
@@ -316,15 +294,6 @@ export function registerKlavisTools(
           success: true,
         })
 
-        await observer?.onToolEnd({
-          toolCallId,
-          output: {
-            connected: false,
-            server_name,
-            authUrl,
-          },
-        })
-
         return {
           content: [
             {
@@ -351,11 +320,6 @@ export function registerKlavisTools(
           error_message: errorText,
         })
 
-        await observer?.onToolEnd({
-          toolCallId,
-          error: errorText,
-        })
-
         return {
           content: [{ type: 'text' as const, text: errorText }],
           isError: true,
@@ -375,15 +339,7 @@ export function registerKlavisTools(
       },
       async (args: Record<string, unknown>) => {
         const startTime = performance.now()
-        const toolCallId = crypto.randomUUID()
         try {
-          await observer?.onToolStart({
-            toolCallId,
-            toolName: tool.name,
-            toolDescription: tool.description ?? undefined,
-            source: 'klavis-tool',
-            args,
-          })
           const result = await handle.callTool(tool.name, args)
 
           metrics.log('tool_executed', {
@@ -391,12 +347,6 @@ export function registerKlavisTools(
             source: 'mcp',
             duration_ms: Math.round(performance.now() - startTime),
             success: !result.isError,
-          })
-
-          await observer?.onToolEnd({
-            toolCallId,
-            output: buildMonitoringToolOutput(result),
-            error: result.isError ? 'Tool returned isError=true' : undefined,
           })
 
           return result
@@ -410,11 +360,6 @@ export function registerKlavisTools(
             duration_ms: Math.round(performance.now() - startTime),
             success: false,
             error_message: errorText,
-          })
-
-          await observer?.onToolEnd({
-            toolCallId,
-            error: errorText,
           })
 
           return {

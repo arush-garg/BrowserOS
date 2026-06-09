@@ -77,8 +77,6 @@ func TestResetOverviewTellsUserToUseSmallestReset(t *testing.T) {
 		"/Users/me/.browseros-dev",
 		"Stop VM",
 		"Delete VM",
-		"Remove OpenClaw container",
-		"Remove OpenClaw image",
 		"Delete dev profile",
 	} {
 		if !strings.Contains(text, want) {

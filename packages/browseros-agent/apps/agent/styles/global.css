@@ -221,37 +221,6 @@
     background-clip: padding-box;
   }
 
-  .agent-terminal-shell .xterm {
-    height: 100%;
-  }
-
-  .agent-terminal-shell .xterm-viewport {
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-    scrollbar-color: oklch(from var(--border) l c h / 0.45) transparent;
-  }
-
-  .agent-terminal-shell .xterm-viewport::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  .agent-terminal-shell .xterm-viewport::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .agent-terminal-shell .xterm-viewport::-webkit-scrollbar-thumb {
-    background: oklch(from var(--border) l c h / 0.45);
-    border: 2px solid transparent;
-    border-radius: 999px;
-    background-clip: padding-box;
-  }
-
-  .agent-terminal-shell .xterm-viewport::-webkit-scrollbar-thumb:hover {
-    background: oklch(from var(--border) l c h / 0.7);
-    background-clip: padding-box;
-  }
-
   /* Custom animation keyframes for minimal, elegant hero animations */
   @keyframes float {
     0%,

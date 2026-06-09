@@ -3,10 +3,17 @@ import assert from 'node:assert'
 import { existsSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { get_dom, search_dom } from '../../src/tools/dom'
-import { close_page, new_page } from '../../src/tools/navigation'
-import { evaluate_script } from '../../src/tools/snapshot'
-import { withBrowser } from '../__helpers__/with-browser'
+import {
+  type WithBrowserContext,
+  withBrowser,
+} from '../__helpers__/with-browser'
+import {
+  close_page,
+  evaluate_script,
+  get_dom,
+  new_page,
+  search_dom,
+} from './browser/helpers'
 
 function textOf(result: {
   content: { type: string; text?: string }[]
@@ -77,13 +84,33 @@ function cleanupSavedDom(domPath: string): void {
   } catch {}
 }
 
-// ── get_dom ──
+/** Opens the shared DOM fixture after its static form controls are queryable. */
+async function openRichPage(
+  execute: WithBrowserContext['execute'],
+): Promise<number> {
+  const newResult = await execute(new_page, { url: RICH_PAGE })
+  const pageId = pageIdOf(newResult)
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const readyResult = await execute(evaluate_script, {
+      page: pageId,
+      expression:
+        "document.readyState !== 'loading' && Boolean(document.querySelector('#submit-btn[data-testid=\"login-submit\"]')) ? 'ready' : document.readyState",
+    })
+    if (!readyResult.isError && textOf(readyResult) === 'ready') {
+      return pageId
+    }
+    await Bun.sleep(50)
+  }
+
+  await execute(close_page, { page: pageId })
+  assert.fail('Rich DOM fixture did not become queryable')
+}
 
 describe('get_dom', () => {
   it('returns full page HTML', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
       let domPath: string | undefined
 
       try {
@@ -95,7 +122,9 @@ describe('get_dom', () => {
         assert.ok(textOf(result).includes('Saved DOM'))
         assert.ok(existsSync(domPath), 'Saved DOM file should exist')
         assert.ok(
-          dirname(domPath).startsWith(join(tmpdir(), 'browseros-tool-output-')),
+          dirname(domPath).startsWith(
+            join(tmpdir(), 'browseros-browser-tool-'),
+          ),
           'Saved DOM file should be written to an OS temp directory',
         )
         assert.ok(html.includes('<html'), 'Should contain <html> tag')
@@ -121,8 +150,7 @@ describe('get_dom', () => {
 
   it('scopes to a CSS selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
       let domPath: string | undefined
 
       try {
@@ -158,8 +186,7 @@ describe('get_dom', () => {
 
   it('scopes to a nested CSS selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
       let domPath: string | undefined
 
       try {
@@ -184,8 +211,7 @@ describe('get_dom', () => {
 
   it('returns error for non-matching selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(get_dom, {
         page: pageId,
@@ -250,7 +276,9 @@ describe('get_dom', () => {
 
         assert.ok(textOf(result).includes('Saved DOM'))
         assert.ok(
-          dirname(domPath).startsWith(join(tmpdir(), 'browseros-tool-output-')),
+          dirname(domPath).startsWith(
+            join(tmpdir(), 'browseros-browser-tool-'),
+          ),
           'Saved DOM file should be written to an OS temp directory',
         )
         assert.ok(data.totalLength > 100_000, 'Expected a large DOM payload')
@@ -268,8 +296,7 @@ describe('get_dom', () => {
 
   it('preserves element attributes in output', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
       let domPath: string | undefined
 
       try {
@@ -298,13 +325,10 @@ describe('get_dom', () => {
   }, 60_000)
 })
 
-// ── search_dom ──
-
 describe('search_dom', () => {
   it('finds elements by plain text', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -331,8 +355,7 @@ describe('search_dom', () => {
 
   it('finds elements by CSS selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -353,8 +376,7 @@ describe('search_dom', () => {
 
   it('finds elements by XPath', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -371,8 +393,7 @@ describe('search_dom', () => {
 
   it('finds multiple elements with CSS class selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -388,8 +409,7 @@ describe('search_dom', () => {
 
   it('finds elements by ID selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -410,8 +430,7 @@ describe('search_dom', () => {
 
   it('returns no-match message for non-existent content', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -429,8 +448,7 @@ describe('search_dom', () => {
 
   it('respects limit parameter', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -440,14 +458,12 @@ describe('search_dom', () => {
       assert.ok(!result.isError, textOf(result))
       const text = textOf(result)
 
-      // Should show the total count but limit actual results
       const nodeIdCount = (text.match(/nodeId:/g) || []).length
       assert.ok(
         nodeIdCount <= 2,
         `Expected at most 2 results, got ${nodeIdCount}`,
       )
 
-      // Should mention there are more matches available
       assert.ok(
         text.includes('Showing 2 of 3') || text.includes('Found 3'),
         'Should indicate total matches or show pagination note',
@@ -459,8 +475,7 @@ describe('search_dom', () => {
 
   it('returns element attributes in search results', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -514,8 +529,7 @@ describe('search_dom', () => {
 
   it('finds elements using attribute selector', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -532,8 +546,7 @@ describe('search_dom', () => {
 
   it('finds text across multiple elements', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -541,7 +554,6 @@ describe('search_dom', () => {
       })
       assert.ok(!result.isError, textOf(result))
       const text = textOf(result)
-      // "Feature" appears as text in 3 list items, plus potentially h2 and section
       const matchCount = text.match(/Found (\d+)/)?.[1]
       assert.ok(
         matchCount && Number(matchCount) >= 3,
@@ -554,8 +566,7 @@ describe('search_dom', () => {
 
   it('includes nodeId in search results for element reference', async () => {
     await withBrowser(async ({ execute }) => {
-      const newResult = await execute(new_page, { url: RICH_PAGE })
-      const pageId = pageIdOf(newResult)
+      const pageId = await openRichPage(execute)
 
       const result = await execute(search_dom, {
         page: pageId,
@@ -588,7 +599,6 @@ describe('search_dom', () => {
         page: pageId,
         query: 'anything',
       })
-      // Should either return no matches or handle gracefully
       assert.ok(!result.isError, 'Empty page search should not throw error')
       assert.ok(
         textOf(result).includes('No elements matching'),
