@@ -23,6 +23,7 @@ import { logger } from '../logger'
 import { prepareAcpxAgentContext } from './acpx-agent-adapter'
 import {
   resolveAgentRuntimePaths,
+  shellQuote,
   wrapCommandWithEnv,
 } from './acpx-runtime-context'
 import { loadLatestRuntimeState } from './acpx-runtime-state'
@@ -35,7 +36,11 @@ import {
   type OpenclawGatewayAccessor,
   resolveOpenclawAcpCommand,
 } from './openclaw/acp-command'
-import { getHermesRuntime } from './runtime'
+import {
+  getHermesRuntime,
+  HERMES_MODEL_COMMAND_ENV,
+  resolveHermesHostBinary,
+} from './runtime'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -63,6 +68,8 @@ type AcpxRuntimeOptions = {
    */
   openclawGateway?: OpenclawGatewayAccessor
   runtimeFactory?: (options: AcpRuntimeOptions) => AcpxCoreRuntime
+  /** Base delay (ms) for turn-level retry backoff. Defaults to 1 000 ms. Override to 0 in tests. */
+  retryDelayMs?: number
 }
 
 interface PreparedRuntimeContext {
@@ -76,6 +83,20 @@ interface PreparedRuntimeContext {
   openclawSessionKey: string | null
 }
 
+const MAX_RETRIES = 3
+const RETRY_BASE_DELAY_MS = 1_000
+
+function retryDelay(attempt: number, baseMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, baseMs * 2 ** attempt))
+}
+
+function isTransientError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|connection reset|connection refused|network error|fetch failed/i.test(
+    msg,
+  )
+}
+
 export class AcpxRuntime implements AgentRuntime {
   private readonly defaultCwd: string | null
   private readonly browserosDir: string
@@ -87,6 +108,7 @@ export class AcpxRuntime implements AgentRuntime {
   ) => AcpxCoreRuntime
   private readonly sessionStore: ReturnType<typeof createRuntimeStore>
   private readonly runtimes = new Map<string, AcpxCoreRuntime>()
+  private readonly retryDelayMs: number
 
   constructor(options: AcpxRuntimeOptions = {}) {
     this.defaultCwd = options.cwd ?? null
@@ -100,6 +122,7 @@ export class AcpxRuntime implements AgentRuntime {
     this.openclawGateway = options.openclawGateway ?? null
     this.sessionStore = createRuntimeStore({ stateDir: this.stateDir })
     this.runtimeFactory = options.runtimeFactory ?? createAcpRuntime
+    this.retryDelayMs = options.retryDelayMs ?? RETRY_BASE_DELAY_MS
   }
 
   async status(): Promise<AgentStatus> {
@@ -190,6 +213,7 @@ export class AcpxRuntime implements AgentRuntime {
       cwd,
       runtimeSessionKey: prepared.runtimeSessionKey,
       runPrompt: prepared.runPrompt,
+      retryDelayMs: this.retryDelayMs,
     })
   }
 
@@ -573,86 +597,118 @@ function createAcpxEventStream(
     cwd: string
     runtimeSessionKey: string
     runPrompt: string
+    retryDelayMs: number
   },
 ): ReadableStream<AgentStreamEvent> {
   let activeTurn: AcpRuntimeTurn | null = null
+  let cancelled = false
+  let hasOutputStarted = false
 
   return new ReadableStream<AgentStreamEvent>({
     start(controller) {
-      const run = async () => {
-        const handle = await runtime.ensureSession({
-          sessionKey: prepared.runtimeSessionKey,
-          agent: input.agent.adapter,
-          mode: 'persistent',
-          cwd: prepared.cwd,
-        })
-        logger.info('Agent harness acpx session ensured', {
-          agentId: input.agent.id,
-          adapter: input.agent.adapter,
-          sessionKey: prepared.runtimeSessionKey,
-          browserosSessionKey: input.sessionKey,
-          backendSessionId: handle.backendSessionId,
-          agentSessionId: handle.agentSessionId,
-          acpxRecordId: handle.acpxRecordId,
-          cwd: prepared.cwd,
-        })
+      const attemptRun = async (attempt: number): Promise<void> => {
+        try {
+          const handle = await runtime.ensureSession({
+            sessionKey: prepared.runtimeSessionKey,
+            agent: input.agent.adapter,
+            mode: 'persistent',
+            cwd: prepared.cwd,
+          })
+          logger.info('Agent harness acpx session ensured', {
+            agentId: input.agent.id,
+            adapter: input.agent.adapter,
+            sessionKey: prepared.runtimeSessionKey,
+            browserosSessionKey: input.sessionKey,
+            backendSessionId: handle.backendSessionId,
+            agentSessionId: handle.agentSessionId,
+            acpxRecordId: handle.acpxRecordId,
+            cwd: prepared.cwd,
+          })
 
-        for (const event of await applyRuntimeControls(
-          runtime,
-          handle,
-          input,
-        )) {
-          controller.enqueue(event)
-        }
+          for (const event of await applyRuntimeControls(
+            runtime,
+            handle,
+            input,
+          )) {
+            controller.enqueue(event)
+          }
 
-        const turn = runtime.startTurn({
-          handle,
-          text: prepared.runPrompt,
-          // Image attachments travel as ACP `image` content blocks
-          // alongside the text prompt. acpx's `toPromptInput` builds
-          // the multi-part `prompt` array directly from this list.
-          attachments:
-            input.attachments && input.attachments.length > 0
-              ? input.attachments.map((image) => ({
-                  mediaType: image.mediaType,
-                  data: image.data,
-                }))
-              : undefined,
-          mode: 'prompt',
-          requestId: crypto.randomUUID(),
-          timeoutMs: input.timeoutMs,
-          signal: input.signal,
-        })
-        activeTurn = turn
-        for await (const event of turn.events) {
-          controller.enqueue(mapRuntimeEvent(event))
+          const turn = runtime.startTurn({
+            handle,
+            text: prepared.runPrompt,
+            // Image attachments travel as ACP `image` content blocks
+            // alongside the text prompt. acpx's `toPromptInput` builds
+            // the multi-part `prompt` array directly from this list.
+            attachments:
+              input.attachments && input.attachments.length > 0
+                ? input.attachments.map((image) => ({
+                    mediaType: image.mediaType,
+                    data: image.data,
+                  }))
+                : undefined,
+            mode: 'prompt',
+            requestId: crypto.randomUUID(),
+            timeoutMs: input.timeoutMs,
+            signal: input.signal,
+          })
+          activeTurn = turn
+          for await (const event of turn.events) {
+            const mapped = mapRuntimeEvent(event)
+            if (mapped.type === 'text_delta') hasOutputStarted = true
+            controller.enqueue(mapped)
+          }
+          controller.enqueue(mapTurnResult(await turn.result))
+          logger.info('Agent harness acpx turn completed', {
+            agentId: input.agent.id,
+            adapter: input.agent.adapter,
+            sessionKey: prepared.runtimeSessionKey,
+            browserosSessionKey: input.sessionKey,
+          })
+          controller.close()
+        } catch (err) {
+          if (
+            !cancelled &&
+            !hasOutputStarted &&
+            attempt < MAX_RETRIES &&
+            isTransientError(err)
+          ) {
+            logger.warn('Agent harness acpx transient error, retrying', {
+              agentId: input.agent.id,
+              adapter: input.agent.adapter,
+              sessionKey: prepared.runtimeSessionKey,
+              attempt: attempt + 1,
+              maxRetries: MAX_RETRIES,
+              error: err instanceof Error ? err.message : String(err),
+            })
+            controller.enqueue({
+              type: 'status',
+              text: `Connection error, retrying (${attempt + 1}/${MAX_RETRIES})…`,
+            })
+            activeTurn = null
+            await retryDelay(attempt, prepared.retryDelayMs)
+            if (!cancelled) return attemptRun(attempt + 1)
+            controller.close()
+            return
+          }
+          logger.error('Agent harness acpx turn failed', {
+            agentId: input.agent.id,
+            adapter: input.agent.adapter,
+            sessionKey: prepared.runtimeSessionKey,
+            browserosSessionKey: input.sessionKey,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          controller.enqueue({
+            type: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          })
+          controller.close()
         }
-        controller.enqueue(mapTurnResult(await turn.result))
-        logger.info('Agent harness acpx turn completed', {
-          agentId: input.agent.id,
-          adapter: input.agent.adapter,
-          sessionKey: prepared.runtimeSessionKey,
-          browserosSessionKey: input.sessionKey,
-        })
-        controller.close()
       }
 
-      void run().catch((err) => {
-        logger.error('Agent harness acpx turn failed', {
-          agentId: input.agent.id,
-          adapter: input.agent.adapter,
-          sessionKey: prepared.runtimeSessionKey,
-          browserosSessionKey: input.sessionKey,
-          error: err instanceof Error ? err.message : String(err),
-        })
-        controller.enqueue({
-          type: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        })
-        controller.close()
-      })
+      void attemptRun(0)
     },
     cancel() {
+      cancelled = true
       void activeTurn?.cancel({ reason: 'BrowserOS stream cancelled' })
     },
   })
@@ -705,9 +761,21 @@ function createBrowserosAgentRegistry(input: {
         const runtime = getHermesRuntime()
         if (runtime)
           return runtime.buildExecArgv(runtime.getAcpExecSpec(input.commandEnv))
-        // No runtime registered (tests, dev fallback, non-darwin) →
-        // host-process spawn of the bare hermes binary.
-        return wrapCommandWithEnv('hermes acp', input.commandEnv)
+        // Host mode: spawn the user's local `hermes acp`, which reads
+        // ~/.hermes for providers/auth. The selected model arrives via a
+        // commandEnv sentinel — pop it off (so it's not exported as a real
+        // env var) and pass it as a `-m <model>` launch flag instead.
+        const { [HERMES_MODEL_COMMAND_ENV]: model, ...rest } = input.commandEnv
+        // PYTHONUNBUFFERED is required: hermes is a Python process and acpx
+        // speaks ndjson JSON-RPC over its stdout. Without it, Python block-
+        // buffers stdout, acpx never sees the responses, and the turn hangs
+        // forever. The container path sets this too (getAcpExecSpec).
+        const env = { ...rest, PYTHONUNBUFFERED: '1' }
+        const bin = resolveHermesHostBinary()
+        const command = model
+          ? `${bin} -m ${shellQuote(model)} acp`
+          : `${bin} acp`
+        return wrapCommandWithEnv(command, env)
       }
 
       if (lower === 'claude' || lower === 'codex') {
@@ -903,3 +971,5 @@ function mapTurnResult(result: AcpRuntimeTurnResult): AgentStreamEvent {
     }
   }
 }
+
+// Sat Jun  6 19:10:05 PDT 2026

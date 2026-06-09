@@ -18,6 +18,7 @@ import {
   getAgentRuntimeRegistry,
   getHermesRuntime,
   HermesContainerRuntime,
+  HermesHostRuntime,
   resetAgentRuntimeRegistry,
   startHermesRuntimeBestEffort,
 } from '../../../../src/lib/agents/runtime'
@@ -253,6 +254,37 @@ describe('HermesContainerRuntime', () => {
   })
 
   describe('startHermesRuntimeBestEffort', () => {
+    // Host is the default mode; these tests exercise the bundled-container
+    // path, so opt into it explicitly and restore afterwards.
+    let originalMode: string | undefined
+    beforeEach(() => {
+      originalMode = process.env.BROWSEROS_HERMES_RUNTIME
+      process.env.BROWSEROS_HERMES_RUNTIME = 'container'
+    })
+    afterEach(() => {
+      if (originalMode === undefined)
+        delete process.env.BROWSEROS_HERMES_RUNTIME
+      else process.env.BROWSEROS_HERMES_RUNTIME = originalMode
+    })
+
+    it('registers a host-process runtime in host mode (default) without the container configure', () => {
+      delete process.env.BROWSEROS_HERMES_RUNTIME
+      let containerConfigured = false
+      const result = startHermesRuntimeBestEffort({
+        browserosDir: mkTempDir(),
+        configureRuntime: () => {
+          containerConfigured = true
+          return {} as HermesContainerRuntime
+        },
+      })
+      expect(containerConfigured).toBe(false)
+      expect(result).toBeInstanceOf(HermesHostRuntime)
+      // host runtime is registered for health, but it is NOT the container
+      // runtime that gates the host-vs-container behavior.
+      expect(getHermesRuntime()).toBeNull()
+      expect(getAgentRuntimeRegistry().get('hermes')).toBe(result)
+    })
+
     it('configures Hermes and schedules install + start actions', async () => {
       const actions: RuntimeAction[] = []
       const runtime = {

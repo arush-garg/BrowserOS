@@ -105,6 +105,15 @@ const VERB_OVERRIDES: Record<string, string> = {
   subagent_spawn: 'Launched subagent',
   subagent_get_result: 'Fetched subagent result',
   run_app_script: 'Ran Apps Script',
+
+  // Google Workspace
+  read_google_doc: 'Read Google Doc',
+  read_google_sheet: 'Read Google Sheet',
+  read_google_slides: 'Read Google Slides',
+  edit_google_doc: 'Edited Google Doc',
+  edit_google_sheet: 'Edited Google Sheet',
+  edit_google_slides: 'Edited Google Slides',
+  extract_google_app_content: 'Extracted Google app content',
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -282,6 +291,15 @@ const SUBJECT_EXTRACTORS: Record<string, SubjectExtractor> = {
   },
   subagent_get_result: (i) => asString(i.jobId),
   run_app_script: (i) => asString(i.app) || 'Apps Script',
+
+  // Google Workspace
+  read_google_doc: (i) => asString(i.documentId),
+  read_google_sheet: (i) => asString(i.spreadsheetId),
+  read_google_slides: (i) => asString(i.presentationId),
+  edit_google_doc: (i) => asString(i.documentId),
+  edit_google_sheet: (i) => asString(i.spreadsheetId),
+  edit_google_slides: (i) => asString(i.presentationId),
+
   web_fetch: (i) => {
     const query = quote(stringField(i, 'query', 'q'))
     const n = i.n

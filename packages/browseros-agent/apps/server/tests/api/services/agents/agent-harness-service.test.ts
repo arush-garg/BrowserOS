@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -471,6 +471,34 @@ describe('AgentHarnessService', () => {
     })
   })
 
+  it('creates host-mode Hermes with no provider/key and writes no config files', async () => {
+    const originalMode = process.env.BROWSEROS_HERMES_RUNTIME
+    delete process.env.BROWSEROS_HERMES_RUNTIME
+    const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-host-'))
+    try {
+      const agents: AgentDefinition[] = []
+      const service = new AgentHarnessService({
+        agentStore: createAgentStore(agents) as AgentStore,
+        browserosDir,
+        runtime: stubRuntime(),
+      })
+      const agent = await service.createAgent({
+        name: 'Hermes bot',
+        adapter: 'hermes',
+        modelId: 'claude-opus-4-5',
+      })
+      expect(agent.adapter).toBe('hermes')
+      expect(
+        existsSync(join(browserosDir, 'vm', 'hermes', 'harness', agent.id)),
+      ).toBe(false)
+    } finally {
+      if (originalMode === undefined)
+        delete process.env.BROWSEROS_HERMES_RUNTIME
+      else process.env.BROWSEROS_HERMES_RUNTIME = originalMode
+      await rm(browserosDir, { recursive: true, force: true })
+    }
+  })
+
   it('rejects Hermes agent creation when apiKey is missing', async () => {
     await withHermesBrowserosDir(async ({ agents, service }) => {
       await expect(
@@ -607,6 +635,11 @@ async function withHermesBrowserosDir<T>(
 ): Promise<T> {
   const browserosDir = mkdtempSync(join(tmpdir(), 'browseros-hermes-test-'))
   const agents: AgentDefinition[] = []
+  // These tests cover the bundled-container provider flow (config.yaml/.env
+  // + validation). Host mode — the default — intentionally skips both, so
+  // opt into container mode here.
+  const originalMode = process.env.BROWSEROS_HERMES_RUNTIME
+  process.env.BROWSEROS_HERMES_RUNTIME = 'container'
   try {
     const service = new AgentHarnessService({
       agentStore: createAgentStore(agents) as AgentStore,
@@ -615,6 +648,8 @@ async function withHermesBrowserosDir<T>(
     })
     return await run({ agents, browserosDir, service })
   } finally {
+    if (originalMode === undefined) delete process.env.BROWSEROS_HERMES_RUNTIME
+    else process.env.BROWSEROS_HERMES_RUNTIME = originalMode
     await rm(browserosDir, { recursive: true, force: true })
   }
 }

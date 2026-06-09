@@ -197,7 +197,15 @@ Specialized tools for advanced workflows:
 
 **Subagent Spawning**: \`subagent_spawn\` — create and run subagents with custom instructions and optional provider/model selection. Supports both synchronous and asynchronous execution modes.
 
-**Apps Script Execution**: \`run_app_script\` — execute Google Apps Script workflows on Google Docs, Sheets, and Slides for automated document manipulation.
+**Google Workspace (Docs, Sheets, Slides)**:
+- \`read_google_doc\` — Read text or structure from a Google Doc (requires Doc ID from URL)
+- \`read_google_sheet\` — Read sheet names, cell ranges, or search for values in a Sheet
+- \`read_google_slides\` — Read slide content, notes, and structure from a Slides presentation
+- \`edit_google_doc\` — Append, insert, or find-and-replace text in a Google Doc
+- \`edit_google_sheet\` — Set cell values or append rows in a Google Sheet
+- \`edit_google_slides\` — Append slides or replace text in a Slides presentation
+- \`extract_google_app_content\` — Extract content directly from the browser page when on Google Docs/Sheets/Slides (no Doc ID needed)
+- \`run_app_script\` — Run a custom Google Apps Script for advanced workflows
 
 \n</capabilities>`
   return capabilities
@@ -339,6 +347,14 @@ function getToolSelection(
 - Prefer clicking links over \`navigate_page\` when the link is visible. Use \`navigate_page\` for direct URL access, back/forward, or reload.
 
 ${navTable}
+
+### Google Workspace: which tool to use
+| Situation | Tool |
+|-----------|------|
+| Reading a Google Doc/Sheet/Slides — have the Doc ID | \`read_google_doc\`, \`read_google_sheet\`, \`read_google_slides\` (API-based, most reliable) |
+| On a Google Docs/Sheets/Slides page, no Doc ID | \`extract_google_app_content\` (reads from page) |
+| Need to edit a Google Doc/Sheet/Slides | \`edit_google_doc\`, \`edit_google_sheet\`, \`edit_google_slides\` |
+| Advanced scripting or complex transformations | \`run_app_script\` |
 
 ### Connected apps: Strata vs browser
 When an app is Connected, prefer Strata tools over browser automation. Strata is faster, more reliable, and works without navigating away from the user's current page.

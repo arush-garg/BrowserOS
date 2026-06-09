@@ -8,6 +8,7 @@ import {
 } from './bookmarks'
 import { browseros_info } from './browseros-info'
 import { get_console_logs } from './console'
+import { extract_google_app_content } from './custom/extract-google-app'
 import { get_dom, search_dom } from './dom'
 import {
   delete_history_range,
@@ -85,7 +86,7 @@ export const registry = createRegistry([
   close_page,
   // wait_for, // temporarily disabled
 
-  // Observation (9)
+  // Observation (10)
   take_snapshot,
   take_enhanced_snapshot,
   get_page_content,
@@ -95,6 +96,7 @@ export const registry = createRegistry([
   take_screenshot,
   evaluate_script,
   get_console_logs,
+  extract_google_app_content,
 
   // Input (17)
   click,

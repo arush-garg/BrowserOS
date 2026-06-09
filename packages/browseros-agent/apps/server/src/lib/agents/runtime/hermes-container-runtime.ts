@@ -41,16 +41,124 @@ import {
   finishBrowserosManagedContext,
   prepareBrowserosManagedContext,
 } from '../acpx-agent-common'
+import { resolveAgentRuntimePaths } from '../acpx-runtime-context'
 import {
   getHermesAgentHomeHostDir,
   getHermesHarnessHostDir,
   getHermesHostStateDir,
 } from '../hermes/hermes-paths'
 import { ContainerAgentRuntime } from './container-agent-runtime'
+import { HostProcessAgentRuntime } from './host-process-agent-runtime'
 import { getAgentRuntimeRegistry } from './registry'
-import type { ExecSpec } from './types'
+import type { ExecSpec, RuntimeDescriptor } from './types'
 
 const HERMES_BINARY = '/opt/hermes/.venv/bin/hermes'
+
+/**
+ * Carries the BrowserOS-selected model from `prepareHermesContext`
+ * (which has the agent) to the agent-registry `resolve()` (which only
+ * sees `commandEnv`). In host mode the resolver pops this key off and
+ * turns it into a `hermes -m <model>` launch flag; it is never passed to
+ * the process as an actual environment variable. Including it in
+ * `commandEnv` also makes the runtime cache key model-specific.
+ */
+export const HERMES_MODEL_COMMAND_ENV = 'BROWSEROS_HERMES_MODEL'
+
+export type HermesRuntimeMode = 'host' | 'container'
+
+/**
+ * How BrowserOS runs Hermes:
+ * - `host` (default): spawn the user's local `hermes acp` binary, which
+ *   reads `~/.hermes` for providers/auth/config. Multiple chats run as
+ *   separate processes/sessions and never touch a bundled container.
+ * - `container`: the bundled, version-pinned Hermes image (Darwin + Lima).
+ *
+ * Override with `BROWSEROS_HERMES_RUNTIME=container`.
+ */
+export function resolveHermesRuntimeMode(): HermesRuntimeMode {
+  return process.env.BROWSEROS_HERMES_RUNTIME === 'container'
+    ? 'container'
+    : 'host'
+}
+
+/**
+ * The local `hermes` binary to spawn in host mode. Defaults to `hermes`
+ * (resolved via PATH); override with `BROWSEROS_HERMES_BIN` when the
+ * binary lives outside the server process PATH (e.g. `~/.local/bin`).
+ */
+export function resolveHermesHostBinary(): string {
+  const override = process.env.BROWSEROS_HERMES_BIN?.trim()
+  return override || 'hermes'
+}
+
+/**
+ * Host-process Hermes runtime. Registered in host mode purely so the
+ * `/adapters` health route can probe the local `hermes` binary (like
+ * Claude/Codex). The actual ACP launch command is built in
+ * `acpx-runtime`'s registry resolver, not here — this class only owns
+ * health/lifecycle. `getHermesRuntime()` deliberately ignores it (it
+ * matches only the container runtime), so host vs container stays keyed
+ * on the container's presence.
+ */
+export class HermesHostRuntime extends HostProcessAgentRuntime {
+  readonly descriptor: RuntimeDescriptor & { kind: 'host-process' } = {
+    adapterId: 'hermes',
+    displayName: 'Hermes',
+    kind: 'host-process',
+    platforms: ['darwin', 'linux'],
+  }
+
+  private readonly browserosDir: string
+
+  constructor(
+    deps: ConstructorParameters<typeof HostProcessAgentRuntime>[0],
+    config: { browserosDir: string },
+  ) {
+    super(deps)
+    this.browserosDir = config.browserosDir
+  }
+
+  getPerAgentHomeDir(agentId: string): string {
+    return resolveAgentRuntimePaths({
+      browserosDir: this.browserosDir,
+      agentId,
+    }).agentHome
+  }
+
+  prepareTurnContext(
+    input: PrepareAcpxAgentContextInput,
+  ): Promise<PreparedAcpxAgentContext> {
+    return prepareHermesContext(input)
+  }
+}
+
+export interface ConfigureHermesHostRuntimeOptions {
+  browserosDir?: string
+}
+
+/**
+ * Registers the host-process Hermes runtime (for adapter health).
+ * Idempotent: returns the existing registration if one is already
+ * present, so repeated startup calls don't trip the registry's
+ * duplicate guard.
+ */
+export function configureHermesHostRuntime(
+  options: ConfigureHermesHostRuntimeOptions = {},
+): HermesHostRuntime {
+  const registry = getAgentRuntimeRegistry()
+  const existing = registry.get('hermes')
+  if (existing instanceof HermesHostRuntime) return existing
+
+  const runtime = new HermesHostRuntime(
+    { binaryName: resolveHermesHostBinary() },
+    { browserosDir: options.browserosDir ?? getBrowserosDir() },
+  )
+  registry.register(runtime)
+  logger.debug('HermesHostRuntime registered', {
+    binary: resolveHermesHostBinary(),
+  })
+  return runtime
+}
 
 export interface HermesContainerRuntimeConfig {
   /** Host-side directory where Hermes per-agent home dirs live. */
@@ -215,6 +323,24 @@ export async function prepareHermesContext(
 ): Promise<PreparedAcpxAgentContext> {
   const common = await prepareBrowserosManagedContext(input)
 
+  // Host mode: no bundled container is registered. Let the local hermes
+  // binary use ~/.hermes (providers/auth/config) — no per-agent
+  // HERMES_HOME, no config.yaml/.env. The chosen model rides through
+  // commandEnv as a sentinel that the resolver turns into `-m <model>`.
+  // The MCP endpoint is on the host, so reach it via 127.0.0.1.
+  if (getHermesRuntime() === null) {
+    const commandEnv: Record<string, string> = {}
+    const model = input.agent.modelId?.trim()
+    if (model && model !== 'default') {
+      commandEnv[HERMES_MODEL_COMMAND_ENV] = model
+    }
+    return finishBrowserosManagedContext({
+      ...common,
+      commandEnv,
+      browserosMcpHost: '127.0.0.1',
+    })
+  }
+
   // Hermes-specific home lives under vm/ so it's reachable inside the
   // Lima VM; the shared `common.paths.agentHome` (under agents/harness)
   // is OUTSIDE the VM mount and would not be visible to nerdctl.
@@ -328,12 +454,24 @@ export function configureHermesRuntime(
  */
 export function startHermesRuntimeBestEffort(
   options: StartHermesRuntimeBestEffortOptions = {},
-): HermesContainerRuntime | null {
+): HermesContainerRuntime | HermesHostRuntime | null {
   const {
     configureRuntime = configureHermesRuntime,
     onError = logHermesStartupError,
     ...configureOptions
   } = options
+
+  if (resolveHermesRuntimeMode() === 'host') {
+    logger.info(
+      'Hermes runs in host mode (local hermes binary + ~/.hermes); skipping bundled container',
+    )
+    try {
+      return configureHermesHostRuntime(configureOptions)
+    } catch (err) {
+      onError('configure', err)
+      return null
+    }
+  }
 
   let runtime: HermesContainerRuntime | null
   try {

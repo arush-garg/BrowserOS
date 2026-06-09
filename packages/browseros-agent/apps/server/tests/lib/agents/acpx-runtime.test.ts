@@ -1056,16 +1056,54 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
 
     const command =
       getCreateRuntimeOptions(calls).agentRegistry.resolve('hermes')
-    // Host-process fallback: bare `hermes acp` with HERMES_HOME injected
-    // via wrapCommandWithEnv. No limactl/nerdctl chain — used by tests
-    // and as a defensive escape hatch when the container service hasn't
-    // been wired yet.
+    // Host mode (no container runtime registered): spawn the local
+    // `hermes acp` against ~/.hermes — no HERMES_HOME, no limactl/nerdctl
+    // chain, and no model flag when the agent has no model selected.
     expect(command).toContain('hermes acp')
-    expect(command).toContain('env HERMES_HOME=')
+    expect(command).not.toContain('HERMES_HOME')
+    expect(command).not.toContain('-m ')
     expect(command).not.toContain('limactl')
     expect(command).not.toContain('nerdctl')
     expect(command).not.toContain('bash -c')
     expect(command).not.toContain('tee /dev/null')
+  })
+
+  it('passes the selected model to host-mode `hermes` as a -m launch flag', async () => {
+    const browserosDir = await mkdtemp(
+      join(tmpdir(), 'browseros-acpx-browseros-'),
+    )
+    const stateDir = await mkdtemp(join(tmpdir(), 'browseros-acpx-state-'))
+    tempDirs.push(browserosDir, stateDir)
+    const calls: Array<{ method: string; input: unknown }> = []
+    const runtime = new AcpxRuntime({
+      browserosDir,
+      stateDir,
+      runtimeFactory: (options) => {
+        calls.push({ method: 'createRuntime', input: options })
+        return createFakeAcpRuntime(calls)
+      },
+    })
+    const agent = makeAgent({
+      id: 'agent-1',
+      adapter: 'hermes',
+      modelId: 'claude-opus-4-5',
+    })
+
+    await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hi',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    const command =
+      getCreateRuntimeOptions(calls).agentRegistry.resolve('hermes')
+    expect(command).toContain("hermes -m 'claude-opus-4-5' acp")
+    // The model rides in via commandEnv but must not leak as a real env var.
+    expect(command).not.toContain('BROWSEROS_HERMES_MODEL')
   })
 
   it('does not reuse an Acpx runtime across different command identities', async () => {
@@ -1313,6 +1351,151 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     ])
   })
 
+  it('retries on a transient network error before any text output', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    let ensureSessionCalls = 0
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      retryDelayMs: 0,
+      runtimeFactory: () => ({
+        ...createFakeAcpRuntime(calls),
+        async ensureSession(input) {
+          calls.push({ method: 'ensureSession', input })
+          ensureSessionCalls++
+          if (ensureSessionCalls === 1) {
+            throw new Error('connect ECONNRESET')
+          }
+          return {
+            sessionKey: input.sessionKey,
+            backend: 'acpx' as const,
+            runtimeSessionName: 'encoded-runtime-state',
+            cwd: input.cwd,
+            acpxRecordId: 'record-1',
+          }
+        },
+      }),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
+
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hi',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(ensureSessionCalls).toBe(2)
+    expect(events[0]).toMatchObject({
+      type: 'status',
+      text: expect.stringContaining('retrying (1/3)'),
+    })
+    const types = events.map((e) => e.type)
+    expect(types).toContain('text_delta')
+    expect(types).toContain('done')
+    expect(types).not.toContain('error')
+  })
+
+  it('does not retry after text output has already started', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    let ensureSessionCalls = 0
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      retryDelayMs: 0,
+      runtimeFactory: () => {
+        const base = createFakeAcpRuntime(calls)
+        return {
+          ...base,
+          async ensureSession(input) {
+            calls.push({ method: 'ensureSession', input })
+            ensureSessionCalls++
+            return {
+              sessionKey: input.sessionKey,
+              backend: 'acpx' as const,
+              runtimeSessionName: 'encoded-runtime-state',
+              cwd: input.cwd,
+              acpxRecordId: 'record-1',
+            }
+          },
+          startTurn(input) {
+            calls.push({ method: 'startTurn', input })
+            return {
+              requestId: input.requestId,
+              events: (async function* () {
+                yield {
+                  type: 'text_delta' as const,
+                  text: 'partial output',
+                  stream: 'output' as const,
+                  tag: 'agent_message_chunk',
+                }
+                throw new Error('socket hang up')
+              })(),
+              result: new Promise<never>(() => {}),
+              async cancel() {},
+              async closeStream() {},
+            }
+          },
+        }
+      },
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
+
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hi',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(ensureSessionCalls).toBe(1)
+    const types = events.map((e) => e.type)
+    expect(types).toContain('text_delta')
+    expect(types).toContain('error')
+    expect(types.filter((t) => t === 'error')).toHaveLength(1)
+  })
+
+  it('stops retrying after MAX_RETRIES attempts and emits an error', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    let ensureSessionCalls = 0
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      retryDelayMs: 0,
+      runtimeFactory: () => ({
+        ...createFakeAcpRuntime(calls),
+        async ensureSession(input) {
+          calls.push({ method: 'ensureSession', input })
+          ensureSessionCalls++
+          throw new Error('connect ECONNRESET')
+        },
+      }),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
+
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hi',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(ensureSessionCalls).toBe(4) // 1 initial + 3 retries
+    const statusEvents = events.filter((e) => e.type === 'status')
+    expect(statusEvents).toHaveLength(3) // one notice per retry attempt
+    const lastEvent = events.at(-1)
+    expect(lastEvent?.type).toBe('error')
+  })
+
   it('reuses cached runtime instances across per-turn timeouts', async () => {
     const calls: Array<{ method: string; input: unknown }> = []
     const runtime = new AcpxRuntime({
@@ -1370,11 +1553,13 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
 function makeAgent(input: {
   id: string
   adapter: AgentDefinition['adapter']
+  modelId?: string
 }): AgentDefinition {
   return {
     id: input.id,
     name: `${input.adapter} bot`,
     adapter: input.adapter,
+    modelId: input.modelId,
     permissionMode: 'approve-all',
     sessionKey: `agent:${input.id}:main`,
     createdAt: 1000,

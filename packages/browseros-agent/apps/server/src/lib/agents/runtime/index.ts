@@ -24,12 +24,19 @@ export {
 export { ContainerAgentRuntime } from './container-agent-runtime'
 export { ActionNotSupportedError, RuntimeNotReadyError } from './errors'
 export {
+  type ConfigureHermesHostRuntimeOptions,
   type ConfigureHermesRuntimeOptions,
+  configureHermesHostRuntime,
   configureHermesRuntime,
   getHermesRuntime,
+  HERMES_MODEL_COMMAND_ENV,
   HermesContainerRuntime,
   type HermesContainerRuntimeConfig,
+  HermesHostRuntime,
+  type HermesRuntimeMode,
   prepareHermesContext,
+  resolveHermesHostBinary,
+  resolveHermesRuntimeMode,
   type StartHermesRuntimeBestEffortOptions,
   startHermesRuntimeBestEffort,
 } from './hermes-container-runtime'

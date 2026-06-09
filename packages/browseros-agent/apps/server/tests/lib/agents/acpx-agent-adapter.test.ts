@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareAcpxAgentContext } from '../../../src/lib/agents/acpx-agent-adapter'
 import type { AgentDefinition } from '../../../src/lib/agents/agent-types'
+import { HERMES_MODEL_COMMAND_ENV } from '../../../src/lib/agents/runtime'
 
 describe('prepareAcpxAgentContext', () => {
   const tempDirs: string[] = []
@@ -111,7 +112,7 @@ describe('prepareAcpxAgentContext', () => {
     expect(prepared.runPrompt).not.toContain('Available skills:')
   })
 
-  it('prepares Hermes with HERMES_HOME pointing at the in-container agent home (translated from the host path)', async () => {
+  it('prepares host-mode Hermes against ~/.hermes (no HERMES_HOME, host MCP) when no container runtime is registered', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
     tempDirs.push(browserosDir)
     const prepared = await prepareAcpxAgentContext({
@@ -124,19 +125,34 @@ describe('prepareAcpxAgentContext', () => {
       message: 'remember this',
     })
 
-    // HERMES_HOME must be the *container-side* path (under /data) so the
-    // hermes binary running inside the container can actually open it.
-    // The host-side seeded files are reachable via the bind mount.
-    expect(prepared.commandEnv.HERMES_HOME).toBe(
-      '/data/agents/harness/hermes-agent/home',
-    )
+    // Host mode lets the local hermes binary use ~/.hermes — no per-agent
+    // HERMES_HOME, no provider env. The MCP server is on the host loopback.
+    expect(prepared.commandEnv).not.toHaveProperty('HERMES_HOME')
     expect(prepared.commandEnv).not.toHaveProperty('AGENT_HOME')
-    expect(prepared.commandEnv).not.toHaveProperty('CODEX_HOME')
-    expect(prepared.commandEnv).not.toHaveProperty('CLAUDE_CONFIG_DIR')
+    expect(prepared.commandEnv).not.toHaveProperty(HERMES_MODEL_COMMAND_ENV)
+    expect(prepared.browserosMcpHost).toBe('127.0.0.1')
     expect(prepared.useBrowserosMcp).toBe(true)
     expect(prepared.openclawSessionKey).toBeNull()
     expect(prepared.runtimeSessionKey).toMatch(
       /^agent:hermes-agent:main:[a-f0-9]{16}$/,
+    )
+  })
+
+  it('passes the selected model through commandEnv as a launch sentinel in host mode', async () => {
+    const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
+    tempDirs.push(browserosDir)
+    const prepared = await prepareAcpxAgentContext({
+      browserosDir,
+      agent: { ...makeAgent('hermes'), modelId: 'claude-opus-4-5' },
+      sessionId: 'main',
+      sessionKey: 'agent:hermes-agent:main',
+      cwdOverride: null,
+      isSelectedCwd: false,
+      message: 'remember this',
+    })
+
+    expect(prepared.commandEnv[HERMES_MODEL_COMMAND_ENV]).toBe(
+      'claude-opus-4-5',
     )
   })
 })

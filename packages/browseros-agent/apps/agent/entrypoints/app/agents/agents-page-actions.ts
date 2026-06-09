@@ -119,18 +119,13 @@ export function createAgentPageActions(input: AgentPageActionInput) {
   const handleHarnessCreate = async () => {
     if (!input.newName.trim()) return
 
-    const isHermes = input.createRuntime === 'hermes'
-    // Hermes pulls every provider field from the user's selected entry
-    // in the global LLM-providers list (managed under AI Settings). The
-    // backend rejects creation if any required field is missing.
-    const hermesProvider = isHermes
-      ? input.selectableHermesProviders.find(
-          (option) => option.id === input.createHermesProviderId,
-        )
-      : undefined
-    const effectiveModelId = isHermes
-      ? hermesProvider?.modelId
-      : input.harnessModelId || undefined
+    // Hermes runs the user's local binary against ~/.hermes, so it needs
+    // no BrowserOS provider/key — only an optional model to launch with
+    // (`hermes -m <model>`). 'default'/empty means use the ~/.hermes model.
+    const effectiveModelId =
+      input.harnessModelId && input.harnessModelId !== 'default'
+        ? input.harnessModelId
+        : undefined
 
     input.setCreateError(null)
     try {
@@ -139,9 +134,6 @@ export function createAgentPageActions(input: AgentPageActionInput) {
         adapter: input.createRuntime as HarnessAgentAdapter,
         modelId: effectiveModelId,
         reasoningEffort: input.harnessReasoningEffort || undefined,
-        providerType: hermesProvider?.type,
-        apiKey: hermesProvider?.apiKey,
-        baseUrl: hermesProvider?.baseUrl,
       })
       input.setCreateOpen(false)
       input.setNewName('')
@@ -149,7 +141,6 @@ export function createAgentPageActions(input: AgentPageActionInput) {
         runtime: input.createRuntime,
         model_id: effectiveModelId,
         reasoning_effort: input.harnessReasoningEffort || undefined,
-        provider_type: hermesProvider?.type,
       })
       input.navigate(`/agents/${agent.id}`)
     } catch (err) {

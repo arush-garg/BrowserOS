@@ -23,6 +23,7 @@ import type {
   HarnessAgentAdapter,
 } from './agent-harness-types'
 import type { CreateAgentRuntime, ProviderOption } from './agents-page-types'
+import { HermesModelPicker } from './HermesModelPicker'
 import { ProviderSelector } from './OpenClawControls'
 import {
   type OpenClawCliProvider,
@@ -72,8 +73,6 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   harnessAdapterId,
   harnessModelId,
   harnessReasoningEffort,
-  hermesProviders,
-  hermesSelectedProviderId,
   name,
   open,
   providers,
@@ -89,7 +88,6 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   onHarnessAdapterChange,
   onHarnessModelChange,
   onHarnessReasoningChange,
-  onHermesProviderChange,
   onNameChange,
   onProviderChange,
 }) => {
@@ -103,15 +101,14 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
     createRuntime === 'openclaw' &&
     !!selectedCliProvider &&
     !cliAuthStatus?.loggedIn
-  const hermesBlocked =
-    isHermesRuntime &&
-    (hermesProviders.length === 0 || !hermesSelectedProviderId)
+  // Host-mode Hermes needs no BrowserOS provider/key (auth comes from
+  // ~/.hermes) and the model is optional (defaults to the ~/.hermes
+  // model), so only a name is required.
   const canCreate =
     Boolean(name.trim()) &&
     !creating &&
     !openClawBlocked &&
     !cliBlocked &&
-    !hermesBlocked &&
     (createRuntime === 'openclaw'
       ? providers.length > 0
       : Boolean(selectedHarnessAdapter))
@@ -210,12 +207,17 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
           ) : null}
 
           {isHermesRuntime ? (
-            <ProviderSelector
-              providers={hermesProviders}
-              defaultProviderId={defaultProviderId}
-              selectedId={hermesSelectedProviderId}
-              onSelect={onHermesProviderChange}
-            />
+            <div className="grid gap-2">
+              <Label htmlFor="hermes-model">Model</Label>
+              <HermesModelPicker
+                value={harnessModelId}
+                onChange={onHarnessModelChange}
+              />
+              <p className="text-muted-foreground text-xs">
+                Hermes uses your local <code>~/.hermes</code> providers and
+                credentials. Leave as Default to use the model configured there.
+              </p>
+            </div>
           ) : null}
 
           {isClassicHarnessRuntime ? (

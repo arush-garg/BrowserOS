@@ -26,6 +26,7 @@ import {
   type QueuedMessage,
   type QueuedMessageAttachment,
 } from '../../../lib/agents/message-queue'
+import { resolveHermesRuntimeMode } from '../../../lib/agents/runtime'
 
 export {
   MessageQueueFullError,
@@ -548,7 +549,16 @@ export class AgentHarnessService {
   }
 
   async createAgent(input: CreateAgentInput): Promise<AgentDefinition> {
-    if (input.adapter === 'hermes') {
+    // Host-mode Hermes reads providers/auth/config from the user's local
+    // ~/.hermes, so BrowserOS neither requires an API key nor writes a
+    // per-agent config.yaml/.env. Only the bundled-container mode needs a
+    // BrowserOS-managed provider. In production this matches the runtime
+    // (env=container ⇒ container registered at startup), so create-time and
+    // turn-time stay consistent.
+    const hermesHostMode =
+      input.adapter === 'hermes' && resolveHermesRuntimeMode() === 'host'
+
+    if (input.adapter === 'hermes' && !hermesHostMode) {
       // Validate before touching the store so we don't leave an orphan
       // record on the unhappy path.
       assertHermesProviderInputValid(input)
@@ -557,6 +567,7 @@ export class AgentHarnessService {
     const agent = await this.agentStore.create(input)
 
     if (agent.adapter === 'hermes') {
+      if (hermesHostMode) return agent
       try {
         await this.writeHermesPerAgentProvider(agent.id, input)
       } catch (err) {
