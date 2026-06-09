@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { getAgentServerUrl } from './helpers'
-import { useCapabilities } from './useCapabilities'
 
 const AGENT_URL_LOAD_TIMEOUT_MS = 60000
 const AGENT_URL_RETRY_ATTEMPTS = 5
@@ -16,7 +15,6 @@ interface UseAgentServerUrlResult {
  * @public
  */
 export function useAgentServerUrl(): UseAgentServerUrlResult {
-  const { isLoading: capabilitiesLoading } = useCapabilities()
   const [baseUrl, setBaseUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
@@ -25,8 +23,6 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
   const [isRetrying, setIsRetrying] = useState(false)
 
   useEffect(() => {
-    if (capabilitiesLoading) return
-
     let cancelled = false
     let timeoutId: NodeJS.Timeout | null = null
     const controller = new AbortController()
@@ -62,7 +58,7 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
       controller.abort()
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [capabilitiesLoading, baseUrl])
+  }, [baseUrl])
 
   // Auto-retry with backoff to recover from startup races.
   useEffect(() => {
@@ -87,7 +83,7 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
 
   return {
     baseUrl,
-    isLoading: isLoading || capabilitiesLoading || isRetrying,
+    isLoading: isLoading || isRetrying,
     error: shouldShowError ? error : null,
     isRetrying,
   }

@@ -23,8 +23,17 @@ export {
 } from './codex-host-process-runtime'
 export { ActionNotSupportedError, RuntimeNotReadyError } from './errors'
 export {
+  type ConfigureHermesHostRuntimeOptions,
+  configureHermesHostRuntime,
+  HERMES_MODEL_COMMAND_ENV,
+  HermesHostRuntime,
   type HermesRuntimeMode,
+  type HermesRuntimeStartupPhase,
+  prepareHermesContext,
+  resolveHermesHostBinary,
   resolveHermesRuntimeMode,
+  type StartHermesRuntimeBestEffortOptions,
+  startHermesRuntimeBestEffort,
 } from './hermes-container-runtime'
 export {
   HostProcessAgentRuntime,

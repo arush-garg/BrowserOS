@@ -121,7 +121,7 @@ export const search_dom = defineTool({
   },
 })
 
-export const get_structured_page = defineObservationTool({
+export const get_structured_page = defineTool({
   name: 'get_structured_page',
   description:
     'Return a structured, token-efficient representation of the page: capped list of interactive elements and clean markdown. Large markdown is written to a local file and returned by path. Use for LLM-friendly page extracts.',

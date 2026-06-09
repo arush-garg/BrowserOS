@@ -7,12 +7,12 @@ import {
   buildContentMarkdownExpression,
   type ContentMarkdownOptions,
 } from './content-markdown'
+import * as elements from './core/input/geometry'
 import { fetchLegacyAxTreeWithFrames } from './core/observer/ax-tree'
 import type { PageInfo } from './core/pages'
 import { BrowserSession } from './core/session'
 import * as snapshot from './core/snapshot/legacy'
 import { type DomSearchResult, parseNodeAttributes } from './dom'
-import * as elements from './elements'
 import * as extraction from './extraction'
 import type { HistoryEntry } from './history'
 import * as history from './history'
@@ -260,8 +260,8 @@ export class Browser {
     pageText?: string
   }> {
     const session = await this.resolveSession(page)
-    const nodes = await this.fetchAXTree(session)
-    const info = this.pages.get(page)
+    const nodes = await fetchLegacyAxTreeWithFrames(session)
+    const info = this.core.pages.getInfo(page)
 
     const result: {
       url?: string
@@ -280,7 +280,7 @@ export class Browser {
       return result
     }
 
-    const lines = snapshot.buildInteractiveTree(nodes)
+    const lines = snapshot.buildEnhancedTree(nodes)
     const ids = new Set<number>()
     for (const line of lines) {
       const m = line.match(/^\[(\d+)\]/)
@@ -300,7 +300,7 @@ export class Browser {
 
     for (const backendNodeId of candidateIds) {
       try {
-        const props = await this.resolveElementProperties(page, backendNodeId)
+        const props = await resolveElementProperties(session, backendNodeId)
         if (!props) continue
 
         let rect: { x: number; y: number } | undefined
@@ -949,5 +949,69 @@ export class Browser {
 
   async closeTabGroup(groupId: string): Promise<void> {
     return tabGroups.closeTabGroup(this.cdp, groupId)
+  }
+}
+
+interface ElementProperties {
+  tagName: string
+  textContent: string
+  attributes: Record<string, string>
+  labelText: string
+  ariaLabel: string | undefined
+  role: string | undefined
+}
+
+async function resolveElementProperties(
+  session: ProtocolApi,
+  backendNodeId: number,
+): Promise<ElementProperties | null> {
+  try {
+    const desc = await session.DOM.describeNode({ backendNodeId, depth: 0 })
+    const node = desc.node
+    const attrs = parseNodeAttributes(node)
+
+    const resolved = await session.DOM.resolveNode({ backendNodeId })
+    const objectId = resolved.object?.objectId
+    let textContent = ''
+    let labelText = ''
+    if (objectId) {
+      const textResult = await session.Runtime.callFunctionOn({
+        functionDeclaration: `function(){
+          var text = (this.innerText || this.textContent || '').trim();
+          var aria = this.getAttribute('aria-label') || '';
+          var placeholder = this.getAttribute('placeholder') || '';
+          var title = this.getAttribute('title') || '';
+          var value = typeof this.value === 'string' ? this.value : '';
+          var labels = Array.from(this.labels || [])
+            .map(function(l){ return (l.innerText || l.textContent || '').trim(); })
+            .filter(Boolean)
+            .join(' ');
+          return {
+            textContent: text.substring(0, 200),
+            labelText: [aria, labels, placeholder, title, value, text]
+              .filter(Boolean).join(' ').trim().substring(0, 400),
+          };
+        }`,
+        objectId,
+        returnByValue: true,
+      })
+      const value = (textResult.result?.value ?? {}) as {
+        textContent?: string
+        labelText?: string
+      }
+      textContent = value.textContent ?? ''
+      labelText = value.labelText ?? ''
+    }
+
+    return {
+      tagName: node.localName ?? '',
+      textContent,
+      attributes: attrs,
+      labelText,
+      ariaLabel: attrs['aria-label'],
+      role: attrs.role,
+    }
+  } catch {
+    return null
   }
 }

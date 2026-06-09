@@ -16,7 +16,10 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
-import { getModelsForProvider, type ModelInfo } from '../ai-settings/models'
+import {
+  getModelsForProvider,
+  type ModelInfo,
+} from '../../screens/ai-settings/models'
 
 /** Sentinel meaning "let hermes use the model configured in ~/.hermes". */
 export const HERMES_DEFAULT_MODEL = 'default'

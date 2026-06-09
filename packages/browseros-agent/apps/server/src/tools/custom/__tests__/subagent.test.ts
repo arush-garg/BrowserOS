@@ -47,7 +47,6 @@ function createTestConfig(
     declinedApps: [],
     origin: undefined,
     browserosId: '',
-    toolApprovalConfig: { categories: {} },
     ...overrides,
   }
 }

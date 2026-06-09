@@ -724,7 +724,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     disliked,
     onClickDislike,
     conversationId,
-    addToolApprovalResponse: respondToToolApproval,
     activeTabId: options?.activeTabId,
   }
 }

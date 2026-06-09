@@ -36,6 +36,7 @@ export const Chat = () => {
     sendMessage,
     status,
     stop,
+    providers,
     agentUrlError,
     chatError,
     canSend,
@@ -47,6 +48,7 @@ export const Chat = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    activeTabId,
   } = useChatSessionContext()
 
   const {

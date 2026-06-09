@@ -68,10 +68,6 @@ async function getPrefNumberWithRetry(prefKey: string): Promise<number | null> {
 }
 
 async function getMcpPort(): Promise<number> {
-  if (env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
-  }
-
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.MCP_PORT)
   if (prefPort !== null) {
     return prefPort
@@ -104,7 +100,7 @@ export class ProxyPortError extends Error {
   }
 }
 
-async function getProxyPort(): Promise<number> {
+export async function getProxyPort(): Promise<number> {
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.PROXY_PORT)
   if (prefPort !== null) {
     return prefPort

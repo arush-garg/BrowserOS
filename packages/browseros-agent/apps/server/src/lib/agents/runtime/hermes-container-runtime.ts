@@ -3,56 +3,24 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Hermes-specific runtime. Owns the container spec, readiness probe,
- * mount roots, ACP launch spec, and per-turn context prep — the full
- * adapter surface lives in this single class.
+ * Hermes host-process runtime. Owns the runtime descriptor, per-agent home dir
+ * resolution, and per-turn context prep for the host-process Hermes adapter.
  */
 
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
-import {
-  HERMES_CONTAINER_HARNESS_DIR,
-  HERMES_CONTAINER_NAME,
-  HERMES_IMAGE,
-} from '@browseros/shared/constants/hermes'
 import { getBrowserosDir } from '../../browseros-dir'
-import { ContainerCli } from '../../container/container-cli'
-import { ImageLoader } from '../../container/image-loader'
-import type {
-  ContainerDescriptor,
-  ManagedContainerDeps,
-  MountRoot,
-} from '../../container/managed'
-import type { ContainerSpec } from '../../container/types'
 import { logger } from '../../logger'
-import {
-  GUEST_VM_STATE,
-  getLimaHomeDir,
-  resolveBundledLimactl,
-  resolveBundledLimaTemplate,
-  VM_NAME,
-  VmRuntime,
-} from '../../vm'
 import type {
   PrepareAcpxAgentContextInput,
   PreparedAcpxAgentContext,
-} from '../acpx-agent-adapter'
+} from '../acpx/agent-adapter'
 import {
   finishBrowserosManagedContext,
   prepareBrowserosManagedContext,
-} from '../acpx-agent-common'
-import { resolveAgentRuntimePaths } from '../acpx-runtime-context'
-import {
-  getHermesAgentHomeHostDir,
-  getHermesHarnessHostDir,
-  getHermesHostStateDir,
-} from '../hermes/hermes-paths'
-import { ContainerAgentRuntime } from './container-agent-runtime'
+} from '../acpx/agent-common'
+import { resolveAgentRuntimePaths } from '../acpx/runtime-context'
 import { HostProcessAgentRuntime } from './host-process-agent-runtime'
 import { getAgentRuntimeRegistry } from './registry'
-import type { ExecSpec, RuntimeDescriptor } from './types'
-
-const HERMES_BINARY = '/opt/hermes/.venv/bin/hermes'
+import type { RuntimeDescriptor } from './types'
 
 /**
  * Carries the BrowserOS-selected model from `prepareHermesContext`
@@ -71,7 +39,7 @@ export type HermesRuntimeMode = 'host' | 'container'
  * - `host` (default): spawn the user's local `hermes acp` binary, which
  *   reads `~/.hermes` for providers/auth/config. Multiple chats run as
  *   separate processes/sessions and never touch a bundled container.
- * - `container`: the bundled, version-pinned Hermes image (Darwin + Lima).
+ * - `container`: reserved for future bundled runtime.
  *
  * Override with `BROWSEROS_HERMES_RUNTIME=container`.
  */
@@ -92,13 +60,9 @@ export function resolveHermesHostBinary(): string {
 }
 
 /**
- * Host-process Hermes runtime. Registered in host mode purely so the
- * `/adapters` health route can probe the local `hermes` binary (like
- * Claude/Codex). The actual ACP launch command is built in
- * `acpx-runtime`'s registry resolver, not here — this class only owns
- * health/lifecycle. `getHermesRuntime()` deliberately ignores it (it
- * matches only the container runtime), so host vs container stays keyed
- * on the container's presence.
+ * Host-process Hermes runtime. Registered so the `/adapters` health route
+ * can probe the local `hermes` binary (like Claude/Codex). The actual ACP
+ * launch command is built in `acpx-runtime`'s registry resolver.
  */
 export class HermesHostRuntime extends HostProcessAgentRuntime {
   readonly descriptor: RuntimeDescriptor & { kind: 'host-process' } = {
@@ -160,355 +124,62 @@ export function configureHermesHostRuntime(
   return runtime
 }
 
-export interface HermesContainerRuntimeConfig {
-  /** Host-side directory where Hermes per-agent home dirs live. */
-  hermesHarnessHostDir: string
-}
+export type HermesRuntimeStartupPhase = 'configure'
 
-export class HermesContainerRuntime extends ContainerAgentRuntime {
-  readonly descriptor: ContainerDescriptor & { kind: 'container' } = {
-    adapterId: 'hermes',
-    displayName: 'Hermes',
-    kind: 'container',
-    defaultImage: HERMES_IMAGE,
-    containerName: HERMES_CONTAINER_NAME,
-    platforms: ['darwin'],
-    // Hermes has no HTTP probe; we exec `hermes --version` instead
-    // (see `readinessProbe` below). Generous timeout because the
-    // first exec inside a freshly-started container can be slow.
-    readinessProbe: { timeoutMs: 30_000, intervalMs: 500 },
-  }
-
-  private readonly hermesConfig: HermesContainerRuntimeConfig
-
-  constructor(
-    deps: ManagedContainerDeps,
-    config: HermesContainerRuntimeConfig,
-  ) {
-    super(deps)
-    this.hermesConfig = config
-  }
-
-  // ── ManagedContainer abstracts ───────────────────────────────────
-
-  protected mountRoots(): readonly MountRoot[] {
-    return [
-      {
-        hostPath: this.hermesConfig.hermesHarnessHostDir,
-        containerPath: HERMES_CONTAINER_HARNESS_DIR,
-        kind: 'shared',
-      },
-    ]
-  }
-
-  protected async buildContainerSpec(): Promise<ContainerSpec> {
-    // The bind-mount source is an in-VM path, not the host path —
-    // Lima's bundled mount already exposes <browserosDir>/vm/ to the
-    // VM at GUEST_VM_STATE, so nerdctl sees the harness dir at
-    // `${GUEST_VM_STATE}/hermes/harness`. mountRoots() above declares
-    // the *logical* host↔container mapping for path-translation use.
-    const guestHarnessDir = `${GUEST_VM_STATE}/hermes/harness`
-    const gateway = await this.deps.vm.getDefaultGateway()
-    return {
-      name: HERMES_CONTAINER_NAME,
-      image: HERMES_IMAGE,
-      restart: 'unless-stopped',
-      env: { PYTHONUNBUFFERED: '1' },
-      // host.containers.internal → VM gateway so hermes inside the
-      // container can reach the BrowserOS HTTP server running on the
-      // host (BrowserOS MCP /mcp).
-      addHosts: [`host.containers.internal:${gateway}`],
-      mounts: [
-        { source: guestHarnessDir, target: HERMES_CONTAINER_HARNESS_DIR },
-      ],
-      // Override the upstream image's `hermes acp` ENTRYPOINT — we
-      // want a long-lived idle container that we `nerdctl exec` into
-      // per turn. Bypass tini (0.19.0 getopt-parses `-x` even after
-      // the PROGRAM, so `tini /bin/sh -c "…"` errors).
-      entrypoint: '/bin/sh',
-      command: ['-c', 'exec sleep infinity'],
-    }
-  }
-
-  /**
-   * Container-running is already checked by the base via
-   * `cli.waitForContainerRunning` before this runs. Here we add an
-   * exec-based liveness check: `hermes --version` exits 0. Catches
-   * the failure mode where the container daemon thinks it's running
-   * but the embedded Python venv is broken or the binary is missing.
-   *
-   * This must NOT go through `execProcess` — that would deadlock on
-   * the state gate (we're in `starting`, not `running`). Use the
-   * lower-level `cli.exec` directly.
-   */
-  protected async readinessProbe(): Promise<boolean> {
-    try {
-      const exitCode = await this.deps.cli.exec(this.descriptor.containerName, [
-        HERMES_BINARY,
-        '--version',
-      ])
-      return exitCode === 0
-    } catch {
-      return false
-    }
-  }
-
-  // ── AgentRuntime additions ───────────────────────────────────────
-
-  getPerAgentHomeDir(agentId: string): string {
-    return join(this.hermesConfig.hermesHarnessHostDir, agentId, 'home')
-  }
-
-  /**
-   * ExecSpec for `hermes acp`. The dispatcher feeds this to
-   * `buildExecArgv()` (inherited from `ManagedContainer`) to get the
-   * launch command string. PYTHONUNBUFFERED is re-added defensively —
-   * the container has it set too, but acpx spawns through `nerdctl
-   * exec` which doesn't inherit container env onto the new process.
-   */
-  getAcpExecSpec(commandEnv: Record<string, string>): ExecSpec {
-    return {
-      argv: [HERMES_BINARY, 'acp'],
-      env: { PYTHONUNBUFFERED: '1', ...commandEnv },
-    }
-  }
-
-  /** Per-turn context prep — thin wrapper around the standalone
-   *  `prepareHermesContext` so callers that prefer the runtime-style
-   *  surface stay self-contained. */
-  prepareTurnContext(
-    input: PrepareAcpxAgentContextInput,
-  ): Promise<PreparedAcpxAgentContext> {
-    return prepareHermesContext(input)
-  }
+export interface StartHermesRuntimeBestEffortOptions
+  extends ConfigureHermesHostRuntimeOptions {
+  onError?: (phase: HermesRuntimeStartupPhase, error: unknown) => void
 }
 
 /**
- * Translate a host-side hermes home path to its in-container equivalent.
- * The container bind-mounts `<browserosDir>/vm/hermes/harness` (host)
- * onto `/data/agents/harness` (container), so paths under the host
- * harness root map cleanly to `/data/agents/harness/...` inside.
- *
- * Returns the original host path when it doesn't sit under the harness
- * root — defensive escape hatch for tests that inject a custom dir.
+ * Startup wiring for the Hermes adapter. Kept beside the adapter runtime so
+ * the server entry point does not need to know Hermes' startup sequence.
  */
-function translateHermesHomeToContainerPath(
-  hostHome: string,
-  harnessHostRoot: string,
-): string {
-  if (hostHome === harnessHostRoot) return HERMES_CONTAINER_HARNESS_DIR
-  if (hostHome.startsWith(`${harnessHostRoot}/`)) {
-    return `${HERMES_CONTAINER_HARNESS_DIR}${hostHome.slice(harnessHostRoot.length)}`
+export function startHermesRuntimeBestEffort(
+  options: StartHermesRuntimeBestEffortOptions = {},
+): HermesHostRuntime | null {
+  const { onError = logHermesStartupError, ...configureOptions } = options
+
+  try {
+    return configureHermesHostRuntime(configureOptions)
+  } catch (err) {
+    onError('configure', err)
+    return null
   }
-  return hostHome
 }
 
 /**
- * Prepares Hermes with a per-agent HERMES_HOME under
- * `<browserosDir>/vm/hermes/harness/<id>/home`. Provider config
- * (config.yaml + .env) is written into this directory at agent-create
- * time by AgentHarnessService.writeHermesPerAgentProvider. There is no
- * fallback to a global `~/.hermes/` install — Hermes agents always
- * carry their own provider config.
- *
- * HERMES_HOME inside the container is the container-side path
- * (`/data/agents/harness/<id>/home`) so Hermes resolves it correctly
- * when the runtime spawns `hermes acp` via `nerdctl exec`.
+ * Prepares Hermes host-mode context. The chosen model rides through
+ * commandEnv as a sentinel that the resolver turns into `-m <model>`.
+ * The MCP endpoint is on the host, so reach it via 127.0.0.1.
  *
  * Pure function — no runtime instance required, used directly by
- * the per-adapter prepare router in `acpx-agent-adapter.ts`.
+ * the per-adapter prepare router in `acpx/agent-adapter.ts`.
  */
 export async function prepareHermesContext(
   input: PrepareAcpxAgentContextInput,
 ): Promise<PreparedAcpxAgentContext> {
   const common = await prepareBrowserosManagedContext(input)
-
-  // Host mode: no bundled container is registered. Let the local hermes
-  // binary use ~/.hermes (providers/auth/config) — no per-agent
-  // HERMES_HOME, no config.yaml/.env. The chosen model rides through
-  // commandEnv as a sentinel that the resolver turns into `-m <model>`.
-  // The MCP endpoint is on the host, so reach it via 127.0.0.1.
-  if (getHermesRuntime() === null) {
-    const commandEnv: Record<string, string> = {}
-    const model = input.agent.modelId?.trim()
-    if (model && model !== 'default') {
-      commandEnv[HERMES_MODEL_COMMAND_ENV] = model
-    }
-    return finishBrowserosManagedContext({
-      ...common,
-      commandEnv,
-      browserosMcpHost: '127.0.0.1',
-    })
+  const commandEnv: Record<string, string> = {}
+  const model = input.agent.modelId?.trim()
+  if (model && model !== 'default') {
+    commandEnv[HERMES_MODEL_COMMAND_ENV] = model
   }
-
-  // Hermes-specific home lives under vm/ so it's reachable inside the
-  // Lima VM; the shared `common.paths.agentHome` (under agents/harness)
-  // is OUTSIDE the VM mount and would not be visible to nerdctl.
-  const hermesAgentHome = getHermesAgentHomeHostDir({
-    browserosDir: input.browserosDir,
-    agentId: input.agent.id,
-  })
-  await mkdir(hermesAgentHome, { recursive: true })
-
-  const hermesAgentHomeInContainer = translateHermesHomeToContainerPath(
-    hermesAgentHome,
-    getHermesHarnessHostDir(input.browserosDir),
-  )
-
   return finishBrowserosManagedContext({
     ...common,
-    commandEnv: {
-      HERMES_HOME: hermesAgentHomeInContainer,
-    },
-    // Hermes runs inside a Lima container; the BrowserOS HTTP MCP
-    // server lives on the host. `host.containers.internal` resolves
-    // to the VM gateway (via --add-host on the hermes container) so
-    // hermes can reach the MCP endpoint that the harness injects via
-    // newSession.
-    browserosMcpHost: 'host.containers.internal',
+    commandEnv,
+    browserosMcpHost: '127.0.0.1',
   })
-}
-
-// ── Factory + wire-up ──────────────────────────────────────────────
-
-export interface ConfigureHermesRuntimeOptions {
-  /** Bundled-resources root (provided by the launcher); when set,
-   *  resolves bundled limactl + Lima template paths instead of host
-   *  defaults. Optional in tests. */
-  resourcesDir?: string
-  /** Override BrowserOS state dir (defaults to `getBrowserosDir()`). */
-  browserosDir?: string
-}
-
-export type HermesRuntimeStartupPhase = 'configure' | 'install' | 'start'
-
-export interface StartHermesRuntimeBestEffortOptions
-  extends ConfigureHermesRuntimeOptions {
-  configureRuntime?: (
-    options: ConfigureHermesRuntimeOptions,
-  ) => HermesContainerRuntime | null
-  onError?: (phase: HermesRuntimeStartupPhase, error: unknown) => void
-}
-
-/**
- * Build a `HermesContainerRuntime` with production deps (bundled
- * limactl, BrowserOS state dirs, Lima VM runtime) and register it in
- * the global `AgentRuntimeRegistry`. Returns `null` on non-darwin —
- * the harness checks for the runtime and falls back gracefully.
- *
- * Idempotent against accidental double-init only insofar as the
- * registry's duplicate guard fires; callers should call this once at
- * server startup.
- */
-export function configureHermesRuntime(
-  options: ConfigureHermesRuntimeOptions = {},
-): HermesContainerRuntime | null {
-  if (process.platform !== 'darwin') {
-    logger.warn('Hermes runtime skipped: unsupported platform', {
-      platform: process.platform,
-    })
-    return null
-  }
-
-  const browserosDir = options.browserosDir ?? getBrowserosDir()
-  const resourcesDir = options.resourcesDir ?? null
-  const limactlPath = resourcesDir
-    ? resolveBundledLimactl(resourcesDir)
-    : 'limactl'
-  const limaHome = getLimaHomeDir(browserosDir)
-  const hermesStateDir = getHermesHostStateDir(browserosDir)
-  const hermesHarnessHostDir = getHermesHarnessHostDir(browserosDir)
-
-  const vm = new VmRuntime({
-    limactlPath,
-    limaHome,
-    templatePath: resourcesDir
-      ? resolveBundledLimaTemplate(resourcesDir)
-      : undefined,
-    browserosRoot: browserosDir,
-  })
-  const cli = new ContainerCli({ limactlPath, limaHome, vmName: VM_NAME })
-  const loader = new ImageLoader(cli)
-
-  const runtime = new HermesContainerRuntime(
-    {
-      cli,
-      loader,
-      vm,
-      limactlPath,
-      limaHome,
-      vmName: VM_NAME,
-      lockDir: join(hermesStateDir, '.locks'),
-    },
-    { hermesHarnessHostDir },
-  )
-
-  getAgentRuntimeRegistry().register(runtime)
-  logger.debug('HermesContainerRuntime registered', { image: HERMES_IMAGE })
-  return runtime
-}
-
-/**
- * Startup wiring for the Hermes adapter. Kept beside the adapter runtime so
- * the server entry point does not need to know Hermes' install/start sequence.
- */
-export function startHermesRuntimeBestEffort(
-  options: StartHermesRuntimeBestEffortOptions = {},
-): HermesContainerRuntime | HermesHostRuntime | null {
-  const {
-    configureRuntime = configureHermesRuntime,
-    onError = logHermesStartupError,
-    ...configureOptions
-  } = options
-
-  if (resolveHermesRuntimeMode() === 'host') {
-    logger.info(
-      'Hermes runs in host mode (local hermes binary + ~/.hermes); skipping bundled container',
-    )
-    try {
-      return configureHermesHostRuntime(configureOptions)
-    } catch (err) {
-      onError('configure', err)
-      return null
-    }
-  }
-
-  let runtime: HermesContainerRuntime | null
-  try {
-    runtime = configureRuntime(configureOptions)
-  } catch (err) {
-    onError('configure', err)
-    return null
-  }
-
-  if (!runtime) return null
-
-  void runtime
-    .executeAction({ type: 'install' })
-    .catch((err) => onError('install', err))
-  void runtime
-    .executeAction({ type: 'start' })
-    .catch((err) => onError('start', err))
-  return runtime
-}
-
-/** Convenience getter — returns the registered runtime or null. */
-export function getHermesRuntime(): HermesContainerRuntime | null {
-  const r = getAgentRuntimeRegistry().get('hermes')
-  return r instanceof HermesContainerRuntime ? r : null
 }
 
 function logHermesStartupError(
-  phase: HermesRuntimeStartupPhase,
+  _phase: HermesRuntimeStartupPhase,
   error: unknown,
 ): void {
-  const message =
-    phase === 'configure'
-      ? 'Hermes container configuration failed, continuing without it'
-      : phase === 'install'
-        ? 'Hermes prewarm failed'
-        : 'Hermes container start failed'
-  logger.warn(message, {
-    error: error instanceof Error ? error.message : String(error),
-  })
+  logger.warn(
+    'Hermes host runtime configuration failed, continuing without it',
+    {
+      error: error instanceof Error ? error.message : String(error),
+    },
+  )
 }

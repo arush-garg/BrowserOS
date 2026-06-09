@@ -103,7 +103,13 @@ export const AgentCommandHome: FC = () => {
     const target = targets.find(
       (entry) => entry.kind === 'llm' && entry.id === route.providerId,
     )
-    await persistSidepanelChatTargetSelection(target)
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    })
+    if (activeTab?.id != null) {
+      await persistSidepanelChatTargetSelection(target, activeTab.id)
+    }
     await setDefaultProvider(route.providerId)
     navigate(route.path)
   }

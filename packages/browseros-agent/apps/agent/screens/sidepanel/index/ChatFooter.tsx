@@ -7,6 +7,8 @@ import { AppSelector } from '@/components/elements/AppSelector'
 import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Feature } from '@/lib/browseros/capabilities'
+import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,

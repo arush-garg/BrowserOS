@@ -1,7 +1,7 @@
 import { describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { extract_google_app_content } from '../../src/tools/custom/extract-google-app'
-import { executeTool } from '../../src/tools/framework'
+import { executeTool } from '../../src/tools/legacy/framework'
 
 describe('extract_google_app_content tool', () => {
   it('returns extracted docs content', async () => {
