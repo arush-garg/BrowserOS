@@ -35,6 +35,7 @@ import { createRetryingLanguageModel } from './model-retry'
 import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
+import { createReasoningFallbackMiddleware } from './reasoning-fallback'
 import { readSoulPrompt } from './soul-prompt'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
@@ -75,9 +76,20 @@ export class AiSdkAgent {
       rawModel.specificationVersion === 'v3'
 
     let model = rawModel
+    // Surface reasoning as the answer when a turn produces only
+    // reasoning_content and no visible text (e.g. some gateway-served
+    // reasoning models), instead of returning an empty content-filter turn.
+    if (isV3Model) {
+      model = wrapLanguageModel({
+        model: model as LanguageModelV3,
+        middleware: createReasoningFallbackMiddleware({
+          info: (msg, data) => logger.info(msg, data),
+        }) as LanguageModelV3Middleware,
+      })
+    }
     if (isV3Model && config.aiSdkDevtoolsEnabled) {
       model = wrapLanguageModel({
-        model: rawModel as LanguageModelV3,
+        model: model as LanguageModelV3,
         middleware: devToolsMiddleware() as LanguageModelV3Middleware,
       })
       logger.info('AI SDK DevTools middleware enabled', {

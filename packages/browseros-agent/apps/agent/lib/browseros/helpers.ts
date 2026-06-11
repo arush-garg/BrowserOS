@@ -1,3 +1,4 @@
+import { env } from '../env'
 import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
@@ -5,6 +6,20 @@ import { BROWSEROS_PREFS } from './prefs'
 const PREF_READ_TIMEOUT_MS = 1500
 const PREF_READ_MAX_ATTEMPTS = 5
 const PREF_RETRY_BASE_DELAY_MS = 200
+
+/**
+ * In dev, `run.sh` launches the production BrowserOS app against the production
+ * profile but starts the dev server on its own port. The profile's stored
+ * `mcp_port`/`proxy_port` prefs point at the disabled built-in server, so the
+ * dev server port must take precedence. The unified dev server serves /chat,
+ * /mcp, and /health on this single port.
+ */
+function getDevServerPort(): number | null {
+  if (import.meta.env.DEV && env.VITE_BROWSEROS_SERVER_PORT) {
+    return env.VITE_BROWSEROS_SERVER_PORT
+  }
+  return null
+}
 
 export class McpPortError extends Error {
   constructor() {
@@ -68,13 +83,14 @@ async function getPrefNumberWithRetry(prefKey: string): Promise<number | null> {
 }
 
 async function getMcpPort(): Promise<number> {
+  const devPort = getDevServerPort()
+  if (devPort !== null) {
+    return devPort
+  }
+
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.MCP_PORT)
   if (prefPort !== null) {
     return prefPort
-  }
-
-  if (import.meta.env.NODE_ENV === 'development') {
-    return 9100
   }
 
   throw new McpPortError()
@@ -101,6 +117,11 @@ export class ProxyPortError extends Error {
 }
 
 export async function getProxyPort(): Promise<number> {
+  const devPort = getDevServerPort()
+  if (devPort !== null) {
+    return devPort
+  }
+
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.PROXY_PORT)
   if (prefPort !== null) {
     return prefPort

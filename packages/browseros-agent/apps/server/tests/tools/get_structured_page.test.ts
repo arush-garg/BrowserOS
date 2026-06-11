@@ -6,7 +6,7 @@ import { executeTool } from '../../src/tools/legacy/framework'
 describe('get_structured_page tool', () => {
   it('returns structured data from mocked browser', async () => {
     const fakeBrowser: any = {
-      getStructuredPage: async (page: number, opts: any) => ({
+      getStructuredPage: async (_page: number, _opts: any) => ({
         url: 'data:text/plain,hello',
         title: 'hello',
         elements: [

@@ -34,4 +34,40 @@ describe('getAgentServerUrl', () => {
       globalThis.chrome = previousChrome
     }
   })
+
+  it('prefers VITE_BROWSEROS_SERVER_PORT over profile prefs in dev', async () => {
+    // run.sh launches the production profile (whose port prefs point at the
+    // disabled built-in server) but runs the dev server on its own port, so the
+    // env override must win. import.meta.env.DEV is true under the test runner.
+    const previousChrome = globalThis.chrome
+    const previousEnvPort = import.meta.env.VITE_BROWSEROS_SERVER_PORT
+    const prefRequests: string[] = []
+    try {
+      import.meta.env.VITE_BROWSEROS_SERVER_PORT = '9105'
+      globalThis.chrome = {
+        runtime: {},
+        browserOS: {
+          getBrowserosVersionNumber(
+            callback: (version: string | null) => void,
+          ) {
+            callback(null)
+          },
+          getPref(name: string, callback: (pref: { value?: unknown }) => void) {
+            prefRequests.push(name)
+            // Stale production-profile ports for the disabled built-in server.
+            callback({ value: 9200 })
+          },
+        },
+      } as typeof chrome
+
+      const { getAgentServerUrl } = await import('./helpers')
+
+      await expect(getAgentServerUrl()).resolves.toBe('http://127.0.0.1:9105')
+      // Env override short-circuits before any pref read.
+      expect(prefRequests).not.toContain(BROWSEROS_PREFS.MCP_PORT)
+    } finally {
+      globalThis.chrome = previousChrome
+      import.meta.env.VITE_BROWSEROS_SERVER_PORT = previousEnvPort
+    }
+  })
 })
