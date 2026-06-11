@@ -46,6 +46,79 @@ async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
 }
 
 /**
+ * Merge local providers into shared BrowserOS prefs (one-time init sync).
+ * Each profile pushes its locally-stored providers up so existing providers
+ * from all profiles appear in the shared pref. Deduplicates by provider ID
+ * — the one with the later updatedAt wins.
+ * @public
+ */
+export async function syncLocalProvidersToBrowserOSPrefs(): Promise<void> {
+  try {
+    const [localProviders, localDefaultId] = await Promise.all([
+      providersStorage.getValue(),
+      defaultProviderIdStorage.getValue(),
+    ])
+    if ((!localProviders || localProviders.length === 0) && !localDefaultId) {
+      return // nothing to sync
+    }
+
+    const adapter = getBrowserOSAdapter()
+    const pref = await adapter.getPref(BROWSEROS_PREFS.PROVIDERS)
+    const raw = pref?.value
+
+    let mergedDefaultId = localDefaultId ?? undefined
+    let mergedProviders: LlmProviderConfig[] = []
+
+    if (typeof raw === 'string' && raw.length > 0) {
+      try {
+        const parsed = JSON.parse(raw)
+        const existingProviders: LlmProviderConfig[] = Array.isArray(parsed)
+          ? parsed
+          : (parsed?.providers ?? [])
+        const existingDefaultId = !Array.isArray(parsed)
+          ? parsed?.defaultProviderId
+          : undefined
+
+        // Merge: dedup by id, keep newer updatedAt
+        const byId = new Map<string, LlmProviderConfig>()
+        for (const p of existingProviders) {
+          byId.set(p.id, p)
+        }
+        if (localProviders) {
+          for (const p of localProviders) {
+            const existing = byId.get(p.id)
+            if (!existing || (p.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+              byId.set(p.id, p)
+            }
+          }
+        }
+        mergedProviders = Array.from(byId.values())
+
+        // Prefer existing defaultProviderId unless only local has one
+        if (existingDefaultId && !localDefaultId) {
+          mergedDefaultId = existingDefaultId
+        }
+      } catch {
+        // pref parse failed — fall through to use local only
+        mergedProviders = localProviders ?? []
+      }
+    } else {
+      mergedProviders = localProviders ?? []
+    }
+
+    // Normalize names before writing
+    mergedProviders = normalizeProviderNames(mergedProviders)
+
+    await backupToBrowserOS({
+      defaultProviderId: mergedDefaultId ?? DEFAULT_PROVIDER_ID,
+      providers: mergedProviders,
+    })
+  } catch {
+    // BrowserOS API not available — ignore
+  }
+}
+
+/**
  * Setup one-way sync of LLM providers to BrowserOS prefs
  * @public
  */

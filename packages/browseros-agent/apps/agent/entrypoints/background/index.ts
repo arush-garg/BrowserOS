@@ -9,6 +9,7 @@ import {
   setupLlmProvidersBackupToBrowserOS,
   setupLlmProvidersSyncToBackend,
   syncLlmProviders,
+  syncLocalProvidersToBrowserOSPrefs,
 } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
@@ -45,6 +46,7 @@ export default defineBackground(() => {
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
   setupLlmProvidersSyncToBackend()
+  syncLocalProvidersToBrowserOSPrefs()
   setupBackgroundCrossProfileSync()
   setupScheduledJobsSyncToBackend()
 
