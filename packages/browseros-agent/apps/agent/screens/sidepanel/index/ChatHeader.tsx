@@ -23,7 +23,7 @@ const CreditsBadgeWrapper: FC = () => {
   )
 }
 
-interface ChatHeaderProps {
+export interface ChatHeaderProps {
   selectedProvider: Provider
   onNewConversation: () => void
   hasMessages: boolean

@@ -158,6 +158,7 @@ class BuildConfig:
 
         # Third party versions
         self.SPARKLE_VERSION = "2.7.0"
+        self.WINSPARKLE_VERSION = "0.9.3"
 
         # Set platform-specific app names
         self._set_app_names()
@@ -205,13 +206,14 @@ class Context:
 
     # Third party
     SPARKLE_VERSION: str = "2.7.0"
+    WINSPARKLE_VERSION: str = "0.9.3"
 
     # Legacy artifacts dict - kept for backward compatibility
     # New code should use ctx.artifacts (ArtifactRegistry) instead
     artifacts: Dict[str, List[Path]] = field(default_factory=dict)
 
-    # Fixed app path - used by UniversalBuildModule to prevent auto-detection
-    # When set, get_app_path() returns this directly instead of auto-detecting
+    # When set, get_app_path() returns this directly — UniversalBuildModule
+    # pins per-arch and universal app paths through it.
     _fixed_app_path: Optional[Path] = None
 
     # New sub-components (initialized in __post_init__)
@@ -423,6 +425,14 @@ class Context:
         """Get Sparkle download URL"""
         return f"https://github.com/sparkle-project/Sparkle/releases/download/{self.SPARKLE_VERSION}/Sparkle-{self.SPARKLE_VERSION}.tar.xz"
 
+    def get_winsparkle_dir(self) -> Path:
+        """Get WinSparkle directory"""
+        return join_paths(self.chromium_src, "third_party", "winsparkle")
+
+    def get_winsparkle_url(self) -> str:
+        """Get WinSparkle download URL (note the v-prefixed release tag)"""
+        return f"https://github.com/vslavik/winsparkle/releases/download/v{self.WINSPARKLE_VERSION}/WinSparkle-{self.WINSPARKLE_VERSION}.zip"
+
     def get_extensions_manifest_url(self) -> str:
         """Get CDN URL for bundled extensions update manifest"""
         # return "https://cdn.browseros.com/extensions/update-manifest.xml"
@@ -439,26 +449,15 @@ class Context:
     def get_app_path(self) -> Path:
         """Get built app path
 
-        For universal builds, checks if out/Default_universal/BrowserOS.app exists
-        and returns that instead of the architecture-specific path.
-
-        This allows downstream modules (sign, package) to work on the universal
-        binary after UniversalBuildModule has run.
-
-        Note: If _fixed_app_path is set, returns that directly (used by
-        UniversalBuildModule to prevent auto-detection during arch-specific ops).
+        Resolves strictly from this context's own out_dir (or _fixed_app_path
+        when set, as UniversalBuildModule does). Never probes other out dirs:
+        a stale out/Default_universal app must not hijack arch-specific
+        builds' sign/package stages. Universal flows resolve here too, since
+        architecture="universal" already derives out_dir=out/Default_universal.
         """
         # If fixed path is set (for arch-specific operations), use it directly
         if self._fixed_app_path:
             return self._fixed_app_path
-
-        # Check for universal binary first (macOS only)
-        if IS_MACOS():
-            universal_app = join_paths(
-                self.chromium_src, "out/Default_universal", self.BROWSEROS_APP_NAME
-            )
-            if universal_app.exists():
-                return universal_app
 
         # For debug builds, check if the app has a different name
         if self.build_type == "debug" and IS_MACOS():

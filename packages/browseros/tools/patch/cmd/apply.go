@@ -46,7 +46,7 @@ func init() {
 			if err != nil {
 				return err
 			}
-			return renderResult(result, func() {
+			if err := renderResult(result, func() {
 				fmt.Println(ui.Title(fmt.Sprintf("Applied patches to %s", ws.Name)))
 				fmt.Printf("%s  %s\n", ui.Muted("mode:"), result.Mode)
 				fmt.Printf("%s  %d\n", ui.Muted("applied:"), len(result.Applied))
@@ -58,7 +58,10 @@ func init() {
 					}
 					fmt.Println(ui.Hint(`Run "browseros-patch continue" after fixing the current conflict.`))
 				}
-			})
+			}); err != nil {
+				return err
+			}
+			return conflictPauseError(len(result.Conflicts) > 0)
 		},
 	}
 	command.Flags().StringVar(&src, "src", "", srcFlagUsage)

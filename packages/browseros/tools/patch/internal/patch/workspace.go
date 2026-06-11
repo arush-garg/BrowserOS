@@ -2,6 +2,8 @@ package patch
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -10,8 +12,18 @@ import (
 	"github.com/browseros-ai/BrowserOS/packages/browseros/tools/patch/internal/git"
 )
 
-func BuildWorkingTreePatchSet(ctx context.Context, workspacePath string, base string, filters []string) (PatchSet, error) {
-	diff, err := git.DiffText(ctx, workspacePath, base)
+// WorkingTreeOptions bound a working-tree patch-set build: the base commit to
+// diff against, include filters, an ignore set for untracked junk, and an
+// optional progress callback.
+type WorkingTreeOptions struct {
+	Base    string
+	Filters []string
+	Ignore  *IgnoreSet
+	Report  func(message string)
+}
+
+func BuildWorkingTreePatchSet(ctx context.Context, workspacePath string, opts WorkingTreeOptions) (PatchSet, error) {
+	diff, err := git.DiffText(ctx, workspacePath, opts.Base)
 	if err != nil {
 		return nil, err
 	}
@@ -19,11 +31,21 @@ func BuildWorkingTreePatchSet(ctx context.Context, workspacePath string, base st
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := git.ListUntracked(ctx, workspacePath, filters)
+	untracked, err := git.ListUntracked(ctx, workspacePath, opts.Filters)
 	if err != nil {
 		return nil, err
 	}
+	kept := make([]string, 0, len(untracked))
 	for _, rel := range untracked {
+		if opts.Ignore.Match(rel) {
+			continue
+		}
+		kept = append(kept, rel)
+	}
+	for idx, rel := range kept {
+		if opts.Report != nil {
+			opts.Report(fmt.Sprintf("Scanning untracked %d/%d %s", idx+1, len(kept), rel))
+		}
 		diffText, err := git.DiffNoIndex(ctx, workspacePath, rel)
 		if err != nil {
 			return nil, err
@@ -36,7 +58,7 @@ func BuildWorkingTreePatchSet(ctx context.Context, workspacePath string, base st
 			set[patchPath] = patchFile
 		}
 	}
-	return filterSet(set, filters), nil
+	return filterSet(set, opts.Filters), nil
 }
 
 func BuildCommitPatchSet(ctx context.Context, workspacePath string, ref string, base string, filters []string) (PatchSet, error) {
@@ -150,7 +172,11 @@ func buildBaseScopedSet(ctx context.Context, workspacePath string, ref string, b
 			if err != nil {
 				return nil, err
 			}
-			set[rel] = syntheticAddPatch(rel, content)
+			mode, err := git.FileModeAtCommit(ctx, workspacePath, ref, rel)
+			if err != nil {
+				return nil, err
+			}
+			set[rel] = syntheticAddPatch(rel, content, mode)
 		}
 	}
 	return set, nil
@@ -180,36 +206,48 @@ func RejectPath(workspacePath string, rel string) string {
 	return filepath.Join(workspacePath, filepath.FromSlash(rel+".rej"))
 }
 
-func syntheticAddPatch(rel string, content []byte) FilePatch {
-	body := string(content)
-	if body != "" && body[len(body)-1] != '\n' {
-		body += "\n"
+// syntheticAddPatch builds the add-style diff for content git never saw as a
+// working-tree file. The bytes must match `git diff --no-index --full-index`
+// exactly so the same logical patch is identical no matter which extraction
+// path produced it.
+func syntheticAddPatch(rel string, content []byte, mode string) FilePatch {
+	if git.LooksBinary(content) {
+		return FilePatch{Path: rel, Op: OpBinary, IsBinary: true}
 	}
-	patchBody := fmt.Sprintf(
-		"diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n%s",
-		rel,
-		rel,
-		rel,
-		countLines(body),
-		prefixLines(body, "+"),
-	)
-	return FilePatch{Path: rel, Op: OpAdd, Content: []byte(patchBody)}
+	if mode == "" {
+		mode = "100644"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", rel, rel)
+	fmt.Fprintf(&b, "new file mode %s\n", mode)
+	fmt.Fprintf(&b, "index %s..%s\n", strings.Repeat("0", 40), blobSHA1(content))
+	if len(content) > 0 {
+		body := string(content)
+		missingEOFNewline := !strings.HasSuffix(body, "\n")
+		lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+		fmt.Fprintf(&b, "--- /dev/null\n+++ b/%s\n", rel)
+		if len(lines) == 1 {
+			b.WriteString("@@ -0,0 +1 @@\n")
+		} else {
+			fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
+		}
+		for _, line := range lines {
+			b.WriteString("+")
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		if missingEOFNewline {
+			b.WriteString("\\ No newline at end of file\n")
+		}
+	}
+	return FilePatch{Path: rel, Op: OpAdd, Content: []byte(b.String())}
 }
 
-func countLines(body string) int {
-	if body == "" {
-		return 0
-	}
-	return len(strings.Split(strings.TrimSuffix(body, "\n"), "\n"))
-}
-
-func prefixLines(body string, prefix string) string {
-	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
-	for idx, line := range lines {
-		lines[idx] = prefix + line
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
+// blobSHA1 hashes content the way git names blobs (SHA-1 object format;
+// SHA-256 repos are out of scope — Chromium uses SHA-1).
+func blobSHA1(content []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(content))
+	h.Write(content)
+	return hex.EncodeToString(h.Sum(nil))
 }

@@ -16,7 +16,7 @@ import { callMcpTool } from '../utils/mcp-client'
 // Errors
 // ============================================================================
 
-export class TaskExecutionError extends Error {
+class TaskExecutionError extends Error {
   public readonly errorSource: ErrorSource
 
   constructor(
@@ -43,7 +43,7 @@ export interface TaskRunPipelineDeps {
   onEvent?: (taskId: string, event: Record<string, unknown>) => void
 }
 
-export class TaskRunPipeline {
+class TaskRunPipeline {
   constructor(
     private readonly config: EvalConfig,
     private readonly workerIndex: number,
@@ -311,6 +311,8 @@ export class TaskRunPipeline {
     }
   }
 }
+
+export type { TaskRunPipeline }
 
 // ============================================================================
 // Factory

@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './framework'
 
-export class ToolRegistry {
-  private tools: Map<string, ToolDefinition>
+class ToolRegistry {
+  readonly tools: Map<string, ToolDefinition>
 
   constructor(tools: ToolDefinition[]) {
     this.tools = new Map()
@@ -25,6 +25,8 @@ export class ToolRegistry {
     return [...this.tools.keys()]
   }
 }
+
+export type { ToolRegistry }
 
 export function createRegistry(tools: ToolDefinition[]): ToolRegistry {
   return new ToolRegistry(tools)

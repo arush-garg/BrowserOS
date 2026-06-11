@@ -112,6 +112,28 @@ features:
     files:
       - third_party/sparkle/
 
+  win-sparkle-updater:
+    description: "feat: win winsparkle updater"
+    files:
+      - chrome/browser/BUILD.gn
+      - chrome/browser/buildflags.gni
+      - chrome/browser/chrome_browser_main_win.cc
+      - chrome/browser/sparkle_buildflags.gni
+      - chrome/browser/ui/BUILD.gn
+      - chrome/browser/ui/webui/help/version_updater_basic.cc
+      - chrome/browser/ui/webui/help/winsparkle_version_updater_win.cc
+      - chrome/browser/ui/webui/help/winsparkle_version_updater_win.h
+      - chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+      - chrome/browser/win/winsparkle_glue.cc
+      - chrome/browser/win/winsparkle_glue.h
+      - chrome/installer/mini_installer/BUILD.gn
+      - chrome/installer/mini_installer/chrome.release
+
+  winsparkle-third-party:
+    description: "feat: winsparkle third party library (downloaded on-the-fly)"
+    files:
+      - third_party/winsparkle/
+
   server:
     description: "feat: browseros server"
     files:

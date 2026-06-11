@@ -22,12 +22,14 @@ import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { requireTrustedOrigin } from './middleware/require-trusted-origin'
+import { createAcpxProbeRoutes } from './routes/acpx-probe'
 import { createAgentRoutes } from './routes/agents'
 import { createChatRoutes } from './routes/chat'
 import { createCreditsRoutes } from './routes/credits'
 import { createHealthRoute } from './routes/health'
 import { createKlavisRoutes } from './routes/klavis'
 import { createMcpRoutes } from './routes/mcp'
+import { createMcpManagerRoutes } from './routes/mcp-manager'
 import { createOAuthRoutes } from './routes/oauth'
 import { createProviderRoutes } from './routes/provider'
 import { createRefinePromptRoutes } from './routes/refine-prompt'
@@ -122,7 +124,11 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route('/status', createStatusRoute({ browser }))
-    .route('/test-provider', createProviderRoutes({ browserosId }))
+    .route(
+      '/test-provider',
+      createProviderRoutes({ browserosId, resourcesDir }),
+    )
+    .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
     .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
     .route(
       '/oauth',
@@ -153,6 +159,12 @@ export async function createHttpServer(config: HttpServerConfig) {
       }),
     )
     .route(
+      '/mcp-manager',
+      createMcpManagerRoutes({
+        getMcpUrl: () => `http://127.0.0.1:${port}/mcp`,
+      }),
+    )
+    .route(
       '/chat',
       createChatRoutes({
         browser,
@@ -160,6 +172,8 @@ export async function createHttpServer(config: HttpServerConfig) {
         browserosId,
         klavisRef,
         aiSdkDevtoolsEnabled: config.aiSdkDevtoolsEnabled,
+        serverPort: port,
+        resourcesDir,
       }),
     )
     .route('/screencast', createScreencastRoute({ browser }))

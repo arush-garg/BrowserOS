@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -35,56 +36,107 @@ func LoadRepoPatchSet(patchesDir string, filters []string) (PatchSet, error) {
 	return set, err
 }
 
-func WriteRepoPatchSet(patchesDir string, set PatchSet, scope []string) ([]string, []string, error) {
+// WritePlan classifies what a WriteRepoPatchSet call would do. Unchanged
+// patches (same signature, same marker kind) are never rewritten so volatile
+// diff metadata can't churn the patch repo.
+type WritePlan struct {
+	Creates   []string `json:"creates"`
+	Updates   []string `json:"updates"`
+	Unchanged []string `json:"unchanged"`
+	Deletes   []string `json:"deletes"`
+}
+
+func PlanRepoPatchSet(patchesDir string, set PatchSet, scope []string) (*WritePlan, error) {
 	existing, err := LoadRepoPatchSet(patchesDir, nil)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, err
+		return nil, err
 	}
+	return planRepoPatchSet(patchesDir, existing, set, scope), nil
+}
+
+func planRepoPatchSet(patchesDir string, existing PatchSet, set PatchSet, scope []string) *WritePlan {
+	// Scope entries follow PathMatches semantics (exact file or directory
+	// prefix) so "extract ch1 -- chrome/dir" scopes the whole directory.
 	inScope := map[string]bool{}
-	if len(scope) == 0 {
-		for rel := range existing {
+	for rel := range existing {
+		if PathMatches(rel, scope) {
 			inScope[rel] = true
 		}
-		for rel := range set {
+	}
+	for rel := range set {
+		if PathMatches(rel, scope) {
 			inScope[rel] = true
-		}
-	} else {
-		for _, rel := range scope {
-			inScope[NormalizeChromiumPath(rel)] = true
 		}
 	}
 
-	var written []string
-	var deleted []string
+	plan := &WritePlan{}
 	for rel := range existing {
 		if !inScope[rel] || set[rel].Path != "" {
 			continue
 		}
-		if err := removePatchVariants(patchesDir, rel); err != nil {
-			return nil, nil, err
-		}
-		deleted = append(deleted, rel)
+		plan.Deletes = append(plan.Deletes, rel)
 	}
 	for rel, patchFile := range set {
 		if !inScope[rel] {
 			continue
 		}
-		if err := removePatchVariants(patchesDir, rel); err != nil {
-			return nil, nil, err
+		current, ok := existing[rel]
+		switch {
+		case !ok:
+			plan.Creates = append(plan.Creates, rel)
+		case sameWriteTarget(patchesDir, current, patchFile) && signature(current) == signature(patchFile):
+			plan.Unchanged = append(plan.Unchanged, rel)
+		default:
+			plan.Updates = append(plan.Updates, rel)
 		}
-		target, body := patchWriteTarget(patchesDir, patchFile)
+	}
+	slices.Sort(plan.Creates)
+	slices.Sort(plan.Updates)
+	slices.Sort(plan.Unchanged)
+	slices.Sort(plan.Deletes)
+	return plan
+}
+
+func sameWriteTarget(patchesDir string, a FilePatch, b FilePatch) bool {
+	targetA, _ := patchWriteTarget(patchesDir, a)
+	targetB, _ := patchWriteTarget(patchesDir, b)
+	return targetA == targetB
+}
+
+// Written returns every path the plan actually rewrites.
+func (p *WritePlan) Written() []string {
+	written := append(append([]string{}, p.Creates...), p.Updates...)
+	slices.Sort(written)
+	return written
+}
+
+func WriteRepoPatchSet(patchesDir string, set PatchSet, scope []string) (*WritePlan, error) {
+	existing, err := LoadRepoPatchSet(patchesDir, nil)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	plan := planRepoPatchSet(patchesDir, existing, set, scope)
+	for _, rel := range plan.Deletes {
+		if err := removePatchVariants(patchesDir, rel); err != nil {
+			return nil, err
+		}
+	}
+	for _, rel := range plan.Written() {
+		if err := removePatchVariants(patchesDir, rel); err != nil {
+			return nil, err
+		}
+		target, body := patchWriteTarget(patchesDir, set[rel])
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if len(body) == 0 || body[len(body)-1] != '\n' {
 			body = append(body, '\n')
 		}
 		if err := os.WriteFile(target, body, 0o644); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		written = append(written, rel)
 	}
-	return written, deleted, nil
+	return plan, nil
 }
 
 func loadPatchFile(fullPath string, relPath string) (FilePatch, error) {

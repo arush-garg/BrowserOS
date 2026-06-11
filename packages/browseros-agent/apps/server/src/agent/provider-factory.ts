@@ -1,3 +1,6 @@
+import { mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createAzure } from '@ai-sdk/azure'
@@ -8,6 +11,9 @@ import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
+import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
+import { resolveAcpSpawnCommand } from '../lib/agents/host-acp/launcher'
+import { getBrowserosDir } from '../lib/browseros-dir'
 import { createBrowserOSFetch } from '../lib/browseros-fetch'
 import {
   createMockBrowserOSLanguageModel,
@@ -17,6 +23,10 @@ import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
+import { ensureWorkspaceInstructionFile } from './acp-instructions'
+import { ACP_PROVIDER_TYPES, isAcpProvider } from './acp-providers'
+import type { BuildSystemPromptOptions } from './prompt'
+import { readSoulPrompt } from './soul-prompt'
 import type { ResolvedAgentConfig } from './types'
 
 /**
@@ -43,6 +53,139 @@ function stripReasoningContent(
     },
   )
   return changed ? { ...args, messages } : args
+}
+
+export { isAcpProvider }
+
+const BUILT_IN_ACP_AGENT_BY_PROVIDER: Record<string, string> = {
+  [LLM_PROVIDERS.CLAUDE_CODE]: 'claude',
+  [LLM_PROVIDERS.CODEX]: 'codex',
+}
+
+/**
+ * Per-provider workspace path so two providers of the same TYPE (e.g.
+ * Claude Opus High and Claude Sonnet Medium) get isolated working
+ * directories instead of stomping on each other's files. The provider
+ * type still anchors the top-level folder so the user can browse
+ * `workspaces/claude-code/` to see all their Claude Code provider
+ * records at a glance.
+ *
+ * `providerId` is optional for backwards compatibility with chat
+ * requests from older clients that did not forward the saved
+ * `LlmProviderConfig.id` to the server; those still land on the legacy
+ * shared path. New requests always carry it.
+ */
+function defaultAcpWorkspacePath(
+  providerType: string,
+  providerId: string | undefined,
+): string {
+  const base = join(getBrowserosDir(), 'workspaces', providerType)
+  return providerId ? join(base, providerId) : base
+}
+
+/**
+ * Substitute a leading `$HOME` token with the actual home directory.
+ * The harness-to-providers migration (follow-up PR) writes
+ * `$HOME/browseros-workspaces/...` as a placeholder because the
+ * renderer cannot read `$HOME` directly; node's `child_process.spawn`
+ * does NOT expand shell variables in its `cwd` option, so we have to
+ * substitute server-side before the path reaches the spawn boundary.
+ */
+function expandHomeToken(path: string): string {
+  return path.replace(/^\$HOME(?=\/|$)/, homedir())
+}
+
+function resolveAcpAgentId(config: ResolvedAgentConfig): string {
+  if (config.provider === LLM_PROVIDERS.ACP_CUSTOM) {
+    if (!config.acpAgentId) {
+      throw new Error('acp-custom provider requires acpAgentId')
+    }
+    return config.acpAgentId
+  }
+  const builtIn = BUILT_IN_ACP_AGENT_BY_PROVIDER[config.provider]
+  if (!builtIn) {
+    throw new Error(`Unknown ACP provider type: ${config.provider}`)
+  }
+  return config.acpAgentId ?? builtIn
+}
+
+async function createAcpLanguageModel(
+  config: ResolvedAgentConfig,
+): Promise<LanguageModelWithCleanup> {
+  const agentId = resolveAcpAgentId(config)
+  const workspacePath = expandHomeToken(
+    config.acpFixedWorkspacePath ??
+      defaultAcpWorkspacePath(config.provider, config.providerId),
+  )
+  await mkdir(workspacePath, { recursive: true }).catch((err: unknown) => {
+    logger.warn('Failed to ensure ACP workspace exists; spawn may fail', {
+      workspacePath,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  })
+
+  // Plant or refresh the ACP workspace instruction file (CLAUDE.md /
+  // AGENTS.md) on conversation start. Subsequent turns short-circuit
+  // inside the helper. Failures are logged but never thrown so a bad
+  // write does not break the chat.
+  const promptOptions: BuildSystemPromptOptions = {
+    workspaceDir: workspacePath,
+    userSystemPrompt: config.userSystemPrompt,
+    chatMode: config.chatMode,
+    isScheduledTask: config.isScheduledTask,
+    soulContent: await readSoulPrompt(),
+    declinedApps: config.declinedApps,
+    origin: config.origin,
+    acpMode: true,
+  }
+  const ensureResult = await ensureWorkspaceInstructionFile({
+    workspacePath,
+    providerType: config.provider,
+    promptOptions,
+    isNewConversation: config.isNewConversation ?? false,
+  })
+  logger.info('ACP workspace instruction file lifecycle', {
+    conversationId: config.conversationId,
+    providerType: config.provider,
+    workspacePath,
+    action: ensureResult.action,
+    ...('filename' in ensureResult ? { filename: ensureResult.filename } : {}),
+    ...(ensureResult.action === 'failed'
+      ? { error: ensureResult.error.message }
+      : {}),
+  })
+
+  const agentRegistryOverrides: Record<string, string> = {}
+  // Pre-seed the built-in adapters with the bundled-Bun launcher so the
+  // spawned child does not depend on `npx` being on the user's PATH.
+  // We only override when the launcher resolved the bundled binary;
+  // host-npx-fallback would only restate acpx's own registry command,
+  // so we let acpx resolve it directly in that case.
+  for (const builtIn of ['claude', 'codex'] as const) {
+    const launcher = resolveAcpSpawnCommand({
+      agentType: builtIn,
+      resourcesDir: config.resourcesDir,
+    })
+    if (launcher?.source === 'bundled-bun') {
+      agentRegistryOverrides[builtIn] = launcher.command
+    }
+  }
+  if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
+    agentRegistryOverrides[agentId] = config.acpCommand
+  }
+  const provider = await buildAcpxProvider({
+    conversationId: config.conversationId,
+    agentId,
+    workspacePath,
+    agentRegistryOverrides,
+    mcpServers: config.acpMcpServers,
+  })
+  return {
+    model: provider.languageModel() as LanguageModel,
+    // acpx-ai-provider's docs put close() ownership on the caller: skip
+    // it and the spawned agent process outlives the conversation.
+    close: () => provider.close(),
+  }
 }
 
 type ProviderFactory = (
@@ -253,14 +396,29 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
 }
 
-export function createLanguageModel(
+export interface LanguageModelWithCleanup {
+  model: LanguageModel
+  /**
+   * Caller-owned teardown. Only set for providers that own a spawned
+   * process or persistent session (today: ACP providers via
+   * `acpx-ai-provider`); model-backed factories leave it undefined.
+   * `AiSdkAgent.dispose()` awaits this so the agent process exits with
+   * the conversation.
+   */
+  close?: () => Promise<void>
+}
+
+export async function createLanguageModel(
   config: ResolvedAgentConfig,
-): LanguageModel {
+): Promise<LanguageModelWithCleanup> {
   if (shouldUseMockBrowserOSLLM(config)) {
-    return createMockBrowserOSLanguageModel()
+    return { model: createMockBrowserOSLanguageModel() }
   }
   const provider = config.provider as string
+  if (ACP_PROVIDER_TYPES.has(provider)) {
+    return createAcpLanguageModel(config)
+  }
   const factory = PROVIDER_FACTORIES[provider]
   if (!factory) throw new Error(`Unknown provider: ${provider}`)
-  return factory(config)(config.model) as LanguageModel
+  return { model: factory(config)(config.model) as LanguageModel }
 }

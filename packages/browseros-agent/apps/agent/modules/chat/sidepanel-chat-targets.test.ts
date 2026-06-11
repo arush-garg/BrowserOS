@@ -6,10 +6,13 @@ import type {
 } from '@/modules/agents/agent-harness-types'
 import {
   buildSidepanelChatTargets,
+  clearSidepanelChatTargetSelectionForAgent,
   persistSidepanelChatTargetSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTargetSelection,
+  saveSidepanelChatTargetSelection,
   toLlmProviderConfig,
+  watchSidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
 
 const timestamp = 1000
@@ -170,7 +173,7 @@ describe('buildSidepanelChatTargets', () => {
     ])
   })
 
-  it('does not emit local runtime provider configs as generic LLM targets', () => {
+  it('emits local runtime provider configs as LLM targets so the composer can pick them', () => {
     const targets = buildSidepanelChatTargets({
       providers: [...providers, ...localRuntimeProviders],
       adapters,
@@ -180,6 +183,8 @@ describe('buildSidepanelChatTargets', () => {
     expect(targets.map((target) => target.id)).toEqual([
       'browseros',
       'anthropic-sonnet',
+      'codex-provider',
+      'claude-code-provider',
       'agent-codex',
     ])
   })
@@ -232,7 +237,7 @@ describe('resolveSidepanelChatTarget', () => {
     })
   })
 
-  it('falls back to the first chat-compatible LLM when the default is local runtime', () => {
+  it('resolves a local runtime provider as the chat target when it is the default', () => {
     const targets = buildSidepanelChatTargets({
       providers: [...localRuntimeProviders, ...providers],
       adapters,
@@ -246,7 +251,7 @@ describe('resolveSidepanelChatTarget', () => {
       }),
     ).toMatchObject({
       kind: 'llm',
-      id: 'browseros',
+      id: 'codex-provider',
     })
   })
 })
@@ -265,5 +270,101 @@ describe('persistSidepanelChatTargetSelection', () => {
       id: 'agent-codex',
     })
     expect(providers).toEqual(originalProviders)
+  })
+
+  it('persists null when no target is selected', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: 'agent-codex' })
+
+    await persistSidepanelChatTargetSelection(undefined, store)
+
+    expect(await store.getValue()).toBeNull()
+  })
+})
+
+function createSelectionStore(
+  initial: SidepanelChatTargetSelection | null = null,
+) {
+  let value = initial
+  const watchers = new Set<
+    (selection: SidepanelChatTargetSelection | null) => void
+  >()
+  return {
+    getValue: async () => value,
+    setValue: async (next: SidepanelChatTargetSelection | null) => {
+      value = next
+      for (const watcher of watchers) watcher(next)
+    },
+    watch: (
+      callback: (selection: SidepanelChatTargetSelection | null) => void,
+    ) => {
+      watchers.add(callback)
+      return () => {
+        watchers.delete(callback)
+      }
+    },
+  }
+}
+
+describe('saveSidepanelChatTargetSelection', () => {
+  it('writes the selection identity to the store', async () => {
+    const store = createSelectionStore()
+
+    await saveSidepanelChatTargetSelection(
+      { kind: 'acp', id: 'agent-codex' },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: 'agent-codex' })
+  })
+
+  it('clears the stored selection with null', async () => {
+    const store = createSelectionStore({ kind: 'llm', id: 'browseros' })
+
+    await saveSidepanelChatTargetSelection(null, store)
+
+    expect(await store.getValue()).toBeNull()
+  })
+})
+
+describe('clearSidepanelChatTargetSelectionForAgent', () => {
+  it('clears the selection pointing at the deleted agent', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: 'agent-codex' })
+
+    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
+
+    expect(await store.getValue()).toBeNull()
+  })
+
+  it('keeps a selection for a different agent', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: 'agent-other' })
+
+    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: 'agent-other' })
+  })
+
+  it('keeps an LLM selection even when ids collide', async () => {
+    const store = createSelectionStore({ kind: 'llm', id: 'agent-codex' })
+
+    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
+
+    expect(await store.getValue()).toEqual({ kind: 'llm', id: 'agent-codex' })
+  })
+})
+
+describe('watchSidepanelChatTargetSelection', () => {
+  it('notifies on selection changes until unsubscribed', async () => {
+    const store = createSelectionStore()
+    const seen: Array<SidepanelChatTargetSelection | null> = []
+
+    const unsubscribe = watchSidepanelChatTargetSelection(
+      (selection) => seen.push(selection),
+      store,
+    )
+    await store.setValue({ kind: 'acp', id: 'agent-codex' })
+    unsubscribe()
+    await store.setValue(null)
+
+    expect(seen).toEqual([{ kind: 'acp', id: 'agent-codex' }])
   })
 })

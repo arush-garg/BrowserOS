@@ -10,8 +10,8 @@ import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import {
-  findChatProviderById,
-  resolveChatProvider,
+  findCloudChatProviderById,
+  resolveCloudChatProvider,
 } from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
@@ -30,13 +30,13 @@ class StreamEndedUnexpectedlyError extends Error {
   }
 }
 
-interface ActiveTab {
+export interface ActiveTab {
   id?: number
   url?: string
   title?: string
 }
 
-interface ChatServerRequest {
+export interface ChatServerRequest {
   message: string
   mode?: ChatMode
   conversationId?: string
@@ -46,7 +46,7 @@ interface ChatServerRequest {
   providerId?: string
 }
 
-interface ChatServerResponse {
+export interface ChatServerResponse {
   text: string
   conversationId: string
   finalResult: string
@@ -90,7 +90,7 @@ const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
   if (!providers?.length) return null
 
   const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveChatProvider(providers, defaultProviderId)
+  return resolveCloudChatProvider(providers, defaultProviderId)
 }
 
 const resolveProvider = async (
@@ -98,7 +98,7 @@ const resolveProvider = async (
 ): Promise<LlmProviderConfig> => {
   if (providerId) {
     const providers = await providersStorage.getValue()
-    const match = findChatProviderById(providers ?? [], providerId)
+    const match = findCloudChatProviderById(providers ?? [], providerId)
     if (match) return match
   }
   return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()

@@ -27,9 +27,19 @@ func init() {
 			if err != nil {
 				return err
 			}
-			return renderResult(result, func() {
+			if err := renderResult(result, func() {
 				fmt.Println(ui.Warning(fmt.Sprintf("Skipped current conflict in %s", ws.Name)))
-			})
+				if len(result.Conflicts) > 0 {
+					fmt.Println(ui.Warning("Next conflict"))
+					for _, conflict := range result.Conflicts {
+						fmt.Printf("  %s\n", conflict.ChromiumPath)
+					}
+				}
+				printStashOutcome(result)
+			}); err != nil {
+				return err
+			}
+			return conflictPauseError(len(result.Conflicts) > 0 || result.StashConflict)
 		},
 	}
 	rootCmd.AddCommand(command)

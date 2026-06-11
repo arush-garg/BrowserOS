@@ -14,6 +14,8 @@ func init() {
 	var rangeMode bool
 	var squash bool
 	var base string
+	var dryRun bool
+	var excludes []string
 	command := &cobra.Command{
 		Use:         "extract [checkout] [--range <start> <end>] [-- files...]",
 		Annotations: map[string]string{"group": "Core:"},
@@ -55,16 +57,31 @@ func init() {
 				Squash:     squash,
 				Base:       base,
 				Filters:    filters,
+				Excludes:   excludes,
+				DryRun:     dryRun,
 				Progress:   commandProgress(cmd),
 			})
 			if err != nil {
 				return err
 			}
 			return renderResult(result, func() {
-				fmt.Println(ui.Title(fmt.Sprintf("Extracted patches from %s", ws.Name)))
+				title := fmt.Sprintf("Extracted patches from %s", ws.Name)
+				if result.DryRun {
+					title = fmt.Sprintf("Extract preview for %s (dry run)", ws.Name)
+				}
+				fmt.Println(ui.Title(title))
 				fmt.Printf("%s  %s\n", ui.Muted("mode:"), result.Mode)
-				fmt.Printf("%s  %d\n", ui.Muted("written:"), len(result.Written))
+				fmt.Printf("%s  %d (%d new, %d updated)\n", ui.Muted("written:"), len(result.Written), len(result.Created), len(result.Updated))
+				fmt.Printf("%s  %d\n", ui.Muted("unchanged:"), len(result.Unchanged))
 				fmt.Printf("%s  %d\n", ui.Muted("deleted:"), len(result.Deleted))
+				if result.DryRun {
+					printGroup("Would create", result.Created)
+					printGroup("Would update", result.Updated)
+					printGroup("Would delete", result.Deleted)
+				}
+				if len(result.Written) == 0 && len(result.Deleted) == 0 && !result.DryRun {
+					fmt.Println(ui.Hint("Patch repo already matches this checkout — nothing rewritten."))
+				}
 			})
 		},
 	}
@@ -73,5 +90,7 @@ func init() {
 	command.Flags().BoolVar(&rangeMode, "range", false, "Extract from a commit range")
 	command.Flags().BoolVar(&squash, "squash", false, "Squash a range into a cumulative diff")
 	command.Flags().StringVar(&base, "base", "", "Override BASE_COMMIT for extraction")
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "Preview what would be written without touching the patch repo")
+	command.Flags().StringArrayVar(&excludes, "exclude", nil, "Extra ignore pattern for untracked files; also removes previously extracted patches matching it (repeatable)")
 	rootCmd.AddCommand(command)
 }

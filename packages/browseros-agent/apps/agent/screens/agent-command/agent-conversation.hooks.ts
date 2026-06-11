@@ -18,7 +18,7 @@ import {
 import type { AgentChatHistoryMessage } from './agent-chat-types'
 import { mapAgentHarnessToolStatus } from './agent-stream-events'
 
-export interface SendInput {
+interface SendInput {
   text: string
   attachments?: ServerAttachmentPayload[]
   // Optional preview metadata used to render the optimistic user turn.
@@ -27,7 +27,7 @@ export interface SendInput {
   attachmentPreviews?: UserAttachmentPreview[]
 }
 
-interface UseAgentConversationOptions {
+export interface UseAgentConversationOptions {
   runtime?: 'agent-harness'
   sessionId?: string
   sessionKey?: string | null

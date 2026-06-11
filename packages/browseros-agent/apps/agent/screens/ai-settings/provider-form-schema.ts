@@ -1,7 +1,7 @@
 import { z } from 'zod/v3'
 import { isLocalRuntimeProviderType } from '../../lib/llm-providers/provider-runtime'
 
-export const providerTypeEnum = z.enum([
+const providerTypeEnum = z.enum([
   'moonshot',
   'anthropic',
   'openai',
@@ -18,6 +18,7 @@ export const providerTypeEnum = z.enum([
   'qwen-code',
   'codex',
   'claude-code',
+  'acp-custom',
 ])
 
 const credentiallessProviderTypes: ReadonlySet<
@@ -28,6 +29,7 @@ const credentiallessProviderTypes: ReadonlySet<
   'qwen-code',
   'codex',
   'claude-code',
+  'acp-custom',
 ])
 
 export const providerFormSchema = z
@@ -45,8 +47,13 @@ export const providerFormSchema = z
     secretAccessKey: z.string().optional(),
     region: z.string().optional(),
     sessionToken: z.string().optional(),
-    reasoningEffort: z.enum(['none', 'low', 'medium', 'high']).optional(),
+    reasoningEffort: z
+      .enum(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+      .optional(),
     reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
+    acpAgentId: z.string().optional(),
+    acpCommand: z.string().optional(),
+    acpFixedWorkspacePath: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.type === 'azure') {

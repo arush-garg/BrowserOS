@@ -19,11 +19,12 @@ ifneq ($(shell uname -s),Darwin)
 else
 	codesign --force --sign - $(PREFIX)/$(BINARY)
 endif
-	@echo "Installed $(BINARY) to $(PREFIX)/$(BINARY)"
+	ln -sf $(PREFIX)/$(BINARY) $(PREFIX)/bpatch
+	@echo "Installed $(BINARY) to $(PREFIX)/$(BINARY) (alias: bpatch)"
 
 uninstall:
-	rm -f $(PREFIX)/$(BINARY)
-	@echo "Removed $(PREFIX)/$(BINARY)"
+	rm -f $(PREFIX)/$(BINARY) $(PREFIX)/bpatch
+	@echo "Removed $(PREFIX)/$(BINARY) and $(PREFIX)/bpatch"
 
 test:
 	go test ./...

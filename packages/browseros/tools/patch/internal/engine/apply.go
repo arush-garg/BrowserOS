@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,18 +24,24 @@ type ApplyOptions struct {
 	RangeEnd   string
 	Filters    []string
 	Mode       string
-	Progress   Progress
+	// RestorePendingStash carries a rebase-mode sync's intent through a
+	// conflict pause: continue/skip restore the parked stash on completion.
+	RestorePendingStash bool
+	Progress            Progress
 }
 
 type ApplyResult struct {
-	Workspace  string              `json:"workspace"`
-	Mode       string              `json:"mode"`
-	BaseCommit string              `json:"base_commit"`
-	RepoRev    string              `json:"repo_rev"`
-	Applied    []string            `json:"applied"`
-	ResetPaths []string            `json:"reset_paths"`
-	Orphaned   []string            `json:"orphaned,omitempty"`
-	Conflicts  []resolve.Operation `json:"conflicts,omitempty"`
+	Workspace          string              `json:"workspace"`
+	Mode               string              `json:"mode"`
+	BaseCommit         string              `json:"base_commit"`
+	RepoRev            string              `json:"repo_rev"`
+	Applied            []string            `json:"applied"`
+	ResetPaths         []string            `json:"reset_paths"`
+	Orphaned           []string            `json:"orphaned,omitempty"`
+	StashRestored      bool                `json:"stash_restored,omitempty"`
+	StashConflict      bool                `json:"stash_conflict,omitempty"`
+	StashConflictFiles []string            `json:"stash_conflict_files,omitempty"`
+	Conflicts          []resolve.Operation `json:"conflicts,omitempty"`
 }
 
 func Apply(ctx context.Context, opts ApplyOptions) (*ApplyResult, error) {
@@ -64,7 +71,7 @@ func Apply(ctx context.Context, opts ApplyOptions) (*ApplyResult, error) {
 		}
 		return result, nil
 	}
-	next, err := applyOperationRange(ctx, opts.Workspace, opts.Repo, ops, 0, nil, nil, result, opts.Progress)
+	next, err := applyOperationRange(ctx, opts.Workspace, opts.Repo, ops, 0, nil, nil, opts.RestorePendingStash, result, opts.Progress)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +120,7 @@ func Continue(ctx context.Context, opts ContinueOptions) (*ApplyResult, error) {
 		Conflicts:  nil,
 	}
 	reportProgress(opts.Progress, "Continuing patch resolution")
-	next, err := applyOperationRange(ctx, ws, repoInfo, state.Operations, state.Current+1, state.Resolved, state.Skipped, result, opts.Progress)
+	next, err := applyOperationRange(ctx, ws, repoInfo, state.Operations, state.Current+1, state.Resolved, state.Skipped, state.RestorePendingStash, result, opts.Progress)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +130,11 @@ func Continue(ctx context.Context, opts ContinueOptions) (*ApplyResult, error) {
 		}
 		if err := resolve.Delete(ws.Path); err != nil {
 			return nil, err
+		}
+		if state.RestorePendingStash {
+			if err := restorePendingStash(ctx, ws.Path, result, opts.Progress); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return result, nil
@@ -157,7 +169,7 @@ func Skip(ctx context.Context, opts SkipOptions) (*ApplyResult, error) {
 		Applied:    append([]string{}, state.Resolved...),
 	}
 	reportProgress(opts.Progress, "Skipping current conflict")
-	next, err := applyOperationRange(ctx, ws, repoInfo, state.Operations, state.Current+1, state.Resolved, state.Skipped, result, opts.Progress)
+	next, err := applyOperationRange(ctx, ws, repoInfo, state.Operations, state.Current+1, state.Resolved, state.Skipped, state.RestorePendingStash, result, opts.Progress)
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +180,44 @@ func Skip(ctx context.Context, opts SkipOptions) (*ApplyResult, error) {
 		if err := resolve.Delete(ws.Path); err != nil {
 			return nil, err
 		}
+		if state.RestorePendingStash {
+			if err := restorePendingStash(ctx, ws.Path, result, opts.Progress); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return result, nil
+}
+
+// restorePendingStash pops a stash a conflicted sync left behind once the
+// last operation completes, so the rebase loop ends with local changes back
+// in the tree. A pop conflict keeps the stash pending and is reported on the
+// result instead of failing.
+func restorePendingStash(ctx context.Context, workspacePath string, result *ApplyResult, progress Progress) error {
+	state, err := workspace.LoadState(workspacePath)
+	if err != nil {
+		return err
+	}
+	if state.PendingStash == "" {
+		return nil
+	}
+	reportProgress(progress, "Rebasing stashed local changes")
+	if err := git.StashRebase(ctx, workspacePath, state.PendingStash); err != nil {
+		if errors.Is(err, git.ErrStashNotFound) {
+			state.PendingStash = ""
+			return workspace.SaveState(workspacePath, state)
+		}
+		var conflict *git.StashConflictError
+		if !errors.As(err, &conflict) {
+			return err
+		}
+		result.StashConflict = true
+		result.StashConflictFiles = conflict.Files
+		return nil
+	}
+	result.StashRestored = true
+	state.PendingStash = ""
+	return workspace.SaveState(workspacePath, state)
 }
 
 func Abort(ctx context.Context, ws workspace.Entry) error {
@@ -202,7 +250,10 @@ func Abort(ctx context.Context, ws workspace.Entry) error {
 		return nil
 	}
 	if err := git.StashPop(ctx, ws.Path, workspaceState.PendingStash); err != nil {
-		return err
+		if !errors.Is(err, git.ErrStashNotFound) {
+			return err
+		}
+		// Stale record (stash gone): clearing it is the correct rollback.
 	}
 	workspaceState.PendingStash = ""
 	return workspace.SaveState(ws.Path, workspaceState)
@@ -223,7 +274,16 @@ func buildApplyOperations(ctx context.Context, opts ApplyOptions) ([]resolve.Ope
 		}
 		return operationsFromChanges(repoSet, changes, opts.Filters), nil, nil
 	default:
-		localSet, err := patch.BuildWorkingTreePatchSet(ctx, opts.Workspace.Path, opts.Repo.BaseCommit, opts.Filters)
+		ignore, err := patch.LoadIgnoreSet(opts.Repo.Root, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		localSet, err := patch.BuildWorkingTreePatchSet(ctx, opts.Workspace.Path, patch.WorkingTreeOptions{
+			Base:    opts.Repo.BaseCommit,
+			Filters: opts.Filters,
+			Ignore:  ignore,
+			Report:  func(message string) { reportProgress(opts.Progress, "%s", message) },
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -262,6 +322,7 @@ func applyOperationRange(
 	start int,
 	resolved []string,
 	skipped []string,
+	restorePending bool,
 	result *ApplyResult,
 	progress Progress,
 ) (int, error) {
@@ -288,15 +349,16 @@ func applyOperationRange(
 				op.Message = err.Error()
 				ops[idx] = op
 				state := &resolve.State{
-					Workspace:  ws.Path,
-					RepoRoot:   repoInfo.Root,
-					BaseCommit: repoInfo.BaseCommit,
-					RepoRev:    result.RepoRev,
-					Mode:       result.Mode,
-					Current:    idx,
-					Operations: ops,
-					Resolved:   append([]string{}, resolved...),
-					Skipped:    append([]string{}, skipped...),
+					Workspace:           ws.Path,
+					RepoRoot:            repoInfo.Root,
+					BaseCommit:          repoInfo.BaseCommit,
+					RepoRev:             result.RepoRev,
+					Mode:                result.Mode,
+					Current:             idx,
+					Operations:          ops,
+					Resolved:            append([]string{}, resolved...),
+					Skipped:             append([]string{}, skipped...),
+					RestorePendingStash: restorePending,
 				}
 				if err := resolve.Save(ws.Path, state); err != nil {
 					return idx, err
@@ -338,7 +400,10 @@ func verifyResolved(ctx context.Context, workspacePath string, repoInfo *repo.In
 	if err != nil {
 		return err
 	}
-	localSet, err := patch.BuildWorkingTreePatchSet(ctx, workspacePath, base, []string{op.ChromiumPath})
+	localSet, err := patch.BuildWorkingTreePatchSet(ctx, workspacePath, patch.WorkingTreeOptions{
+		Base:    base,
+		Filters: []string{op.ChromiumPath},
+	})
 	if err != nil {
 		return err
 	}

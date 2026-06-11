@@ -48,17 +48,17 @@ export interface KlavisProxyRef {
   handle: KlavisProxyHandle | null
 }
 
-interface ConnectDeps {
+export interface ConnectDeps {
   klavisClient: KlavisClient
   browserosId: string
 }
 
-interface BackgroundConnectOptions {
+export interface BackgroundConnectOptions {
   connect?: (deps: ConnectDeps) => Promise<KlavisProxyHandle>
   retryDelaysMs?: readonly number[]
 }
 
-export async function connectKlavisProxy(
+async function connectKlavisProxy(
   deps: ConnectDeps,
 ): Promise<KlavisProxyHandle> {
   const allServers = OAUTH_MCP_SERVERS.map((s) => s.name)

@@ -36,12 +36,27 @@ function createFakeServer() {
 }
 
 describe('registerTools', () => {
-  it('registers the new compact browser tools by default', () => {
+  it('registers the legacy browser tools by default', () => {
     const fake = createFakeServer()
 
     registerTools(fake.server as never, {
       browser: {} as never,
       browserSession: { pages: {} } as unknown as BrowserSession,
+    })
+
+    expect(fake.handlers.has('tabs')).toBe(false)
+    expect(fake.handlers.has('new_page')).toBe(true)
+    expect(fake.handlers.has('get_bookmarks')).toBe(true)
+    expect(fake.handlers.has('browseros_info')).toBe(true)
+  })
+
+  it('registers the new compact browser tools when explicitly enabled', () => {
+    const fake = createFakeServer()
+
+    registerTools(fake.server as never, {
+      browser: {} as never,
+      browserSession: { pages: {} } as unknown as BrowserSession,
+      useNewTools: true,
     })
 
     expect([...fake.handlers.keys()]).toEqual(BROWSER_TOOLS.map((t) => t.name))

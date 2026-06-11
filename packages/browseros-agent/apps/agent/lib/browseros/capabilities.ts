@@ -154,7 +154,7 @@ export function resolveStaticFeatureSupport({
   return null
 }
 
-type CapabilitiesState = {
+export type CapabilitiesState = {
   browserOSVersion: number[] | null
   serverVersion: number[] | null
 }

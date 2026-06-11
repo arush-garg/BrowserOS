@@ -65,7 +65,7 @@ export function createMcpRoutes(deps: McpRouteDeps) {
       browser: deps.browser,
       browserSession: deps.browserSession,
       klavisRef: deps.klavisRef,
-      browserUseNewTools: deps.browserUseNewTools !== false,
+      browserUseNewTools: deps.browserUseNewTools === true,
       defaultWindowId,
       defaultTabGroupId,
     })

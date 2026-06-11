@@ -5,6 +5,7 @@
  */
 
 import { createAgentUIStreamResponse, type UIMessage } from 'ai'
+import { isAcpProvider } from '../../agent/acp-providers'
 import { AiSdkAgent } from '../../agent/ai-sdk-agent'
 import { formatUserMessage } from '../../agent/format-message'
 import {
@@ -15,6 +16,7 @@ import type { AgentSession, SessionStore } from '../../agent/session-store'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
 import type { BrowserSession } from '../../browser/core/session'
+import { buildAcpMcpServers } from '../../lib/agents/acpx-provider/buildAcpMcpServers'
 import { resolveLLMConfig } from '../../lib/clients/llm/config'
 import { logger } from '../../lib/logger'
 import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
@@ -28,6 +30,13 @@ export interface ChatServiceDeps {
   browserSession: BrowserSession
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
+  /** Port the BrowserOS server bound to. Forwarded into the ACP MCP
+   *  bridge so the spawned agent can dial back into /mcp. */
+  serverPort: number
+  /** BrowserOS resources directory. Threaded into ACP-backed config
+   *  resolutions so the bundled-Bun launcher under
+   *  <resourcesDir>/bin/third_party/bun can be located. */
+  resourcesDir?: string | null
 }
 
 export class ChatService {
@@ -41,9 +50,18 @@ export class ChatService {
 
     const llmConfig = await resolveLLMConfig(request, this.deps.browserosId)
 
+    // Look up the session first so we can stamp isNewConversation onto
+    // agentConfig before it flows down into the ACP factory (which uses
+    // the flag to decide whether to refresh the workspace instruction
+    // file). The original isNewSession flag below stays as-is for the
+    // rest of the chat-service logic.
+    let session = sessionStore.get(request.conversationId)
+    const isFirstTurn = !session
+
     const agentConfig: ResolvedAgentConfig = {
       conversationId: request.conversationId,
       provider: llmConfig.provider,
+      providerId: llmConfig.providerId,
       model: llmConfig.model,
       apiKey: llmConfig.apiKey,
       baseUrl: llmConfig.baseUrl,
@@ -65,9 +83,22 @@ export class ChatService {
       origin: request.origin,
       declinedApps: request.declinedApps,
       browserosId: this.deps.browserosId,
+      acpAgentId: request.acpAgentId,
+      acpCommand: request.acpCommand,
+      acpFixedWorkspacePath: request.acpFixedWorkspacePath,
+      acpMcpServers: isAcpProvider(llmConfig.provider)
+        ? buildAcpMcpServers({
+            serverPort: this.deps.serverPort,
+            conversationId: request.conversationId,
+            providerId: llmConfig.provider,
+            defaultWindowId: request.browserContext?.windowId,
+            customMcpServers: request.browserContext?.customMcpServers,
+          })
+        : undefined,
+      isNewConversation: isFirstTurn,
+      resourcesDir: this.deps.resourcesDir,
     }
 
-    let session = sessionStore.get(request.conversationId)
     let isNewSession = false
     const contextChanges: string[] = []
 
@@ -280,15 +311,35 @@ export class ChatService {
     const wrappedUserMessageId =
       session.agent.messages[session.agent.messages.length - 1]?.id
 
-    const promptUiMessages = filterValidMessages(session.agent.messages).map(
-      (msg) =>
-        msg.id === wrappedUserMessageId && msg.role === 'user'
-          ? {
-              ...msg,
-              parts: [{ type: 'text' as const, text: promptUserText }],
-            }
-          : msg,
-    )
+    // ACP-backed providers run against a persistent acpx session that
+    // owns the agent's conversation memory natively on disk under
+    // <stateDir>/<sessionKey>/. Re-feeding the full UIMessage history
+    // doubles bookkeeping and, worse, trips the AI SDK validator when
+    // it walks phantom tool-<name> parts emitted by acpx-ai-provider
+    // under freshly-generated "acpx-N" ids (acpx#37). For ACP turns
+    // we send only the new user message — acpx's session/load reads
+    // prior turns from disk transparently. The UI continues to see
+    // the growing transcript via session.agent.messages.
+    //
+    // LLM-API providers are stateless and need the full history on
+    // each turn, so they keep the existing shape verbatim.
+    const isAcp = isAcpProvider(agentConfig.provider)
+    const promptUiMessages: UIMessage[] = isAcp
+      ? [
+          {
+            id: wrappedUserMessageId ?? crypto.randomUUID(),
+            role: 'user',
+            parts: [{ type: 'text', text: promptUserText }],
+          },
+        ]
+      : filterValidMessages(session.agent.messages).map((msg) =>
+          msg.id === wrappedUserMessageId && msg.role === 'user'
+            ? {
+                ...msg,
+                parts: [{ type: 'text' as const, text: promptUserText }],
+              }
+            : msg,
+        )
 
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
@@ -299,18 +350,52 @@ export class ChatService {
         // wrapped user text. Restore the raw form before persisting
         // so subsequent turns see the clean text and the client's
         // local UIMessage matches what was originally typed.
-        const restored = messages.map((msg) =>
-          msg.id === wrappedUserMessageId && msg.role === 'user'
-            ? {
-                ...msg,
-                parts: [{ type: 'text' as const, text: request.message }],
-              }
-            : msg,
-        )
-        session.agent.messages = filterValidMessages(restored)
+        //
+        // ACP path: `messages` is the single user msg we sent plus
+        // the assistant's new reply. The user msg already lives in
+        // session.agent.messages via appendUserMessage; we only need
+        // to restore its raw text and append the new assistant
+        // entries from this turn.
+        //
+        // LLM-API path: `messages` is the full conversation as the
+        // AI SDK reconstructed it. Restore the wrapped user message
+        // and replace the entire session history with the result.
+        if (isAcp) {
+          // Invariant: an id in both `messages` and session means the
+          // AI SDK handed us back something we already have. With the
+          // single-user-msg input shape that means our own user msg —
+          // the only collision we expect. Any new id is a fresh
+          // assistant entry from this turn. acpx never re-emits prior
+          // turns into the AI SDK stream, so this filter cannot drop a
+          // legitimately new message.
+          const existingIds = new Set(session.agent.messages.map((m) => m.id))
+          const newMessages = messages.filter((m) => !existingIds.has(m.id))
+          const updated = session.agent.messages.map((m) =>
+            m.id === wrappedUserMessageId && m.role === 'user'
+              ? {
+                  ...m,
+                  parts: [{ type: 'text' as const, text: request.message }],
+                }
+              : m,
+          )
+          session.agent.messages = filterValidMessages([
+            ...updated,
+            ...newMessages,
+          ])
+        } else {
+          const restored = messages.map((msg) =>
+            msg.id === wrappedUserMessageId && msg.role === 'user'
+              ? {
+                  ...msg,
+                  parts: [{ type: 'text' as const, text: request.message }],
+                }
+              : msg,
+          )
+          session.agent.messages = filterValidMessages(restored)
+        }
         logger.info('Agent execution complete', {
           conversationId: request.conversationId,
-          totalMessages: restored.length,
+          totalMessages: session.agent.messages.length,
         })
 
         if (session?.hiddenPageId) {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -133,14 +134,43 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 }
 
+// exitCodeError carries a specific process exit code; Execute exits with it
+// silently because the command already rendered its result.
+type exitCodeError struct {
+	code int
+}
+
+func (e *exitCodeError) Error() string {
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+// errConflictPause is the exit-2 sentinel for operations that paused on a
+// conflict and need a human or agent before continuing.
+var errConflictPause = &exitCodeError{code: 2}
+
+// conflictPauseError converts "did this operation pause on conflicts?" into
+// the sentinel returned after rendering.
+func conflictPauseError(paused bool) error {
+	if paused {
+		return errConflictPause
+	}
+	return nil
+}
+
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		activeProgress.Finish()
+		var exitErr *exitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func renderResult(data any, human func()) error {
+	activeProgress.Finish()
 	if jsonOut {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")

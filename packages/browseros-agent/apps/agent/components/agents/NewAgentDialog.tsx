@@ -29,7 +29,7 @@ import type {
 import { HermesModelPicker } from './HermesModelPicker'
 import { ProviderSelector } from './ProviderSelector'
 
-interface NewAgentDialogProps {
+export interface NewAgentDialogProps {
   adapters: HarnessAdapterDescriptor[]
   createError: string | null
   createRuntime: CreateAgentRuntime

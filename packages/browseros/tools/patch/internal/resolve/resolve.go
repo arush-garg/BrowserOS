@@ -29,6 +29,10 @@ type State struct {
 	Operations []Operation `json:"operations"`
 	Resolved   []string    `json:"resolved,omitempty"`
 	Skipped    []string    `json:"skipped,omitempty"`
+	// RestorePendingStash marks that the paused operation was a rebase-mode
+	// sync: when the conflict loop completes, the parked stash comes back.
+	// Stashes parked explicitly with --no-rebase stay parked.
+	RestorePendingStash bool `json:"restore_pending_stash,omitempty"`
 }
 
 func Path(workspacePath string) string {
@@ -82,7 +86,7 @@ func FindActive(reg *workspace.Registry, cwd string) (workspace.Entry, error) {
 	}
 	switch len(active) {
 	case 0:
-		return workspace.Entry{}, fmt.Errorf(`no active conflict resolution found; run "browseros-patch apply" or "browseros-patch sync --rebase" first`)
+		return workspace.Entry{}, fmt.Errorf(`no active conflict resolution found; run "browseros-patch apply" or "browseros-patch sync" first`)
 	case 1:
 		return active[0], nil
 	default:

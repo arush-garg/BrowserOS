@@ -23,7 +23,7 @@ export function registerTools(
     defaultTabGroupId: deps.defaultTabGroupId,
   }
 
-  if (deps.useNewTools !== false) {
+  if (deps.useNewTools === true) {
     registerBrowserTools(mcpServer, deps.browserSession, defaults)
     return
   }

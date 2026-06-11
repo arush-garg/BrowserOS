@@ -1,5 +1,4 @@
 import type { FC } from 'react'
-import { adapterLabel } from '@/components/agents/AdapterIcon'
 import { AgentSummaryChips } from '@/components/agents/agent-row/AgentSummaryChips'
 import { AgentTile } from '@/components/agents/agent-row/AgentTile'
 import type { AgentAdapterHealth } from '@/components/agents/agent-row/agent-row.types'
@@ -8,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import type { HarnessAgent } from '@/modules/agents/agent-harness-types'
 
-interface AgentRailRowProps {
+export interface AgentRailRowProps {
   agent: HarnessAgent
   active: boolean
   adapterHealth: AgentAdapterHealth | null
@@ -90,13 +89,4 @@ export const AgentRailRow: FC<AgentRailRowProps> = ({
       </div>
     </button>
   )
-}
-
-/**
- * Tooltip-only label helper kept exported in case the tile row needs to
- * show "Codex agent" or similar in a future state. Inlined fallback for
- * the rare `unknown` adapter rendering path.
- */
-export function railRowAdapterLabel(agent: HarnessAgent): string {
-  return adapterLabel(agent.adapter)
 }

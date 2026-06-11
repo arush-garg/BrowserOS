@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,6 +45,53 @@ func TestCommandProgressDisabledForJSON(t *testing.T) {
 
 	if progress := commandProgress(&cobra.Command{}); progress != nil {
 		t.Fatalf("expected nil progress reporter in JSON mode")
+	}
+}
+
+func TestCLIProgressTTYRewritesSingleLine(t *testing.T) {
+	var buf bytes.Buffer
+	progress := &cliProgress{w: &buf, tty: true}
+	progress.Step("Applying 1/342 chrome/a.cc")
+	progress.Step("Applying 2/342 chrome/b.cc")
+
+	output := buf.String()
+	if strings.Contains(output, "\n") {
+		t.Fatalf("tty progress must not emit newlines between steps, got %q", output)
+	}
+	if strings.Count(output, "\r") < 2 {
+		t.Fatalf("tty progress should rewrite the line per step, got %q", output)
+	}
+	if !strings.Contains(output, "Applying 2/342 chrome/b.cc") {
+		t.Fatalf("expected latest step in output, got %q", output)
+	}
+
+	progress.Finish()
+	if !strings.HasSuffix(buf.String(), "\x1b[2K") {
+		t.Fatalf("Finish should clear the pending line, got %q", buf.String())
+	}
+	progress.Finish() // idempotent
+}
+
+func TestCLIProgressNilSafe(t *testing.T) {
+	var progress *cliProgress
+	progress.Step("ignored")
+	progress.Finish()
+}
+
+func TestConflictPauseErrorClassification(t *testing.T) {
+	if err := conflictPauseError(false); err != nil {
+		t.Fatalf("clean result must exit 0, got %v", err)
+	}
+	err := conflictPauseError(true)
+	if err == nil {
+		t.Fatalf("paused result must return the exit sentinel")
+	}
+	var exitErr *exitCodeError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected exitCodeError, got %T", err)
+	}
+	if exitErr.code != 2 {
+		t.Fatalf("conflict pause exit code = %d, want 2", exitErr.code)
 	}
 }
 
@@ -264,6 +312,21 @@ func TestLLMTxtGuideContent(t *testing.T) {
 		"browseros-patch extract ch1",
 		"list reads only registered Chromium checkouts",
 		"does not inspect sync state",
+		// agent playbook
+		"Exit codes",
+		"0 = success",
+		"1 = error",
+		"2 = paused on a conflict",
+		"browseros-patch continue",
+		"browseros-patch skip",
+		"browseros-patch abort",
+		"browseros-patch extract ch1 --dry-run",
+		".browseros-patchignore",
+		"BASE_COMMIT",
+		"browseros-patch publish",
+		"pull",
+		"Chromium upgrade loop",
+		"--json",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected llm txt to contain %q, got:\n%s", want, text)

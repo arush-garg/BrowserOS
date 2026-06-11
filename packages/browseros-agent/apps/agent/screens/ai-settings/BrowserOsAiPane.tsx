@@ -29,6 +29,7 @@ import type { ProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import { testProvider } from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
+import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useGraphqlMutation } from '@/modules/graphql/graphql-mutation.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
@@ -42,6 +43,7 @@ import { CodingAgentsManager } from './CodingAgentsManager'
 import { ConfiguredProvidersList } from './ConfiguredProvidersList'
 import { useCodingAgents } from './coding-agents.hooks'
 import { DeviceCodeDialog } from './DeviceCodeDialog'
+import { useDefaultChatTarget } from './default-chat-target.hooks'
 import {
   DeleteRemoteLlmProviderDocument,
   GetRemoteLlmProvidersDocument,
@@ -109,6 +111,17 @@ export const BrowserOsAiPane: FC = () => {
   const { sessionInfo } = useSessionInfo()
   const queryClient = useQueryClient()
   const coding = useCodingAgents()
+  const defaultTarget = useDefaultChatTarget({
+    providers,
+    agents: coding.agents,
+    defaultProviderId,
+    setDefaultProvider,
+  })
+  const { effectiveTarget } = defaultTarget
+  const selectedProviderId =
+    effectiveTarget.kind === 'llm' ? effectiveTarget.id : null
+  const selectedAgentId =
+    effectiveTarget.kind === 'acp' ? effectiveTarget.id : null
 
   const userId = sessionInfo.user?.id
 
@@ -238,6 +251,36 @@ export const BrowserOsAiPane: FC = () => {
     setIsNewDialogOpen(true)
   }
 
+  // Coding-agent template cards (Claude Code / Codex) now open the
+  // provider dialog so the saved record participates in the regular
+  // /chat → streamText flow via the acpx-ai-provider runtime. The
+  // server-side provider factory branches on type and spawns the ACP
+  // agent; the LlmProviderConfig carries optional acpAgentId,
+  // acpCommand, and acpFixedWorkspacePath which the factory reads
+  // (with sensible defaults if any are absent).
+  const handleUseCodingAgentTemplate = (adapterId: HarnessAgentAdapter) => {
+    if (adapterId === 'hermes') {
+      // Hermes still routes through the harness; leave the existing
+      // create flow in place.
+      coding.openCreate(adapterId)
+      return
+    }
+    setTemplateValues({
+      type: adapterId === 'codex' ? 'codex' : 'claude-code',
+      name: adapterId === 'codex' ? 'Codex' : 'Claude Code',
+      baseUrl: '',
+      // Leave modelId empty so the dialog defaults to the probe's
+      // first settable id. Hard-coded guesses (claude-sonnet-4-6,
+      // gpt-5.5, etc.) get rejected by the local adapter's
+      // session/set_config_option call.
+      modelId: '',
+      supportsImages: true,
+      contextWindow: adapterId === 'codex' ? 400000 : 200000,
+      temperature: 0.2,
+    })
+    setIsNewDialogOpen(true)
+  }
+
   const handleEditProvider = (provider: LlmProviderConfig) => {
     setEditingProvider(provider)
     setIsEditDialogOpen(true)
@@ -298,10 +341,6 @@ export const BrowserOsAiPane: FC = () => {
     await saveProvider(provider)
   }
 
-  const handleSelectProvider = (providerId: string) => {
-    setDefaultProvider(providerId)
-  }
-
   const handleTestProvider = async (provider: LlmProviderConfig) => {
     if (!agentServerUrl) {
       toast.error('Test Failed', {
@@ -357,8 +396,9 @@ export const BrowserOsAiPane: FC = () => {
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
       <LlmProvidersHeader
         providers={providers}
-        defaultProviderId={defaultProviderId}
-        onDefaultProviderChange={setDefaultProvider}
+        agents={coding.agents}
+        selectedTarget={effectiveTarget}
+        onSelectTarget={defaultTarget.selectTarget}
         onAddProvider={handleAddProvider}
       />
 
@@ -366,21 +406,25 @@ export const BrowserOsAiPane: FC = () => {
 
       <ProviderTemplatesSection
         codingAdapters={coding.adapters}
-        onCreateAgent={coding.openCreate}
+        onCreateAgent={handleUseCodingAgentTemplate}
         onUseTemplate={handleUseTemplate}
       />
 
       <ConfiguredProvidersList
         providers={providers}
-        selectedProviderId={defaultProviderId}
+        selectedProviderId={selectedProviderId}
         testingProviderId={testingProviderId}
-        onSelectProvider={handleSelectProvider}
+        onSelectProvider={defaultTarget.selectProvider}
         onTestProvider={handleTestProvider}
         onEditProvider={handleEditProvider}
         onDeleteProvider={handleDeleteProvider}
       />
 
-      <CodingAgentsList controller={coding} />
+      <CodingAgentsList
+        controller={coding}
+        selectedAgentId={selectedAgentId}
+        onSelectAgent={defaultTarget.selectAgent}
+      />
 
       <IncompleteProvidersList
         providers={incompleteProviders}

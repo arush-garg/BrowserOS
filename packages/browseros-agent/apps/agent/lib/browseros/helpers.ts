@@ -109,7 +109,7 @@ export async function getMcpServerUrl(): Promise<string> {
   return `http://127.0.0.1:${port}/mcp`
 }
 
-export class ProxyPortError extends Error {
+class ProxyPortError extends Error {
   constructor() {
     super('Proxy server port not configured.')
     this.name = 'ProxyPortError'

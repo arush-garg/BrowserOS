@@ -16,7 +16,7 @@ import { VERSION } from './version'
 
 const portSchema = z.number().int()
 
-export const ServerConfigSchema = z.object({
+const ServerConfigSchema = z.object({
   cdpPort: portSchema.nullable(),
   serverPort: portSchema,
   agentPort: portSchema,
@@ -303,7 +303,7 @@ function getDefaults(cwd: string): PartialConfig {
     executionDir: cwd,
     mcpAllowRemote: false,
     aiSdkDevtoolsEnabled: false,
-    browserUseNewTools: true,
+    browserUseNewTools: false,
   }
 }
 
