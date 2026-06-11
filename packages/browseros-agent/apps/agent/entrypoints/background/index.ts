@@ -5,6 +5,7 @@ import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import { openSidePanel, toggleSidePanel } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import {
+  setupBackgroundCrossProfileSync,
   setupLlmProvidersBackupToBrowserOS,
   setupLlmProvidersSyncToBackend,
   syncLlmProviders,
@@ -44,6 +45,7 @@ export default defineBackground(() => {
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
   setupLlmProvidersSyncToBackend()
+  setupBackgroundCrossProfileSync()
   setupScheduledJobsSyncToBackend()
 
   scheduledJobRuns()

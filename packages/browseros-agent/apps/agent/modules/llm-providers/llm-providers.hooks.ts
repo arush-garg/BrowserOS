@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
+import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   resolveDefaultProviderId,
@@ -10,7 +12,6 @@ import {
   defaultProviderIdStorage,
   loadProviders,
   providersStorage,
-  setupBrowserOSProvidersWatcher,
 } from '../../lib/llm-providers/storage'
 
 export interface UseLlmProvidersReturn {
@@ -41,10 +42,28 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     const loadData = async () => {
       setIsLoading(true)
       try {
-        let [loadedProviders, loadedDefaultId] = await Promise.all([
-          loadProviders(),
-          defaultProviderIdStorage.getValue(),
-        ])
+        let loadedProviders = await loadProviders()
+
+        // Try shared BrowserOS prefs first, then fall back to local storage
+        let loadedDefaultId: string | undefined
+        try {
+          const adapter = getBrowserOSAdapter()
+          const pref = await adapter.getPref(BROWSEROS_PREFS.PROVIDERS)
+          const raw = pref?.value
+          if (typeof raw === 'string') {
+            const parsed = JSON.parse(raw)
+            const backup = Array.isArray(parsed) ? {} : parsed
+            if (backup.defaultProviderId) {
+              loadedDefaultId = backup.defaultProviderId
+            }
+          }
+        } catch {
+          // ignore adapter errors
+        }
+        if (!loadedDefaultId) {
+          loadedDefaultId =
+            (await defaultProviderIdStorage.getValue()) ?? undefined
+        }
 
         if (!loadedProviders || loadedProviders.length === 0) {
           loadedProviders = createDefaultProvidersConfig()
@@ -71,9 +90,6 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   }, [])
 
   useEffect(() => {
-    // Also watch BrowserOS Local State for cross-profile changes
-    const stopBrowserOSWatcher = setupBrowserOSProvidersWatcher()
-
     const unsubscribeProviders = providersStorage.watch((newProviders) => {
       if (newProviders) {
         setProviders(newProviders)
@@ -91,7 +107,6 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     return () => {
       unsubscribeProviders()
       unsubscribeDefaultId()
-      stopBrowserOSWatcher()
     }
   }, [])
 

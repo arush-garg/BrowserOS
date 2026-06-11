@@ -50,13 +50,22 @@ async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
  * @public
  */
 export function setupLlmProvidersBackupToBrowserOS(): () => void {
-  const unsubscribe = providersStorage.watch(async (providers) => {
+  const unsub1 = providersStorage.watch(async (providers) => {
     if (providers) {
       const defaultProviderId = await defaultProviderIdStorage.getValue()
       await backupToBrowserOS({ defaultProviderId, providers })
     }
   })
-  return unsubscribe
+  const unsub2 = defaultProviderIdStorage.watch(async (defaultProviderId) => {
+    if (defaultProviderId) {
+      const providers = (await providersStorage.getValue()) ?? []
+      await backupToBrowserOS({ defaultProviderId, providers })
+    }
+  })
+  return () => {
+    unsub1()
+    unsub2()
+  }
 }
 
 export async function syncLlmProviders(): Promise<void> {
@@ -151,6 +160,59 @@ export function setupBrowserOSProvidersWatcher(
             if (providersFromPref) {
               const normalized = normalizeProviderNames(providersFromPref)
               await providersStorage.setValue(normalized)
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      } catch {
+        // ignore adapter errors
+      }
+
+      await new Promise((r) => setTimeout(r, pollIntervalMs))
+    }
+  }
+
+  void poll()
+  return () => {
+    stopped = true
+  }
+}
+
+/**
+ * Poll BrowserOS prefs for cross-profile changes and sync both providers and
+ * default provider ID into local storage. Designed for persistent background
+ * usage (15s poll) — the component-level watcher (setupBrowserOSProvidersWatcher)
+ * runs at 3s for immediate UI reactivity.
+ * @public
+ */
+export function setupBackgroundCrossProfileSync(
+  pollIntervalMs = 15000,
+): () => void {
+  let stopped = false
+  let lastSeen = ''
+
+  const poll = async () => {
+    const adapter = getBrowserOSAdapter()
+    while (!stopped) {
+      try {
+        const pref = await adapter.getPref(BROWSEROS_PREFS.PROVIDERS)
+        const raw = pref?.value
+        if (typeof raw === 'string' && raw !== lastSeen) {
+          lastSeen = raw
+          try {
+            const parsed = JSON.parse(raw)
+            const backup = Array.isArray(parsed)
+              ? { providers: parsed }
+              : parsed
+
+            if (Array.isArray(backup.providers)) {
+              const normalized = normalizeProviderNames(backup.providers)
+              await providersStorage.setValue(normalized)
+            }
+
+            if (backup.defaultProviderId) {
+              await defaultProviderIdStorage.setValue(backup.defaultProviderId)
             }
           } catch {
             // ignore parse errors
