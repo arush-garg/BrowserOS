@@ -275,7 +275,7 @@ describe('persistSidepanelChatTargetSelection', () => {
   it('persists null when no target is selected', async () => {
     const store = createSelectionStore({ kind: 'acp', id: 'agent-codex' })
 
-    await persistSidepanelChatTargetSelection(undefined, store)
+    await saveSidepanelChatTargetSelection(null, store)
 
     expect(await store.getValue()).toBeNull()
   })
