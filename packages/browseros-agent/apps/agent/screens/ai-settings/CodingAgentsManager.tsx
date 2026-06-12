@@ -32,12 +32,9 @@ export const CodingAgentsManager: FC<{
       createError={createError}
       createRuntime={createAdapterId ?? 'claude'}
       creating={creating}
-      defaultProviderId=""
       harnessAdapterId={createAdapterId ?? 'claude'}
       harnessModelId={modelId}
       harnessReasoningEffort={reasoningEffort}
-      hermesProviders={[]}
-      hermesSelectedProviderId=""
       name={newName}
       open={createOpen}
       onCreate={handleCreate}
@@ -48,7 +45,6 @@ export const CodingAgentsManager: FC<{
       onHarnessAdapterChange={() => {}}
       onHarnessModelChange={setModelId}
       onHarnessReasoningChange={setReasoningEffort}
-      onHermesProviderChange={() => {}}
       onNameChange={setNewName}
     />
   )

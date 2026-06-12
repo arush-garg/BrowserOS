@@ -45,7 +45,7 @@ export interface CreateRetryingLanguageModelOptions {
     apiKey?: string
     baseUrl?: string
     providerType: string
-  }) => LanguageModelV3
+  }) => LanguageModelV3 | Promise<LanguageModelV3>
   fixedBackoffMs?: number
   sleep?: (ms: number) => Promise<void>
   random?: () => number
@@ -210,7 +210,7 @@ export function createRetryingLanguageModel(
       })
     }
 
-    const fallbackModel = createModel({
+    const fallbackModel = await createModel({
       gatewayProviderName: fallback.name,
       model: fallback.model,
       apiKey: fallback.apiKey,

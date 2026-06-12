@@ -33,6 +33,7 @@ import {
   withBundledNativeBinaryPath,
 } from '../host-acp/bundled-native-binary'
 import { HOST_ACP_ADAPTER_CONFIG } from '../host-acp/config'
+import { HERMES_MODEL_COMMAND_ENV } from '../runtime/hermes-container-runtime'
 import type {
   AgentHistoryPage,
   AgentPromptInput,
@@ -832,6 +833,14 @@ function resolveHermesHostAcpAdapterCommand(input: {
     env: input.commandEnv,
     resourcesDir: input.resourcesDir,
   })
+
+  // Pop model override from commandEnv so it's never leaked as a real env var,
+  // and pass it as -m <model> on the command line.
+  const model: string | undefined =
+    commandEnv[HERMES_MODEL_COMMAND_ENV] || undefined
+  delete commandEnv[HERMES_MODEL_COMMAND_ENV]
+  const modelArg = model ? ` -m ${shellQuote(model)}` : ''
+
   const bundledHermes = resolveBundledNativeBinary({
     adapter: 'hermes',
     resourcesDir: input.resourcesDir,
@@ -839,19 +848,19 @@ function resolveHermesHostAcpAdapterCommand(input: {
   })
   if (bundledHermes) {
     return {
-      command: `${shellQuote(bundledHermes.path)} acp`,
+      command: `${shellQuote(bundledHermes.path)} acp${modelArg}`,
       commandEnv,
     }
   }
 
   const command = HOST_ACP_ADAPTER_CONFIG.hermes.acpCommand
   if (process.platform === 'win32') {
-    return { command, commandEnv }
+    return { command: `${command}${modelArg}`, commandEnv }
   }
 
   const shell = process.env.SHELL?.trim() || 'sh'
   return {
-    command: `${shellQuote(shell)} -lic ${shellQuote(command)}`,
+    command: `${shellQuote(shell)} -lic ${shellQuote(command)}${modelArg}`,
     commandEnv,
   }
 }

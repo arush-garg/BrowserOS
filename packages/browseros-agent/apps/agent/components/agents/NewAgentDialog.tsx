@@ -22,24 +22,17 @@ import type {
   HarnessAdapterDescriptor,
   HarnessAgentAdapter,
 } from '@/modules/agents/agent-harness-types'
-import type {
-  CreateAgentRuntime,
-  ProviderOption,
-} from '@/modules/agents/agents-page-types'
+import type { CreateAgentRuntime } from '@/modules/agents/agents-page-types'
 import { HermesModelPicker } from './HermesModelPicker'
-import { ProviderSelector } from './ProviderSelector'
 
 export interface NewAgentDialogProps {
   adapters: HarnessAdapterDescriptor[]
   createError: string | null
   createRuntime: CreateAgentRuntime
   creating: boolean
-  defaultProviderId: string
   harnessAdapterId: HarnessAgentAdapter
   harnessModelId: string
   harnessReasoningEffort: string
-  hermesProviders: ProviderOption[]
-  hermesSelectedProviderId: string
   name: string
   open: boolean
   onCreate: () => void
@@ -48,7 +41,6 @@ export interface NewAgentDialogProps {
   onHarnessAdapterChange: (adapter: HarnessAgentAdapter) => void
   onHarnessModelChange: (modelId: string) => void
   onHarnessReasoningChange: (reasoningEffort: string) => void
-  onHermesProviderChange: (providerId: string) => void
   onNameChange: (name: string) => void
 }
 
@@ -57,12 +49,9 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   createError,
   createRuntime,
   creating,
-  defaultProviderId,
   harnessAdapterId,
   harnessModelId,
   harnessReasoningEffort,
-  hermesProviders,
-  hermesSelectedProviderId,
   name,
   open,
   onCreate,
@@ -71,7 +60,6 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   onHarnessAdapterChange,
   onHarnessModelChange,
   onHarnessReasoningChange,
-  onHermesProviderChange,
   onNameChange,
 }) => {
   const selectedHarnessAdapter =
@@ -81,14 +69,8 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
   const showAdapterPicker = adapters.length > 1
   const isHermesRuntime = createRuntime === 'hermes'
   const isClassicHarnessRuntime = !isHermesRuntime
-  const hermesBlocked =
-    isHermesRuntime &&
-    (hermesProviders.length === 0 || !hermesSelectedProviderId)
   const canCreate =
-    Boolean(name.trim()) &&
-    !creating &&
-    !hermesBlocked &&
-    Boolean(selectedHarnessAdapter)
+    Boolean(name.trim()) && !creating && Boolean(selectedHarnessAdapter)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -150,26 +132,17 @@ export const NewAgentDialog: FC<NewAgentDialogProps> = ({
           ) : null}
 
           {isHermesRuntime ? (
-            <>
-              <ProviderSelector
-                providers={hermesProviders}
-                defaultProviderId={defaultProviderId}
-                selectedId={hermesSelectedProviderId}
-                onSelect={onHermesProviderChange}
+            <div className="grid gap-2">
+              <Label htmlFor="hermes-model">Model</Label>
+              <HermesModelPicker
+                value={harnessModelId}
+                onChange={onHarnessModelChange}
               />
-              <div className="grid gap-2">
-                <Label htmlFor="hermes-model">Model</Label>
-                <HermesModelPicker
-                  value={harnessModelId}
-                  onChange={onHarnessModelChange}
-                />
-                <p className="text-muted-foreground text-xs">
-                  Hermes uses your local <code>~/.hermes</code> providers and
-                  credentials. Leave as Default to use the model configured
-                  there.
-                </p>
-              </div>
-            </>
+              <p className="text-muted-foreground text-xs">
+                Hermes uses your local <code>~/.hermes</code> providers and
+                credentials. Leave as Default to use the model configured there.
+              </p>
+            </div>
           ) : null}
 
           {isClassicHarnessRuntime ? (

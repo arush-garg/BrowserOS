@@ -274,9 +274,10 @@ export function watchSidepanelChatTargetSelection(
   }
 }
 export async function loadSidepanelChatTargetSelection(
-  tabId: number,
+  tabId?: number,
 ): Promise<SidepanelChatTargetSelection | null> {
   const map = await chatTargetSelectionStorage.getValue()
+  if (tabId === undefined) return null
   const key = String(tabId)
   if (map[key]) return map[key]
   // Migration: try legacy sessionStorage once

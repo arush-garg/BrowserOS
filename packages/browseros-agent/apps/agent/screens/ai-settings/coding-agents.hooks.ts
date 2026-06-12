@@ -57,19 +57,15 @@ export interface CodingAgentsController {
 /**
  * Owns all state for the quick coding-agent (Claude Code / Codex) surface so
  * the trigger cards (in the provider-templates grid) and the management list
- * (at the bottom of the pane) can share one create dialog. Hermes is filtered
- * out here regardless of capability — it's hidden for now.
+ * (at the bottom of the pane) can share one create dialog. Covers every adapter
+ * the server exposes (Claude Code / Codex / Hermes).
  */
 export function useCodingAgents(): CodingAgentsController {
-  const { adapters: allAdapters } = useAgentAdapters()
+  const { adapters } = useAgentAdapters()
   const { harnessAgents, loading } = useHarnessAgents()
   const createHarnessAgent = useCreateHarnessAgent()
   const deleteHarnessAgent = useDeleteHarnessAgent()
 
-  const adapters = useMemo(
-    () => allAdapters.filter((adapter) => adapter.id !== 'hermes'),
-    [allAdapters],
-  )
   const adapterIds = useMemo(
     () => new Set(adapters.map((adapter) => adapter.id)),
     [adapters],

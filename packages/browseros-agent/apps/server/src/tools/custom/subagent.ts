@@ -194,7 +194,7 @@ async function executeSyncSubagent(
   startTime: number,
 ) {
   try {
-    const lm = createLanguageModel(config)
+    const { model: lm } = await createLanguageModel(config)
 
     const result = await generateText({
       model: lm,
@@ -274,7 +274,7 @@ async function executeAsyncSubagent(
     const startTime = performance.now()
     try {
       job.status = 'running'
-      const lm = createLanguageModel(config)
+      const { model: lm } = await createLanguageModel(config)
 
       const stream = streamText({
         model: lm,

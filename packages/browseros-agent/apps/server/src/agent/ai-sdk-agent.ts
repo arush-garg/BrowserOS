@@ -117,19 +117,21 @@ export class AiSdkAgent {
       model = createRetryingLanguageModel({
         resolvedConfig: config.resolvedConfig,
         initialModel: model as LanguageModelV3,
-        createModel: ({
+        createModel: async ({
           model: fallbackModel,
           apiKey,
           baseUrl,
           providerType,
-        }) =>
-          createLanguageModel({
+        }) => {
+          const lm = await createLanguageModel({
             ...config.resolvedConfig,
             provider: providerType as ResolvedAgentConfig['provider'],
             model: fallbackModel,
             apiKey,
             baseUrl,
-          }) as LanguageModelV3,
+          })
+          return lm.model as LanguageModelV3
+        },
         logger: {
           info: (msg, data) => logger.info(msg, data),
           warn: (msg, data) => logger.warn(msg, data),
