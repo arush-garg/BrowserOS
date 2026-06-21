@@ -519,6 +519,16 @@ You have two nudge tools that operate at **different times** during a conversati
 }
 
 // -----------------------------------------------------------------------------
+// section: steer
+// -----------------------------------------------------------------------------
+
+function getSteer(): string {
+  return `<steer_guidance>
+When you encounter a <STEER> block in the conversation, it is real-time mid-task guidance from the user delivered after a tool call. Treat it as the highest-priority instruction: adjust your plan immediately and confirm briefly (one sentence) before continuing.
+</steer_guidance>`
+}
+
+// -----------------------------------------------------------------------------
 // section: style
 // -----------------------------------------------------------------------------
 
@@ -666,6 +676,7 @@ const promptSections: Record<string, PromptSectionFn> = {
   'error-recovery': getErrorRecovery,
   workspace: getWorkspace,
   nudges: getNudges,
+  steer: getSteer,
   style: getStyle,
   'user-context': getUserContext,
   soul: getSoul,

@@ -38,6 +38,7 @@ import { buildSystemPrompt } from './prompt'
 import { createLanguageModel } from './provider-factory'
 import { createReasoningFallbackMiddleware } from './reasoning-fallback'
 import { readSoulPrompt } from './soul-prompt'
+import type { SteerQueue } from './steer-queue'
 import { buildBrowserToolSet } from './tool-adapter'
 import type { ResolvedAgentConfig } from './types'
 
@@ -48,6 +49,7 @@ export interface AiSdkAgentConfig {
   klavisRef?: KlavisProxyRef
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
+  steerQueue?: SteerQueue
 }
 
 export class AiSdkAgent {
@@ -301,14 +303,33 @@ export class AiSdkAgent {
       steps: ReadonlyArray<StepWithUsage>
       model: LanguageModel
       experimental_context: unknown
-    }) =>
-      compactionPrepareStep({
+    }) => {
+      // 1. Drain and inject any pending steer messages.
+      // This fires before every model call (including after each tool result),
+      // so steer messages land exactly after the most recent tool output.
+      let messages = options.messages
+      if (config.steerQueue) {
+        const steers = config.steerQueue.drain(
+          config.resolvedConfig.conversationId,
+        )
+        if (steers.length > 0) {
+          const steerText = steers.map((s) => s.text).join('\n\n---\n\n')
+          messages = [
+            ...messages,
+            {
+              role: 'user' as const,
+              content: `<STEER>\n${steerText}\n</STEER>`,
+            },
+          ]
+        }
+      }
+
+      // 2. Normalize + compact
+      return compactionPrepareStep({
         ...options,
-        messages: normalizeMessagesForModel(
-          options.messages,
-          normalizationOptions,
-        ),
+        messages: normalizeMessagesForModel(messages, normalizationOptions),
       })
+    }
 
     // Codex requires store=false — tell the SDK to inline content
     // instead of using item_reference (which fails with store=false)

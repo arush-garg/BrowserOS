@@ -13,6 +13,7 @@ import {
   sanitizeMessagesForToolset,
 } from '../../agent/message-validation'
 import type { AgentSession, SessionStore } from '../../agent/session-store'
+import type { SteerQueue } from '../../agent/steer-queue'
 import type { ResolvedAgentConfig } from '../../agent/types'
 import type { Browser } from '../../browser/browser'
 import type { BrowserSession } from '../../browser/core/session'
@@ -30,17 +31,38 @@ export interface ChatServiceDeps {
   browserSession: BrowserSession
   browserosId?: string
   aiSdkDevtoolsEnabled?: boolean
-  /** Port the BrowserOS server bound to. Forwarded into the ACP MCP
-   *  bridge so the spawned agent can dial back into /mcp. */
   serverPort: number
-  /** BrowserOS resources directory. Threaded into ACP-backed config
-   *  resolutions so the bundled-Bun launcher under
-   *  <resourcesDir>/bin/third_party/bun can be located. */
   resourcesDir?: string | null
+  steerQueue?: SteerQueue
 }
 
 export class ChatService {
   constructor(private deps: ChatServiceDeps) {}
+
+  /** Tracks conversations with an in-flight streaming turn. Used by
+   *  enqueueSteer to return accurate status to the client. */
+  private activeTurnConversations = new Set<string>()
+
+  enqueueSteer(
+    conversationId: string,
+    text: string,
+  ):
+    | {
+        ok: true
+        steerId: string
+        status: 'queued_active_turn' | 'queued_next_turn'
+      }
+    | { ok: false; error: string } {
+    if (!this.deps.steerQueue) {
+      return { ok: false, error: 'Steer not available' }
+    }
+    const result = this.deps.steerQueue.enqueue(conversationId, text)
+    if (!result.ok) return result
+    const status = this.activeTurnConversations.has(conversationId)
+      ? ('queued_active_turn' as const)
+      : ('queued_next_turn' as const)
+    return { ok: true, steerId: result.steerId, status }
+  }
 
   async processMessage(
     request: ChatRequest,
@@ -252,6 +274,7 @@ export class ChatService {
         klavisRef: this.deps.klavisRef,
         browserosId: this.deps.browserosId,
         aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+        steerQueue: this.deps.steerQueue,
       })
       session = {
         agent,
@@ -341,6 +364,9 @@ export class ChatService {
             : msg,
         )
 
+    // Track active turn for steer status
+    this.activeTurnConversations.add(request.conversationId)
+
     return createAgentUIStreamResponse({
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
@@ -403,6 +429,7 @@ export class ChatService {
           session.hiddenPageId = undefined
           this.closeHiddenPage(pageId, request.conversationId)
         }
+        this.activeTurnConversations.delete(request.conversationId)
       },
     })
   }
@@ -417,6 +444,8 @@ export class ChatService {
       this.closeHiddenPage(pageId, conversationId)
     }
     const deleted = await this.deps.sessionStore.delete(conversationId)
+    this.deps.steerQueue?.clear(conversationId)
+    this.activeTurnConversations.delete(conversationId)
     return { deleted, sessionCount: this.deps.sessionStore.count() }
   }
 
@@ -457,6 +486,7 @@ export class ChatService {
       klavisRef: this.deps.klavisRef,
       browserosId: this.deps.browserosId,
       aiSdkDevtoolsEnabled: this.deps.aiSdkDevtoolsEnabled,
+      steerQueue: this.deps.steerQueue,
     })
     const newSession: AgentSession = {
       agent,

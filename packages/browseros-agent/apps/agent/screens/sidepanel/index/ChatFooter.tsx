@@ -14,6 +14,7 @@ import {
   type SelectedTextData,
   selectedTextStorage,
 } from '@/lib/selected-text/selectedTextStorage'
+import type { UseSteerReturn } from '@/lib/steer/useSteer'
 import { cn } from '@/lib/utils'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { ChatMode } from '@/modules/chat/chat-types'
@@ -42,6 +43,7 @@ export interface ChatFooterProps {
   onRemoveTab: (tabId?: number) => void
   voice?: VoiceInputState
   activeTabId?: number | null
+  steer?: UseSteerReturn
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -61,6 +63,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   onRemoveTab,
   voice,
   activeTabId,
+  steer,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { supports } = useCapabilities()
@@ -163,6 +166,29 @@ export const ChatFooter: FC<ChatFooterProps> = ({
 
           <div className="h-4 w-px bg-border/50" />
 
+          {steer && (
+            <>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={steer.toggleExpanded}
+                  data-state={steer.isExpanded ? 'open' : 'closed'}
+                  aria-expanded={steer.isExpanded}
+                  aria-haspopup="dialog"
+                  className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+                  title="Steer agent"
+                >
+                  <Bot className="h-4 w-4" />
+                  <span className="font-medium text-muted-foreground text-xs">
+                    Steer
+                  </span>
+                </button>
+              </div>
+
+              <div className="h-4 w-px bg-border/50" />
+            </>
+          )}
+
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -250,6 +276,51 @@ export const ChatFooter: FC<ChatFooterProps> = ({
 
         {voice?.error && (
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
+        )}
+
+        {steer?.isExpanded && (
+          <div className="flex flex-col gap-2 p-2 pt-0">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground text-sm">Steer:</span>
+              <input
+                type="text"
+                className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:font-medium file:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                placeholder="Enter steer message..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    steer?.sendSteer(e.currentTarget.value)
+                    e.currentTarget.value = ''
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => steer?.sendSteer('')}
+                className="rounded-md bg-muted px-4 py-2 font-medium text-sm transition-colors hover:bg-muted/80"
+              >
+                Send
+              </button>
+            </div>
+            {steer?.status === 'sending' && (
+              <span className="text-muted-foreground text-xs">
+                Sending steer!...
+              </span>
+            )}
+            {steer?.status === 'queued_active_turn' && (
+              <span className="text-green-500 text-xs">
+                Steer queued for active turn.
+              </span>
+            )}
+            {steer?.status === 'queued_next_turn' && (
+              <span className="text-xs text-yellow-500">
+                Steer queued for next turn.
+              </span>
+            )}
+            {steer?.error && (
+              <span className="text-red-500 text-xs">Error: {steer.error}</span>
+            )}
+          </div>
         )}
 
         <ChatInput

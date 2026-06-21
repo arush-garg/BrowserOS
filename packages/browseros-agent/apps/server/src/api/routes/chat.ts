@@ -1,6 +1,8 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import { z } from 'zod'
 import { SessionStore } from '../../agent/session-store'
+import { SteerQueue } from '../../agent/steer-queue'
 import type { Browser } from '../../browser/browser'
 import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
@@ -10,6 +12,11 @@ import { ChatService } from '../services/chat-service'
 import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
 import { ChatRequestSchema } from '../types'
 import { ConversationIdParamSchema } from '../utils/validation'
+
+const SteerRequestSchema = z.object({
+  conversationId: z.string().uuid(),
+  message: z.string().min(1),
+})
 
 interface ChatRouteDeps {
   browser: Browser
@@ -30,6 +37,8 @@ export function createChatRoutes(deps: ChatRouteDeps) {
   const { browserosId } = deps
 
   const sessionStore = new SessionStore()
+  const steerQueue = new SteerQueue()
+
   const service = new ChatService({
     sessionStore,
     klavisRef: deps.klavisRef,
@@ -39,6 +48,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     aiSdkDevtoolsEnabled: deps.aiSdkDevtoolsEnabled,
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
+    steerQueue,
   })
 
   return new Hono()
@@ -77,6 +87,22 @@ export function createChatRoutes(deps: ChatRouteDeps) {
 
       return service.processMessage(request, c.req.raw.signal)
     })
+    .post(
+      '/:conversationId/steer',
+      zValidator('json', SteerRequestSchema),
+      async (c) => {
+        const { conversationId, message } = c.req.valid('json')
+        const result = service.enqueueSteer(conversationId, message)
+        if (result.ok) {
+          return c.json({
+            success: true,
+            steerId: result.steerId,
+            status: result.status,
+          })
+        }
+        return c.json({ success: false, message: result.error }, 500)
+      },
+    )
     .delete(
       '/:conversationId',
       zValidator('param', ConversationIdParamSchema),

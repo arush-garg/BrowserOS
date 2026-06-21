@@ -14,6 +14,7 @@ import {
   SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import { useSteer } from '@/lib/steer/useSteer'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
@@ -49,7 +50,10 @@ export const Chat = () => {
     onClickDislike,
     isRestoringConversation,
     activeTabId,
+    conversationId,
   } = useChatSessionContext()
+
+  const steer = useSteer({ conversationId })
 
   const {
     popupVisible,
@@ -285,6 +289,7 @@ export const Chat = () => {
         onRemoveTab={removeTab}
         voice={voiceState}
         activeTabId={activeTabId}
+        steer={steer}
       />
     </>
   )
