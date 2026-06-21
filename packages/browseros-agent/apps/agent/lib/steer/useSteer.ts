@@ -3,6 +3,7 @@
  * POST /chat/:conversationId/steer and tracks the queued status.
  */
 import { useCallback, useRef, useState } from 'react'
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
 export type SteerStatus =
   | 'idle'
@@ -10,8 +11,6 @@ export type SteerStatus =
   | 'queued_active_turn'
   | 'queued_next_turn'
   | 'error'
-
-const STEER_ENDPOINT = '/chat/{conversationId}/steer'
 
 interface EnqueueSteerResult {
   ok: true
@@ -28,7 +27,14 @@ async function enqueueSteer(
   message: string,
   signal?: AbortSignal,
 ): Promise<EnqueueSteerResult | EnqueueSteerError> {
-  const url = STEER_ENDPOINT.replace('{conversationId}', conversationId)
+  let baseUrl: string
+  try {
+    baseUrl = await getAgentServerUrl()
+  } catch {
+    return { ok: false as const, error: 'Failed to resolve agent server URL' }
+  }
+
+  const url = `${baseUrl}/chat/${conversationId}/steer`
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

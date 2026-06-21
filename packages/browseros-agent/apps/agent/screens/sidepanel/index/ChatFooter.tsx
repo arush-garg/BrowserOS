@@ -70,6 +70,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   const chatInputRef = useRef<ChatInputHandle>(null)
+  const steerInputRef = useRef<HTMLInputElement>(null)
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
   >({})
@@ -283,6 +284,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground text-sm">Steer:</span>
               <input
+                ref={steerInputRef}
                 type="text"
                 className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:font-medium file:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 placeholder="Enter steer message..."
@@ -296,7 +298,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
               />
               <button
                 type="button"
-                onClick={() => steer?.sendSteer('')}
+                onClick={() => {
+                  const value = steerInputRef.current?.value ?? ''
+                  steer?.sendSteer(value)
+                  if (steerInputRef.current) steerInputRef.current.value = ''
+                }}
                 className="rounded-md bg-muted px-4 py-2 font-medium text-sm transition-colors hover:bg-muted/80"
               >
                 Send
