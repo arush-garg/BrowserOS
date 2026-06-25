@@ -29,6 +29,7 @@ export const LLM_PROVIDERS = {
   QWEN_CODE: 'qwen-code',
   CLAUDE_CODE: 'claude-code',
   CODEX: 'codex',
+  HERMES: 'hermes',
   ACP_CUSTOM: 'acp-custom',
 } as const
 
@@ -53,6 +54,7 @@ export const LLMProviderSchema: z.ZodEnum<
     'qwen-code',
     'claude-code',
     'codex',
+    'hermes',
     'acp-custom',
   ]
 > = z.enum([
@@ -72,6 +74,7 @@ export const LLMProviderSchema: z.ZodEnum<
   LLM_PROVIDERS.QWEN_CODE,
   LLM_PROVIDERS.CLAUDE_CODE,
   LLM_PROVIDERS.CODEX,
+  LLM_PROVIDERS.HERMES,
   LLM_PROVIDERS.ACP_CUSTOM,
 ])
 

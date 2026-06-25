@@ -15,6 +15,7 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 export const ACP_PROVIDER_TYPES: ReadonlySet<string> = new Set([
   LLM_PROVIDERS.CLAUDE_CODE,
   LLM_PROVIDERS.CODEX,
+  LLM_PROVIDERS.HERMES,
   LLM_PROVIDERS.ACP_CUSTOM,
 ])
 

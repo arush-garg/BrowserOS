@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
+import { Bot, ChevronDown, Folder, Layers, PlugZap, X } from 'lucide-react'
 import type { FC, FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
@@ -108,6 +108,13 @@ export const ChatFooter: FC<ChatFooterProps> = ({
     return () => window.removeEventListener('focus', focusInput)
   }, [])
 
+  // Clear pending steer text when chat starts streaming (steer was injected)
+  useEffect(() => {
+    if (status === 'streaming') {
+      steer?.clearPendingText()
+    }
+  }, [status, steer])
+
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
     return userMCPIntegrations?.integrations?.find(
@@ -166,29 +173,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <ChatModeToggle mode={mode} onModeChange={onModeChange} />
 
           <div className="h-4 w-px bg-border/50" />
-
-          {steer && (
-            <>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={steer.toggleExpanded}
-                  data-state={steer.isExpanded ? 'open' : 'closed'}
-                  aria-expanded={steer.isExpanded}
-                  aria-haspopup="dialog"
-                  className="flex cursor-pointer items-center gap-1 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-                  title="Steer agent"
-                >
-                  <Bot className="h-4 w-4" />
-                  <span className="font-medium text-muted-foreground text-xs">
-                    Steer
-                  </span>
-                </button>
-              </div>
-
-              <div className="h-4 w-px bg-border/50" />
-            </>
-          )}
 
           <div className="flex items-center gap-1">
             <button
@@ -329,6 +313,22 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           </div>
         )}
 
+        {steer?.lastSentText && steer.status !== 'idle' && (
+          <div className="mt-2 flex items-center gap-2 rounded-md border border-border/30 bg-muted/30 px-3 py-2">
+            <Bot className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+            <p className="flex-1 truncate text-muted-foreground/70 text-sm italic">
+              {steer.lastSentText}
+            </p>
+            <button
+              type="button"
+              onClick={steer.clearPendingText}
+              className="shrink-0 rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
         <ChatInput
           input={input}
           status={status}
@@ -341,6 +341,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           onToggleTab={onToggleTab}
           onTabMentionOpenChange={setIsTabMentionOpen}
           voice={voice}
+          steer={steer}
           ref={chatInputRef}
         />
       </div>

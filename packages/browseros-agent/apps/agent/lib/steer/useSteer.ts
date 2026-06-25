@@ -81,12 +81,17 @@ export interface UseSteerReturn {
   sendSteer: (text: string) => void
   /** Abort an in-flight request */
   abort: () => void
+  /** The most recent text sent via sendSteer, for showing pending state */
+  lastSentText: string
+  /** Clear the pending text display without aborting the steer */
+  clearPendingText: () => void
 }
 
 export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
   const [isExpanded, setIsExpanded] = useState(false)
   const [status, setStatus] = useState<SteerStatus>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [lastSentText, setLastSentText] = useState('')
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const closeExpanded = useCallback(() => {
@@ -106,6 +111,7 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
       abortControllerRef.current = controller
 
       setError(null)
+      setLastSentText(text.trim())
       setStatus('sending')
 
       enqueueSteer(conversationId, text.trim(), controller.signal)
@@ -127,9 +133,14 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
     [conversationId],
   )
 
+  const clearPendingText = useCallback(() => {
+    setLastSentText('')
+  }, [])
+
   const abort = useCallback(() => {
     abortControllerRef.current?.abort()
     setStatus('idle')
+    setLastSentText('')
   }, [])
 
   return {
@@ -140,5 +151,7 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
     error,
     sendSteer,
     abort,
+    lastSentText,
+    clearPendingText,
   }
 }

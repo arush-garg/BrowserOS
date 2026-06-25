@@ -336,6 +336,7 @@ export class AcpxRuntime implements AgentRuntime {
       commandIdentity: input.commandIdentity,
       useBrowserosMcp: input.useBrowserosMcp,
       browserosMcpHost: mcpHost,
+      browserosServerPort: this.browserosServerPort,
     })
     const existing = this.runtimes.get(key)
     if (existing) return existing

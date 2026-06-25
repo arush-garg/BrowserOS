@@ -1,4 +1,12 @@
-import { Loader2, Mic, Send, Square, SquareStop } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  Loader2,
+  Mic,
+  Send,
+  Square,
+  SquareStop,
+} from 'lucide-react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import {
   forwardRef,
@@ -9,6 +17,7 @@ import {
   useState,
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
+import type { UseSteerReturn } from '@/lib/steer/useSteer'
 import { cn } from '@/lib/utils'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import type { VoiceInputState } from '@/modules/voice/voice.hooks'
@@ -31,6 +40,7 @@ interface ChatInputProps {
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
+  steer?: UseSteerReturn
 }
 
 export interface ChatInputHandle {
@@ -54,6 +64,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onToggleTab,
       onTabMentionOpenChange,
       voice,
+      steer,
     },
     ref,
   ) => {
@@ -66,6 +77,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     const inputRef = useRef(input)
     const mentionStateRef = useRef(mentionState)
+    const [showSteerMenu, setShowSteerMenu] = useState(false)
+    const steerMenuRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
       inputRef.current = input
@@ -265,6 +278,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [mentionState.isOpen, closeMention])
 
+    useEffect(() => {
+      if (!showSteerMenu) return
+      const handleClickOutside = (e: MouseEvent) => {
+        if (
+          steerMenuRef.current &&
+          !steerMenuRef.current.contains(e.target as Node)
+        ) {
+          setShowSteerMenu(false)
+        }
+      }
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [showSteerMenu])
+
     const renderVoiceButton = () => {
       if (!voice) return null
 
@@ -308,6 +335,58 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     }
 
     const renderSendButton = () => {
+      if (isBusy && steer) {
+        return (
+          <div className="relative" ref={steerMenuRef}>
+            <div className="flex items-center overflow-hidden rounded-full bg-muted/70 transition-all hover:bg-muted">
+              <button
+                type="button"
+                onClick={() => {
+                  steer.toggleExpanded()
+                  setShowSteerMenu(false)
+                }}
+                className="flex cursor-pointer items-center gap-1 px-2 py-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground"
+                title="Steer agent"
+              >
+                <Bot className="h-3.5 w-3.5" />
+                <span>Steer</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSteerMenu((v) => !v)}
+                className="flex cursor-pointer items-center px-1 py-1.5 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            </div>
+
+            {showSteerMenu && (
+              <div className="absolute right-0 bottom-full z-50 mb-1 min-w-[120px] overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSteerMenu(false)
+                    onStop()
+                  }}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-foreground text-sm transition-colors hover:bg-muted"
+                >
+                  <SquareStop className="h-3.5 w-3.5 text-red-500" />
+                  Interrupt
+                </button>
+                <button
+                  type="submit"
+                  disabled={!input.trim()}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-foreground text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Send
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      }
+
       if (isBusy) {
         return (
           <button
