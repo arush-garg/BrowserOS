@@ -861,7 +861,7 @@ function createBrowserosAgentRegistry(input: {
 }
 
 /** Resolves Hermes ACP launch through bundled CLI or the user's login shell. */
-function resolveHermesHostAcpAdapterCommand(input: {
+function _resolveHermesHostAcpAdapterCommand(input: {
   resourcesDir: string | null
   commandEnv: Record<string, string>
 }): { command: string; commandEnv: Record<string, string> } {

@@ -78,8 +78,6 @@ export function MiniScreencast({
   return (
     <div className="relative flex h-[132px] items-center justify-center overflow-hidden bg-bg-sunken">
       {showImage ? (
-        // biome-ignore lint/performance/noImgElement: data URL only;
-        // there is no remote URL for next/image to optimise.
         <img
           src={displayedSrc}
           alt={`Live view of ${site}`}

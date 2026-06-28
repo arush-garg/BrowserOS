@@ -1,6 +1,6 @@
 import { tool } from 'ai'
 import { z } from 'zod'
-import { AppsScriptClient } from '../../lib/clients/klavis/apps-script-client'
+import { AppsScriptClient } from '../../api/services/klavis/apps-script-client'
 import {
   appendSheetRow,
   appendSlide,

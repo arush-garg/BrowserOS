@@ -1394,7 +1394,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(types).not.toContain('error')
   })
 
-  const events = await collectStream(
+  const _events = await collectStream(
       await runtime.send({
         agent,
         sessionId: 'main',
