@@ -9,9 +9,13 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import yaml
 from build.modules.storage.download import (
     ARTIFACT_METADATA_NAME,
+    DownloadResourcesModule,
     extract_artifact_zip,
 )
 
@@ -189,6 +193,132 @@ class ExtractArtifactZipTest(unittest.TestCase):
                 for relative_path, content in files.items()
             ],
         }
+
+
+class DownloadResourceConfigTest(unittest.TestCase):
+    def test_real_config_includes_browseros_and_claw_artifacts_by_target(self) -> None:
+        cases = [
+            (
+                "macos",
+                "arm64",
+                [
+                    (
+                        "BrowserOS Server Resources - macOS ARM64",
+                        "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
+                        "resources/binaries/browseros_server/darwin-arm64",
+                    ),
+                    (
+                        "BrowserOS Claw Server Resources - macOS ARM64",
+                        "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-arm64.zip",
+                        "resources/binaries/browseros_claw_server/darwin-arm64",
+                    ),
+                ],
+            ),
+            (
+                "macos",
+                "x64",
+                [
+                    (
+                        "BrowserOS Server Resources - macOS x64",
+                        "artifacts/server/latest/browseros-server-resources-darwin-x64.zip",
+                        "resources/binaries/browseros_server/darwin-x64",
+                    ),
+                    (
+                        "BrowserOS Claw Server Resources - macOS x64",
+                        "claw-server/prod-resources/latest/browseros-claw-server-resources-darwin-x64.zip",
+                        "resources/binaries/browseros_claw_server/darwin-x64",
+                    ),
+                ],
+            ),
+            (
+                "linux",
+                "arm64",
+                [
+                    (
+                        "BrowserOS Server Resources - Linux ARM64",
+                        "artifacts/server/latest/browseros-server-resources-linux-arm64.zip",
+                        "resources/binaries/browseros_server/linux-arm64",
+                    ),
+                    (
+                        "BrowserOS Claw Server Resources - Linux ARM64",
+                        "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-arm64.zip",
+                        "resources/binaries/browseros_claw_server/linux-arm64",
+                    ),
+                ],
+            ),
+            (
+                "linux",
+                "x64",
+                [
+                    (
+                        "BrowserOS Server Resources - Linux x64",
+                        "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
+                        "resources/binaries/browseros_server/linux-x64",
+                    ),
+                    (
+                        "BrowserOS Claw Server Resources - Linux x64",
+                        "claw-server/prod-resources/latest/browseros-claw-server-resources-linux-x64.zip",
+                        "resources/binaries/browseros_claw_server/linux-x64",
+                    ),
+                ],
+            ),
+            (
+                "windows",
+                "x64",
+                [
+                    (
+                        "BrowserOS Server Resources - Windows x64",
+                        "artifacts/server/latest/browseros-server-resources-windows-x64.zip",
+                        "resources/binaries/browseros_server/windows-x64",
+                    ),
+                    (
+                        "BrowserOS Claw Server Resources - Windows x64",
+                        "claw-server/prod-resources/latest/browseros-claw-server-resources-windows-x64.zip",
+                        "resources/binaries/browseros_claw_server/windows-x64",
+                    ),
+                ],
+            ),
+        ]
+        operations = self._real_download_operations()
+
+        for platform, arch, expected in cases:
+            with self.subTest(platform=platform, arch=arch):
+                filtered = self._filter_operations(operations, platform, arch)
+                actual = [
+                    (op["name"], op["r2_key"], op["destination"])
+                    for op in filtered
+                    if "Server Resources" in op["name"]
+                ]
+                self.assertEqual(expected, actual)
+
+    def test_real_config_includes_both_macos_arches_for_universal(self) -> None:
+        operations = self._real_download_operations()
+
+        filtered = self._filter_operations(operations, "macos", "universal")
+
+        self.assertEqual(
+            [
+                "BrowserOS Server Resources - macOS ARM64",
+                "BrowserOS Server Resources - macOS x64",
+                "BrowserOS Claw Server Resources - macOS ARM64",
+                "BrowserOS Claw Server Resources - macOS x64",
+            ],
+            [op["name"] for op in filtered],
+        )
+
+    def _real_download_operations(self) -> list[dict]:
+        config_path = (
+            Path(__file__).resolve().parents[2] / "config" / "download_resources.yaml"
+        )
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)["download_operations"]
+
+    def _filter_operations(
+        self, operations: list[dict], platform: str, architecture: str
+    ) -> list[dict]:
+        ctx = SimpleNamespace(architecture=architecture, build_type="release")
+        with patch("build.modules.storage.download.get_platform", return_value=platform):
+            return DownloadResourcesModule()._filter_operations(operations, ctx)
 
 
 if __name__ == "__main__":

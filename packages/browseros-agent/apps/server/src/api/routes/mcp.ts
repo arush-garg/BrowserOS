@@ -4,23 +4,32 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-file'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Hono } from 'hono'
-import type { Browser } from '../../browser/browser'
-import type { BrowserSession } from '../../browser/core/session'
 import { logger } from '../../lib/logger'
 import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
-import type { KlavisProxyRef } from '../services/klavis/strata-proxy'
+import type { KlavisService } from '../services/klavis'
 import { createMcpServer } from '../services/mcp/mcp-server'
 import type { Env } from '../types'
 
+export const MANAGED_MCP_SERVERS_HEADER = 'X-BrowserOS-Managed-Mcp-Servers'
+export const REMOTE_AGENT_HARNESS_MCP_SOURCE = 'remote-agent-harness'
+
+type CreateMcpServerFn = typeof createMcpServer
+type CreateMcpTransportFn = (
+  options: ConstructorParameters<typeof StreamableHTTPTransport>[0],
+) => InstanceType<typeof StreamableHTTPTransport>
+
 interface McpRouteDeps {
   version: string
-  browser: Browser
   browserSession: BrowserSession
-  klavisRef?: KlavisProxyRef
-  browserUseNewTools?: boolean
+  klavis?: KlavisService
+  executionDir: string
+  createMcpServer?: CreateMcpServerFn
+  createMcpTransport?: CreateMcpTransportFn
 }
 
 function parseOptionalNumber(value: string | undefined): number | undefined {
@@ -32,8 +41,37 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   return Number.isInteger(n) ? n : undefined
 }
 
+/** Parses the internal ACP managed-connector scope header. */
+export function parseManagedMcpServersHeader(
+  value: string | undefined,
+): string[] {
+  if (!value?.trim()) {
+    return []
+  }
+  const out: string[] = []
+  for (const part of value.split(',')) {
+    if (!part) continue
+    try {
+      const decoded = decodeURIComponent(part)
+      if (decoded) {
+        out.push(decoded)
+      }
+    } catch {
+      return []
+    }
+  }
+  return out
+}
+
 export function createMcpRoutes(deps: McpRouteDeps) {
   const app = new Hono<Env>()
+  const makeMcpServer = deps.createMcpServer ?? createMcpServer
+  const makeMcpTransport =
+    deps.createMcpTransport ??
+    ((options) => new StreamableHTTPTransport(options))
+  const remoteAgentHarness = {
+    outputFileAccess: createBrowserOutputFileAccess(),
+  }
 
   app.get('/', (c) =>
     c.json({
@@ -46,30 +84,33 @@ export function createMcpRoutes(deps: McpRouteDeps) {
     const scopeId = c.req.header('X-BrowserOS-Scope-Id') || 'ephemeral'
     metrics.log('mcp.request', { scopeId })
 
-    // Lets the host pin every browser tool call in this request to a
-    // specific window for page-creating tools.
     const defaultWindowId = parseOptionalNumber(
       c.req.header('X-BrowserOS-Default-Window-Id'),
     )
-
-    // Same pattern for tab groups: the host pins every page-creating
-    // call to a specific tab group so concurrent agents don't race for
-    // the window's active group.
     const defaultTabGroupId =
       c.req.header('X-BrowserOS-Default-Tab-Group-Id') ?? undefined
+    const selectedServerNames = parseManagedMcpServersHeader(
+      c.req.header(MANAGED_MCP_SERVERS_HEADER),
+    )
+
+    const harness =
+      c.req.query('source') === REMOTE_AGENT_HARNESS_MCP_SOURCE
+        ? remoteAgentHarness
+        : undefined
 
     // Per-request server + transport: no shared state, no race conditions,
     // no ID collisions. Required by MCP SDK 1.26.0+ security fix (GHSA-345p-7cg4-v4c7).
-    const mcpServer = createMcpServer({
+    const mcpServer = makeMcpServer({
       version: deps.version,
-      browser: deps.browser,
       browserSession: deps.browserSession,
-      klavisRef: deps.klavisRef,
-      browserUseNewTools: deps.browserUseNewTools === true,
+      klavis: deps.klavis,
+      connectorScope: { selectedServerNames },
       defaultWindowId,
       defaultTabGroupId,
+      executionDir: deps.executionDir,
+      remoteAgentHarness: harness,
     })
-    const transport = new StreamableHTTPTransport({
+    const transport = makeMcpTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     })

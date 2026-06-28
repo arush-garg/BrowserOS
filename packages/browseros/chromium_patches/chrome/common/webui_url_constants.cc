@@ -1,5 +1,5 @@
 diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
-index 016104d9a3035..87450514ce3f0 100644
+index 016104d9a3035..5b05791b4f778 100644
 --- a/chrome/common/webui_url_constants.cc
 +++ b/chrome/common/webui_url_constants.cc
 @@ -120,6 +120,7 @@ bool IsSystemWebUIHost(std::string_view host) {
@@ -10,3 +10,11 @@ index 016104d9a3035..87450514ce3f0 100644
        kChromeUIAboutHost,
        kChromeUIAccessibilityHost,
        kChromeUIActorInternalsHost,
+@@ -128,6 +129,7 @@ base::span<const base::cstring_view> ChromeURLHosts() {
+ #endif
+       kChromeUIAutofillInternalsHost,
+       kChromeUIBluetoothInternalsHost,
++      kChromeUIBrowserOSOnboardingHost,
+       kChromeUIBrowsingTopicsInternalsHost,
+       kChromeUIChromeFindsInternalsHost,
+       kChromeUIChromeURLsHost,

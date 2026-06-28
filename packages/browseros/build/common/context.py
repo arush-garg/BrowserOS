@@ -434,9 +434,8 @@ class Context:
         return f"https://github.com/vslavik/winsparkle/releases/download/v{self.WINSPARKLE_VERSION}/WinSparkle-{self.WINSPARKLE_VERSION}.zip"
 
     def get_extensions_manifest_url(self) -> str:
-        """Get CDN URL for bundled extensions update manifest"""
-        # return "https://cdn.browseros.com/extensions/update-manifest.xml"
-        return "https://cdn.browseros.com/extensions/update-manifest.alpha.xml"
+        """Get CDN URL for bundled extensions manifest"""
+        return "https://cdn.browseros.com/extensions/bundled-manifest.xml"
 
     def get_entitlements_dir(self) -> Path:
         """Get entitlements directory"""

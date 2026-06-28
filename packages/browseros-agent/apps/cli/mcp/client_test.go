@@ -1,85 +1,92 @@
 package mcp
 
 import (
-	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
-func TestExtractPageID(t *testing.T) {
-	tests := []struct {
-		name string
-		data map[string]any
-		want int
-		ok   bool
-	}{
-		{
-			name: "nested page object",
-			data: map[string]any{
-				"page": map[string]any{
-					"pageId": float64(7),
-				},
-			},
-			want: 7,
-			ok:   true,
-		},
-		{
-			name: "top level page id",
-			data: map[string]any{
-				"pageId": float64(3),
-			},
-			want: 3,
-			ok:   true,
-		},
-		{
-			name: "nested int page id",
-			data: map[string]any{
-				"page": map[string]any{
-					"pageId": 11,
-				},
-			},
-			want: 11,
-			ok:   true,
-		},
-		{
-			name: "missing page id",
-			data: map[string]any{
-				"page": map[string]any{
-					"tabId": float64(9),
-				},
-			},
-			ok: false,
-		},
-		{
-			name: "nil structured content",
-			data: nil,
-			ok:   false,
-		},
-		{
-			name: "json number page id",
-			data: map[string]any{
-				"pageId": json.Number("13"),
-			},
-			want: 13,
-			ok:   true,
-		},
-		{
-			name: "non whole float page id",
-			data: map[string]any{
-				"pageId": 3.5,
-			},
-			ok: false,
-		},
-	}
+func TestHealthUsesBrowserOSHealthEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"status":"ok","cdpConnected":true}`)
+	}))
+	t.Cleanup(server.Close)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := extractPageID(tt.data)
-			if ok != tt.ok {
-				t.Fatalf("extractPageID() ok = %v, want %v", ok, tt.ok)
-			}
-			if got != tt.want {
-				t.Fatalf("extractPageID() = %d, want %d", got, tt.want)
-			}
-		})
+	data, err := NewClient(server.URL, "test", time.Second).Health()
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if data["status"] != "ok" {
+		t.Fatalf("Health() status = %v, want ok", data["status"])
+	}
+	assertPaths(t, paths, []string{"/health"})
+}
+
+func TestHealthFallsBackToClawSystemHealthEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/health":
+			http.NotFound(w, r)
+		case "/system/health":
+			fmt.Fprint(w, `{"status":"ok"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	data, err := NewClient(server.URL, "test", time.Second).Health()
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if data["status"] != "ok" {
+		t.Fatalf("Health() status = %v, want ok", data["status"])
+	}
+	assertPaths(t, paths, []string{"/health", "/system/health"})
+}
+
+func TestHealthDoesNotFallbackOnBrowserOSHealthFailure(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/health" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "test", time.Second).Health()
+	if err == nil {
+		t.Fatal("Health() error = nil, want HTTP 500")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("Health() error = %q, want HTTP 500", err)
+	}
+	assertPaths(t, paths, []string{"/health"})
+}
+
+func assertPaths(t *testing.T, got, want []string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("paths = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("paths = %v, want %v", got, want)
+		}
 	}
 }

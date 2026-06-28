@@ -1,19 +1,24 @@
 import type { LanguageModelV2ToolResultOutput } from '@ai-sdk/provider'
-import { type ToolSet, tool } from 'ai'
-import type { BrowserSession } from '../browser/core/session'
-import { metrics } from '../lib/metrics'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
 import {
+  type BrowserOutputFileAccess,
+  withBrowserOutputFileAccess,
+} from '@browseros/browser-mcp/output-file'
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
+import {
+  type ToolDefinition as BrowserToolDefinition,
+  type ToolResult as BrowserToolResult,
   type ContentBlock,
   errorResult,
-  executeTool,
-  type ToolDefinition,
-  type ToolResult,
+  executeTool as executeBrowserTool,
   throwIfAborted,
-} from '../tools/browser/framework'
-import { BROWSER_TOOLS } from '../tools/browser/registry'
+} from '@browseros/browser-mcp/tools/framework'
+import { type ToolSet, tool } from 'ai'
+import { metrics } from '../lib/metrics'
 
 export interface BrowserToolSetOptions {
   readOnly?: boolean
+  outputFileAccess?: BrowserOutputFileAccess
 }
 
 interface ToolExecuteOptions {
@@ -80,10 +85,12 @@ export function buildBrowserToolSet(
         throwIfAborted(signal)
         const result =
           readOnlyGuard(def, params, options) ??
-          (await executeTool(def, params as Record<string, unknown>, {
-            session,
-            signal,
-          }))
+          (await withBrowserOutputFileAccess(options.outputFileAccess, () =>
+            executeBrowserTool(def, params as Record<string, unknown>, {
+              session,
+              signal,
+            }),
+          ))
         metrics.log('tool_executed', {
           tool_name: def.name,
           duration_ms: Math.round(performance.now() - startTime),
@@ -115,10 +122,10 @@ export function buildBrowserToolSet(
 }
 
 function readOnlyGuard(
-  def: ToolDefinition,
+  def: BrowserToolDefinition,
   params: unknown,
   options: BrowserToolSetOptions,
-): ToolResult | null {
+): BrowserToolResult | null {
   if (!options.readOnly || def.name !== 'tabs') return null
   const action =
     params &&
@@ -127,6 +134,6 @@ function readOnlyGuard(
     typeof params.action === 'string'
       ? params.action
       : 'list'
-  if (action === 'list') return null
-  return errorResult('tabs: chat mode only supports action="list".')
+  if (action === 'list' || action === 'active') return null
+  return errorResult('tabs: chat mode only supports action="list" or "active".')
 }

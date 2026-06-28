@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Tests for Linux packaging architecture helpers."""
 
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from build.modules.package.linux import (
     LINUX_HOST_APPIMAGETOOL,
+    copy_browser_files,
     get_host_appimagetool,
     get_linux_architecture_config,
 )
@@ -57,6 +61,49 @@ class HostAppImageToolTest(unittest.TestCase):
         # builds work in either direction.
         self.assertIn("x64", LINUX_HOST_APPIMAGETOOL)
         self.assertIn("arm64", LINUX_HOST_APPIMAGETOOL)
+
+
+class CopyBrowserFilesTest(unittest.TestCase):
+    def test_copies_browseros_and_claw_server_roots_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out" / "Release"
+            target_dir = root / "package"
+            out_dir.mkdir(parents=True)
+            (out_dir / "browseros").write_text("browser")
+
+            for bundle_name in ("BrowserOSServer", "BrowserOSClawServer"):
+                resources = out_dir / bundle_name / "default" / "resources"
+                resources.mkdir(parents=True)
+                (resources / "marker.txt").write_text(bundle_name)
+
+            ctx = SimpleNamespace(
+                chromium_src=root,
+                out_dir=Path("out") / "Release",
+                BROWSEROS_APP_NAME="browseros",
+            )
+
+            with patch("build.modules.package.linux.log_warning"):
+                self.assertTrue(copy_browser_files(ctx, target_dir))
+
+            self.assertTrue(
+                (
+                    target_dir
+                    / "BrowserOSServer"
+                    / "default"
+                    / "resources"
+                    / "marker.txt"
+                ).exists()
+            )
+            self.assertTrue(
+                (
+                    target_dir
+                    / "BrowserOSClawServer"
+                    / "default"
+                    / "resources"
+                    / "marker.txt"
+                ).exists()
+            )
 
 
 if __name__ == "__main__":

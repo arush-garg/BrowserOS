@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-index c2437bfc295a9..0c105091d06a2 100644
+index c2437bfc295a9..4b2971f34e108 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
 @@ -4,8 +4,10 @@
@@ -9,7 +9,7 @@ index c2437bfc295a9..0c105091d06a2 100644
 +#include "base/logging.h"
  #include "base/memory/scoped_refptr.h"
  #include "base/strings/utf_string_conversions.h"
-+#include "chrome/browser/browseros/core/browseros_constants.h"
++#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/actions/chrome_actions.h"
@@ -27,15 +27,16 @@ index c2437bfc295a9..0c105091d06a2 100644
  #include "extensions/common/extension.h"
  #include "extensions/common/extension_features.h"
  #include "extensions/common/permissions/api_permission.h"
-@@ -120,6 +124,15 @@ void ExtensionSidePanelManager::MaybeCreateActionItemForExtension(
+@@ -120,6 +124,16 @@ void ExtensionSidePanelManager::MaybeCreateActionItemForExtension(
                         std::underlying_type_t<actions::ActionPinnableState>(
                             actions::ActionPinnableState::kPinnable))
            .Build());
 +
 +  // Auto-pin BrowserOS extensions to the toolbar.
-+  if (browseros::IsBrowserOSPinnedExtension(extension->id())) {
-+    LOG(INFO) << "browseros: Auto-pinning BrowserOS extension: "
-+              << extension->id();
++  if (browseros::ShouldPinBrowserOSExtension(extension->id(),
++                                             profile_->GetPrefs())) {
++    DVLOG(1) << "browseros: Auto-pinning BrowserOS extension: "
++             << extension->id();
 +    if (auto* pinned_model = PinnedToolbarActionsModel::Get(profile_)) {
 +      pinned_model->UpdatePinnedState(extension_action_id, true);
 +    }
@@ -43,7 +44,7 @@ index c2437bfc295a9..0c105091d06a2 100644
  }
  
  actions::ActionId ExtensionSidePanelManager::GetOrCreateActionIdForExtension(
-@@ -159,6 +172,7 @@ void ExtensionSidePanelManager::OnExtensionUnloaded(
+@@ -159,6 +173,7 @@ void ExtensionSidePanelManager::OnExtensionUnloaded(
      it->second->DeregisterEntry();
      coordinators_.erase(extension->id());
    }

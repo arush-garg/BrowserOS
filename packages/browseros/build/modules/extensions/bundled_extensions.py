@@ -11,14 +11,22 @@ import requests
 
 from ...common.context import Context
 from ...common.module import CommandModule, ValidationError
-from ...common.utils import log_info, log_success, log_error
+from ...common.utils import log_info, log_success
 
 
 class ExtensionInfo(NamedTuple):
     """Extension metadata parsed from update manifest"""
+
     id: str
     version: str
     codebase: str
+
+
+REQUIRED_BUNDLED_EXTENSION_IDS: Dict[str, str] = {
+    "adlpneommgkgeanpaekgoaolcpncohkf": "BrowserOS bug reporter",
+    "bflpfmnmnokmjhmgnolecpppdbdophmk": "BrowserOS agent",
+    "pjimfkbpehlcllblajnpfamdfjhhlgkc": "BrowserOS Claw app",
+}
 
 
 class BundledExtensionsModule(CommandModule):
@@ -46,6 +54,7 @@ class BundledExtensionsModule(CommandModule):
         extensions = self._fetch_and_parse_manifest(manifest_url)
         if not extensions:
             raise RuntimeError("No extensions found in manifest")
+        self._validate_required_extensions(extensions)
 
         log_info(f"  Found {len(extensions)} extensions in manifest")
 
@@ -73,15 +82,7 @@ class BundledExtensionsModule(CommandModule):
         return self._parse_manifest_xml(response.text)
 
     def _parse_manifest_xml(self, xml_content: str) -> List[ExtensionInfo]:
-        """Parse Google Update protocol XML manifest
-
-        Expected format (with namespace):
-        <gupdate xmlns="http://www.google.com/update2/response" protocol='2.0'>
-          <app appid='extension_id'>
-            <updatecheck codebase='https://...' version='1.0.0' />
-          </app>
-        </gupdate>
-        """
+        """Parse Google Update protocol XML manifest."""
         extensions = []
 
         try:
@@ -118,6 +119,22 @@ class BundledExtensionsModule(CommandModule):
                 ))
 
         return extensions
+
+    def _validate_required_extensions(
+        self, extensions: List[ExtensionInfo]
+    ) -> None:
+        """Fail if the release manifest omits a required bundled extension."""
+        extension_ids = {ext.id for ext in extensions}
+        missing = [
+            f"{name} ({extension_id})"
+            for extension_id, name in REQUIRED_BUNDLED_EXTENSION_IDS.items()
+            if extension_id not in extension_ids
+        ]
+        if missing:
+            raise RuntimeError(
+                "Bundled extension manifest missing required entries: "
+                + ", ".join(missing)
+            )
 
     def _download_extension(self, ext: ExtensionInfo, output_dir: Path) -> None:
         """Download a single extension .crx file"""

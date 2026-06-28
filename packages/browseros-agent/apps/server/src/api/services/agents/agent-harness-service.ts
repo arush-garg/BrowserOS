@@ -41,7 +41,6 @@ export {
   type QueuedMessageAttachment,
 } from '../../../lib/agents/storage/message-queue'
 
-import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   AgentHistoryPage,
@@ -858,48 +857,6 @@ export class InvalidAgentUpdateError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'InvalidAgentUpdateError'
-  }
-}
-
-/**
- * Thrown when a Hermes adapter agent is created without a complete
- * provider config (provider type, API key, model id; base URL when the
- * provider mapping requires it). Surfaces as a 400 in the route layer.
- */
-export class HermesProviderConfigInvalidError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'HermesProviderConfigInvalidError'
-  }
-}
-
-function assertHermesProviderInputValid(input: CreateAgentInput): void {
-  const providerType = input.providerType?.trim()
-  if (!providerType) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires providerType (pick a provider configured in BrowserOS AI Settings)',
-    )
-  }
-  const mapping = getHermesProviderMapping(providerType)
-  if (!mapping) {
-    throw new HermesProviderConfigInvalidError(
-      `Provider type "${providerType}" is not supported by Hermes`,
-    )
-  }
-  if (!input.apiKey?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires apiKey from the selected provider',
-    )
-  }
-  if (!input.modelId?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      'Hermes agent requires modelId from the selected provider',
-    )
-  }
-  if (mapping.requiresBaseUrl && !input.baseUrl?.trim()) {
-    throw new HermesProviderConfigInvalidError(
-      `Provider type "${providerType}" requires baseUrl`,
-    )
   }
 }
 

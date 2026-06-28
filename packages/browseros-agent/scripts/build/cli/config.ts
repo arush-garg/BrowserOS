@@ -1,9 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import type { R2Config } from '@browseros/build-server-tools'
 import { parse } from 'dotenv'
-
-import type { R2Config } from '../server/types'
 
 const PROD_ENV_PATH = join('apps', 'cli', '.env.production')
 

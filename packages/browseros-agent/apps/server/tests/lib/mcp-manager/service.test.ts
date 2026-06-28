@@ -129,10 +129,12 @@ describe('listAgents', () => {
     })
   })
 
-  it('hides agents BrowserOS does not surface in the panel', async () => {
-    // Today only Gemini CLI is hidden: its HTTP MCP support is not
-    // stable enough for a one-click install. The agent stays
-    // available via the manual setup snippet.
+  it('hides agents BrowserOS does not surface when they have no active link', async () => {
+    // Hidden: Gemini CLI (HTTP MCP support not stable enough for a
+    // one-click install) and Claude Desktop (only stdio config is
+    // valid and the recommended `npx mcp-remote` bridge needs Node
+    // on the user's machine). Both stay available via the manual
+    // setup snippet.
     stubAgents = [
       {
         id: 'claude-code',
@@ -146,12 +148,56 @@ describe('listAgents', () => {
         installed: true,
         configPath: '/tmp/fake/gemini.json',
       },
+      {
+        id: 'claude-desktop',
+        displayName: 'Claude Desktop',
+        installed: true,
+        configPath: '/tmp/fake/claude-desktop.json',
+      },
     ]
     const { manager: hiddenManager } = makeManagerStub()
     setMcpManagerForTesting(hiddenManager)
 
     const hiddenRows = await listAgents({ detect: stubDetect })
     expect(hiddenRows.map((r) => r.id)).toEqual(['claude-code'])
+  })
+
+  it('keeps a hidden agent visible while it still has a BrowserOS link so the user can Disconnect it', async () => {
+    // Regression: when we hid Claude Desktop, users who had already
+    // linked it via a prior BrowserOS release lost the Disconnect
+    // tile and were stuck with an orphan entry in their config.
+    // The hidden-agents filter must respect existing links.
+    stubAgents = [
+      {
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        installed: true,
+        configPath: '/tmp/fake/claude-code.json',
+      },
+      {
+        id: 'claude-desktop',
+        displayName: 'Claude Desktop',
+        installed: true,
+        configPath: '/tmp/fake/claude-desktop.json',
+      },
+    ]
+    const { manager } = makeManagerStub({
+      links: [
+        {
+          serverName: 'browseros-stdio',
+          agent: 'claude-desktop',
+          configPath: '/tmp/fake/claude-desktop.json',
+        },
+      ],
+    })
+    setMcpManagerForTesting(manager)
+
+    const rows = await listAgents({ detect: stubDetect })
+    expect(rows.map((r) => r.id).sort()).toEqual([
+      'claude-code',
+      'claude-desktop',
+    ])
+    expect(rows.find((r) => r.id === 'claude-desktop')?.linked).toBe(true)
   })
 
   it('counts codex as linked when wired up under the stdio server name', async () => {
@@ -220,14 +266,38 @@ describe('installInto', () => {
     expect(calls.link[0].serverName).toBe('browseros')
   })
 
-  it('uses a stdio mcp-remote spec under a separate server name for codex', async () => {
-    // Codex rejects HTTP MCP specs; the manager surfaces this as an
-    // InvalidServerSpecError. Wrapping the HTTP url in `npx mcp-remote`
-    // lets a stdio-only client still reach the local HTTP endpoint.
+  it('uses an http spec under the http server name for codex', async () => {
+    // Codex gained streamable-HTTP MCP support in agent-mcp-manager
+    // 0.0.3 (its surface flipped to ['stdio', 'http']). planFor now
+    // hits the http branch, mirroring claude-code, so no stdio bridge
+    // is needed and the integration works without npx on the host.
     const { manager, calls } = makeManagerStub()
     setMcpManagerForTesting(manager)
 
     const result = await installInto('codex', 'http://127.0.0.1:9100/mcp')
+    expect(result.success).toBe(true)
+    expect(calls.add).toHaveLength(1)
+    expect(calls.add[0].name).toBe('browseros')
+    expect(calls.add[0].spec).toEqual({
+      transport: 'http',
+      url: 'http://127.0.0.1:9100/mcp',
+    })
+    expect(calls.link).toHaveLength(1)
+    expect(calls.link[0].agent).toBe('codex')
+    expect(calls.link[0].serverName).toBe('browseros')
+  })
+
+  it('uses a stdio mcp-remote spec under the stdio server name for claude-desktop', async () => {
+    // Claude Desktop only accepts stdio MCP entries; an http spec is
+    // silently dropped on launch. The agent-mcp-manager catalog flags
+    // it as stdio-only and `planFor` honours that.
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+
+    const result = await installInto(
+      'claude-desktop',
+      'http://127.0.0.1:9100/mcp',
+    )
     expect(result.success).toBe(true)
     expect(calls.add).toHaveLength(1)
     expect(calls.add[0].name).toBe('browseros-stdio')
@@ -237,7 +307,28 @@ describe('installInto', () => {
       args: ['mcp-remote', 'http://127.0.0.1:9100/mcp'],
     })
     expect(calls.link).toHaveLength(1)
-    expect(calls.link[0].agent).toBe('codex')
+    expect(calls.link[0].agent).toBe('claude-desktop')
+    expect(calls.link[0].serverName).toBe('browseros-stdio')
+  })
+
+  it('sweeps the opposite server name before linking, so an agent never ends up double-linked', async () => {
+    // claude-desktop is stdio-only in v0.0.2; if a v0.0.1 install
+    // left a legacy `browseros` (http) link for the same agent,
+    // installInto must unlink it before linking under
+    // `browseros-stdio`. Otherwise an uninstall click later (which
+    // sweeps both names) would silently delete a "fresh" install
+    // the user just clicked.
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+    const result = await installInto(
+      'claude-desktop',
+      'http://127.0.0.1:9100/mcp',
+    )
+    expect(result.success).toBe(true)
+    expect(calls.unlink).toHaveLength(1)
+    expect(calls.unlink[0].serverName).toBe('browseros')
+    expect(calls.unlink[0].agent).toBe('claude-desktop')
+    expect(calls.link).toHaveLength(1)
     expect(calls.link[0].serverName).toBe('browseros-stdio')
   })
 
@@ -251,22 +342,53 @@ describe('installInto', () => {
 })
 
 describe('uninstallFrom', () => {
-  it('calls unlink and returns success on the happy path', async () => {
+  it('sweeps both server names on uninstall and returns success', async () => {
+    // The same agent can be linked under either `browseros` (http) or
+    // `browseros-stdio` (mcp-remote shim) depending on which version
+    // of the agent-mcp-manager catalog wrote the link. Uninstall
+    // must hit both so a legacy link under the prior server name
+    // cannot survive forever.
     const { manager, calls } = makeManagerStub()
     setMcpManagerForTesting(manager)
     const out = await uninstallFrom('claude-code')
     expect(out.success).toBe(true)
-    expect(calls.unlink).toHaveLength(1)
-    expect(calls.unlink[0].serverName).toBe('browseros')
+    expect(calls.unlink).toHaveLength(2)
+    expect(calls.unlink.map((c) => c.serverName).sort()).toEqual([
+      'browseros',
+      'browseros-stdio',
+    ])
+    for (const call of calls.unlink) {
+      expect(call.agent).toBe('claude-code')
+    }
   })
 
-  it('unlinks codex from the stdio server name', async () => {
+  it('sweeps both server names for stdio-only agents too', async () => {
     const { manager, calls } = makeManagerStub()
     setMcpManagerForTesting(manager)
     const out = await uninstallFrom('codex')
     expect(out.success).toBe(true)
-    expect(calls.unlink).toHaveLength(1)
-    expect(calls.unlink[0].serverName).toBe('browseros-stdio')
+    expect(calls.unlink).toHaveLength(2)
+    expect(calls.unlink.map((c) => c.serverName).sort()).toEqual([
+      'browseros',
+      'browseros-stdio',
+    ])
+  })
+
+  it('uninstalls a stdio-only agent that is still linked under the legacy http server name', async () => {
+    // Regression: claude-desktop was http-routed under v0.0.1; the
+    // v0.0.2 catalog now classifies it as stdio-only. Without the
+    // server-name sweep, uninstall would target browseros-stdio
+    // (no-op) and leave the legacy `browseros` link in place
+    // forever, so listAgents would keep reporting linked: true.
+    const { manager, calls } = makeManagerStub()
+    setMcpManagerForTesting(manager)
+    const out = await uninstallFrom('claude-desktop')
+    expect(out.success).toBe(true)
+    expect(calls.unlink).toHaveLength(2)
+    expect(calls.unlink.map((c) => c.serverName).sort()).toEqual([
+      'browseros',
+      'browseros-stdio',
+    ])
   })
 
   it('returns a human message on ForeignEntryError instead of throwing', async () => {

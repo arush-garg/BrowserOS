@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-index 7238955992d8c..e1ec87fccbe6f 100644
+index 7238955992d8c..34a90ffe0c372 100644
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 @@ -14,6 +14,7 @@
@@ -23,7 +23,7 @@ index 7238955992d8c..e1ec87fccbe6f 100644
 +      settings_api::PrefType::kBoolean;
 +  (*s_allowlist)[browseros::prefs::kShowLLMChat] =
 +      settings_api::PrefType::kBoolean;
-+  (*s_allowlist)[browseros::prefs::kShowLLMHub] =
++  (*s_allowlist)[browseros::prefs::kShowAssistant] =
 +      settings_api::PrefType::kBoolean;
 +
  #if BUILDFLAG(IS_CHROMEOS)

@@ -3,13 +3,13 @@ package cmd
 import (
 	"bufio"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"browseros-cli/config"
+	"browseros-cli/mcp"
 	"browseros-cli/output"
 
 	"github.com/fatih/color"
@@ -80,18 +80,9 @@ Modes:
 			}
 
 			fmt.Printf("Checking connection to %s ...\n", baseURL)
-			client := &http.Client{Timeout: 5 * time.Second}
-			resp, err := client.Get(baseURL + "/health")
-			if err != nil {
-				output.Errorf(1, "cannot connect to %s: %v\n\n"+
-					"Open BrowserOS Settings > BrowserOS MCP and copy the Server URL.\n"+
-					"Then run: browseros-cli init <Server URL>\n"+
-					"Example:  browseros-cli init http://127.0.0.1:9000/mcp", baseURL, err)
-			}
-			resp.Body.Close()
-
-			if resp.StatusCode >= 400 {
-				output.Errorf(1, "server returned HTTP %d — check the URL", resp.StatusCode)
+			healthClient := mcp.NewClient(baseURL, version, 5*time.Second)
+			if _, err := healthClient.Health(); err != nil {
+				output.Error(err.Error(), 1)
 			}
 
 			cfg := &config.Config{ServerURL: baseURL}
@@ -103,7 +94,7 @@ Modes:
 			green.Printf("Connected! Config saved to %s\n", config.Path())
 			fmt.Println()
 			dim.Println("Try: browseros-cli health")
-			dim.Println("     browseros-cli pages")
+			dim.Println("     browseros-cli tabs")
 		},
 	}
 
