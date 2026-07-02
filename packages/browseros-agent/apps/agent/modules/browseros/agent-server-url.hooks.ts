@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { getAgentServerUrl } from '@/lib/browseros/helpers'
+// Relative value import: `bun test` resolves tsconfig `@/` paths only for
+// erased `import type`; a `@/` value import fails to load under bun test.
+import { getAgentServerUrl } from '../../lib/browseros/helpers'
 
 const MAX_AGENT_SERVER_URL_ATTEMPTS = 10
 const AGENT_SERVER_URL_RETRY_DELAY_MS = 1000

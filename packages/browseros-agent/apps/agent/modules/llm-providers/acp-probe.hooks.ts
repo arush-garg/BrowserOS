@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import type { ProviderType } from '@/lib/llm-providers/types'
-import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
+// Relative value import: `bun test` resolves tsconfig `@/` paths only for
+// erased `import type`; a `@/` value import fails to load under bun test.
+import { useAgentServerUrl } from '../browseros/agent-server-url.hooks'
 
 interface AcpProbeModel {
   id: string

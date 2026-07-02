@@ -166,10 +166,28 @@ export class Browser {
     },
   ): Promise<number> {
     const windowId = await this.resolveWindowIdForNewPage(opts)
-    return this.core.pages.newPage(url, {
+    const pageId = await this.core.pages.newPage(url, {
       background: opts?.background,
       windowId,
     })
+
+    // Auto-group: when spawned from an origin page (and not hidden), group the
+    // new tab with its origin so related tabs stay visually together.
+    if (opts?.originPageId !== undefined && !opts?.hidden) {
+      const originPage = this.core.pages.getInfo(opts.originPageId)
+      if (originPage && originPage.pageId !== pageId) {
+        try {
+          await this.groupTabs(
+            [opts.originPageId, pageId],
+            originPage.groupId ? { groupId: originPage.groupId } : undefined,
+          )
+        } catch {
+          // Grouping is best-effort; never fail tab creation because of it.
+        }
+      }
+    }
+
+    return pageId
   }
 
   async closePage(page: number): Promise<void> {

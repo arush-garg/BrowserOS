@@ -38,11 +38,15 @@ describe('getAgentServerUrl', () => {
   it('prefers VITE_BROWSEROS_SERVER_PORT over profile prefs in dev', async () => {
     // run.sh launches the production profile (whose port prefs point at the
     // disabled built-in server) but runs the dev server on its own port, so the
-    // env override must win. import.meta.env.DEV is true under the test runner.
+    // env override must win.
     const previousChrome = globalThis.chrome
     const previousEnvPort = import.meta.env.VITE_BROWSEROS_SERVER_PORT
+    const previousDev = import.meta.env.DEV
     const prefRequests: string[] = []
     try {
+      // Bun test doesn't set import.meta.env.DEV, so set it explicitly
+      // so the implementation's DEV guard allows the VITE_ override to win.
+      import.meta.env.DEV = true
       import.meta.env.VITE_BROWSEROS_SERVER_PORT = '9105'
       globalThis.chrome = {
         runtime: {},
@@ -68,7 +72,16 @@ describe('getAgentServerUrl', () => {
       // so we only assert the resolved URL, not the absence of pref reads.)
     } finally {
       globalThis.chrome = previousChrome
-      import.meta.env.VITE_BROWSEROS_SERVER_PORT = previousEnvPort
+      if (previousEnvPort === undefined) {
+        delete import.meta.env.VITE_BROWSEROS_SERVER_PORT
+      } else {
+        import.meta.env.VITE_BROWSEROS_SERVER_PORT = previousEnvPort
+      }
+      if (previousDev === undefined) {
+        delete import.meta.env.DEV
+      } else {
+        import.meta.env.DEV = previousDev
+      }
     }
   })
 })

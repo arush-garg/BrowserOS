@@ -1,4 +1,3 @@
-import { env } from '../env'
 import { getBrowserOSAdapter } from './adapter'
 import { Capabilities, Feature } from './capabilities'
 import { BROWSEROS_PREFS } from './prefs'
@@ -13,10 +12,13 @@ const PREF_RETRY_BASE_DELAY_MS = 200
  * `mcp_port`/`proxy_port` prefs point at the disabled built-in server, so the
  * dev server port must take precedence. The unified dev server serves /chat,
  * /mcp, and /health on this single port.
+ *
+ * Reads directly from `import.meta.env` rather than the cached `env` object so
+ * tests that patch the env after module load are visible.
  */
 function getDevServerPort(): number | null {
-  if (import.meta.env.DEV && env.VITE_BROWSEROS_SERVER_PORT) {
-    return env.VITE_BROWSEROS_SERVER_PORT
+  if (import.meta.env.DEV && import.meta.env.VITE_BROWSEROS_SERVER_PORT) {
+    return Number(import.meta.env.VITE_BROWSEROS_SERVER_PORT)
   }
   return null
 }
@@ -133,10 +135,12 @@ async function getMcpPort(): Promise<number> {
     if (await probeHealthCheck(prefPort)) {
       return prefPort
     }
-    // Pref returned a dead port — try the well-known dev server ports
-    // as a fallback before giving up.
+    // Pref returned a port that isn't currently answering. Prefer a
+    // well-known dev server port if one is live, otherwise trust the
+    // configured pref value rather than failing outright — the probe is
+    // an optimization for stale-port cases, not a hard requirement.
     const devFallback = await probeFallbackPorts()
-    if (devFallback !== null) return devFallback
+    return devFallback ?? prefPort
   }
 
   throw new McpPortError()
@@ -174,7 +178,7 @@ export async function getProxyPort(): Promise<number> {
       return prefPort
     }
     const devFallback = await probeFallbackPorts()
-    if (devFallback !== null) return devFallback
+    return devFallback ?? prefPort
   }
 
   throw new ProxyPortError()

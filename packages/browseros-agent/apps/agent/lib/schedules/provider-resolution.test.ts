@@ -8,6 +8,16 @@ const fetchBodies: Array<Record<string, unknown>> = []
 const originalFetch = globalThis.fetch
 const originalChrome = globalThis.chrome
 
+// getAgentServerUrl probes /health to validate the pref port; that request
+// carries no body and must not be recorded as a chat/refine request.
+const recordRequestBody = (
+  url: RequestInfo | URL,
+  init?: RequestInit,
+): void => {
+  if (String(url).endsWith('/health')) return
+  fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+}
+
 const createBrowserOSProvider = () => ({
   id: 'browseros',
   type: 'browseros',
@@ -75,8 +85,8 @@ beforeEach(() => {
       },
     },
   } as typeof chrome
-  globalThis.fetch = mock(async (_url, init) => {
-    fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+  globalThis.fetch = mock(async (url, init) => {
+    recordRequestBody(url, init)
     return new Response(
       [
         'data: {"type":"text-delta","id":"message","delta":"done"}',
@@ -115,8 +125,8 @@ describe('scheduled provider resolution', () => {
   })
 
   it('falls back through the configured default when an explicit refine provider is local runtime only', async () => {
-    globalThis.fetch = mock(async (_url, init) => {
-      fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+    globalThis.fetch = mock(async (url, init) => {
+      recordRequestBody(url, init)
       return Response.json({ success: true, refined: 'Refined prompt' })
     }) as unknown as typeof fetch
 

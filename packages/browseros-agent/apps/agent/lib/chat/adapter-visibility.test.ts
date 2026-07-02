@@ -1,14 +1,35 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
   HarnessAgentAdapter,
 } from '@/modules/agents/agent-harness-types'
-// Relative value import: `bun test` resolves tsconfig paths from the package
-// root, where `@/` is undefined — only erased `import type` works via `@/`.
-import { buildSidepanelChatTargets } from '../../modules/chat/sidepanel-chat-targets'
+
+// sidepanel-chat-targets eagerly calls storage.defineItem at import time;
+// stub @wxt-dev/storage so it loads under bun test.
+const storageValues = new Map<string, unknown>()
+
+mock.module('@wxt-dev/storage', () => ({
+  storage: {
+    defineItem: <T>(key: string, options?: { defaultValue?: T }) => ({
+      getValue: async () =>
+        storageValues.has(key) ? storageValues.get(key) : options?.defaultValue,
+      setValue: async (value: T) => {
+        storageValues.set(key, value)
+      },
+      watch: () => () => {},
+    }),
+  },
+}))
+
 import { isAdapterHidden, visibleAdapters } from './adapter-visibility'
+
+// Dynamic import so the @wxt-dev/storage mock above is installed before the
+// sidepanel-chat-targets module's top-level storage.defineItem call runs.
+const { buildSidepanelChatTargets } = await import(
+  '../../modules/chat/sidepanel-chat-targets'
+)
 
 function makeAdapter(id: HarnessAgentAdapter): HarnessAdapterDescriptor {
   return {

@@ -124,6 +124,7 @@ function createMockCdp(overrides?: Partial<CdpBackend>): CdpBackend {
 
     // ── CdpBackend ──
     isConnected: () => true,
+    connectionEpoch: () => 0,
     onSessionEvent: mock(() => () => {}),
     session: mock(() => ({})),
     connect: mock(async () => {}),

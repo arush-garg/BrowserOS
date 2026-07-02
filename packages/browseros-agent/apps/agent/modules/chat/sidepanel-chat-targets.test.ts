@@ -1,19 +1,39 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type {
   HarnessAdapterDescriptor,
   HarnessAgent,
 } from '@/modules/agents/agent-harness-types'
-import {
+
+// The module eagerly calls storage.defineItem at import time, which touches
+// browser.runtime; stub @wxt-dev/storage so the module loads under bun test.
+const storageValues = new Map<string, unknown>()
+
+mock.module('@wxt-dev/storage', () => ({
+  storage: {
+    defineItem: <T>(key: string, options?: { defaultValue?: T }) => ({
+      getValue: async () =>
+        storageValues.has(key) ? storageValues.get(key) : options?.defaultValue,
+      setValue: async (value: T) => {
+        storageValues.set(key, value)
+      },
+      watch: () => () => {},
+    }),
+  },
+}))
+
+import type { SidepanelChatTargetSelection } from './sidepanel-chat-targets'
+
+// Dynamic import so the @wxt-dev/storage mock above is installed before the
+// module's top-level storage.defineItem call runs.
+const {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
-  persistSidepanelChatTargetSelection,
   resolveSidepanelChatTarget,
-  type SidepanelChatTargetSelection,
   saveSidepanelChatTargetSelection,
   toLlmProviderConfig,
   watchSidepanelChatTargetSelection,
-} from './sidepanel-chat-targets'
+} = await import('./sidepanel-chat-targets')
 
 const timestamp = 1000
 
@@ -258,14 +278,17 @@ describe('resolveSidepanelChatTarget', () => {
 
 describe('persistSidepanelChatTargetSelection', () => {
   it('stores only target identity and does not mutate LLM provider arrays', async () => {
-    const savedSelection: SidepanelChatTargetSelection | null = null
+    const store = createSelectionStore()
     const originalProviders = providers.map((provider) => ({ ...provider }))
     const targets = buildSidepanelChatTargets({ providers, adapters, agents })
     const target = targets.find((candidate) => candidate.id === 'agent-codex')
 
-    await persistSidepanelChatTargetSelection(target, 42)
+    await saveSidepanelChatTargetSelection(
+      target ? { kind: target.kind, id: target.id } : null,
+      store,
+    )
 
-    expect(savedSelection as SidepanelChatTargetSelection | null).toEqual({
+    expect(await store.getValue()).toEqual({
       kind: 'acp',
       id: 'agent-codex',
     })
