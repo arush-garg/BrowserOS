@@ -47,17 +47,12 @@ Use your own API keys or run local models with Ollama. Your data never leaves yo
 |---------|-------------|------|
 | **AI Agent** | 53+ browser automation tools — navigate, click, type, extract data, all with natural language | [Guide](https://docs.browseros.com/getting-started) |
 | **MCP Server** | Control the browser from Claude Code, Gemini CLI, or any MCP client | [Setup](https://docs.browseros.com/features/use-with-claude-code) |
-| **Workflows** | Build repeatable browser automations with a visual graph builder | [Docs](https://docs.browseros.com/features/workflows) |
 | **Cowork** | Combine browser automation with local file operations — research the web, save reports to your folder | [Docs](https://docs.browseros.com/features/cowork) |
 | **Scheduled Tasks** | Run agents on autopilot — daily, hourly, or every few minutes | [Docs](https://docs.browseros.com/features/scheduled-tasks) |
-| **Memory** | Persistent memory across conversations — your assistant remembers context over time | [Docs](https://docs.browseros.com/features/memory) |
-| **SOUL.md** | Define your AI's personality and instructions in a single markdown file | [Docs](https://docs.browseros.com/features/soul-md) |
-| **LLM Hub** | Compare Claude, ChatGPT, and Gemini responses side-by-side on any page | [Docs](https://docs.browseros.com/features/llm-chat-hub) |
-| **40+ App Integrations** | Gmail, Slack, GitHub, Linear, Notion, Figma, Salesforce, and more via MCP | [Docs](https://docs.browseros.com/features/connect-apps) |
+| **40+ App Integrations** | Gmail, Slack, GitHub, Linear, Notion, Figma, Salesforce, and more via MCP | [Docs](https://docs.browseros.com/features/connect-mcps) |
 | **Vertical Tabs** | Side-panel tab management — stay organized even with 100+ tabs open | [Docs](https://docs.browseros.com/features/vertical-tabs) |
 | **Ad Blocking** | uBlock Origin + Manifest V2 support — [10x more protection](https://docs.browseros.com/features/ad-blocking) than Chrome | [Docs](https://docs.browseros.com/features/ad-blocking) |
-| **Cloud Sync** | Sync browser config and agent history across devices | [Docs](https://docs.browseros.com/features/sync) |
-| **Skills** | Custom instruction sets that shape how your AI assistant behaves | [Docs](https://docs.browseros.com/features/skills) |
+| **Cloud Sync** | Sync browser config and agent history across devices | [Docs](https://docs.browseros.com/features/sync-to-cloud) |
 | **Smart Nudges** | Contextual suggestions to connect apps and use features at the right moment | [Docs](https://docs.browseros.com/features/smart-nudges) |
 
 ## Demos
@@ -128,7 +123,6 @@ BrowserOS works with any LLM. Bring your own keys, use OAuth, or run models loca
 | Open Source | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
 | AI Agent | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
 | MCP Server | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Visual Workflows | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Cowork (files + browser) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Scheduled Tasks | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Bring Your Own Keys | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
@@ -155,7 +149,7 @@ BrowserOS/
 ├── packages/browseros-agent/        # Agent platform (TypeScript/Go)
 │   ├── apps/
 │   │   ├── server/                  # MCP server + AI agent loop (Bun)
-│   │   ├── agent/                   # Browser extension UI (WXT + React)
+│   │   ├── app/                     # Browser extension UI (WXT + React)
 │   │   ├── cli/                     # CLI tool (Go)
 │   │   ├── eval/                    # Benchmark framework
 │   │   └── controller-ext/          # Chrome API bridge extension
@@ -170,7 +164,7 @@ BrowserOS/
 |---------|-------------|
 | [`packages/browseros`](packages/browseros/) | Chromium fork — patches, build system, signing |
 | [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing 53+ MCP tools and running the AI agent loop |
-| [`apps/agent`](packages/browseros-agent/apps/agent/) | Browser extension — new tab, side panel chat, onboarding, settings |
+| [`apps/app`](packages/browseros-agent/apps/app/) | Browser extension — new tab, side panel chat, onboarding, settings |
 | [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI — control BrowserOS from the terminal or AI coding agents |
 | [`apps/eval`](packages/browseros-agent/apps/eval/) | Benchmark framework — WebVoyager, Mind2Web evaluation |
 | [`agent-sdk`](packages/browseros-agent/packages/agent-sdk/) | Node.js SDK for browser automation with natural language |

@@ -1,7 +1,7 @@
 ---
 name: ask-internal
 description: Answer questions about BrowserOS internal stuff (setup, features, architecture, design decisions) by reading the private internal-docs submodule and the codebase. Use for "how do I X", "where is Y", "what is the deal with Z", or any question that mixes ops/setup knowledge with code knowledge. Can execute steps with per-command confirmation.
-allowed-tools: Bash, Read, Grep, Glob, Edit, Write
+allowed-tools: Bash, Read, Grep, Glob
 ---
 
 # Ask Internal
@@ -20,14 +20,14 @@ Answer team-internal questions by reading `.internal-docs/` and the codebase, sy
 ## Hard rules — never do these
 
 - NEVER execute a state-mutating command without per-command `y` confirmation from the user.
-- NEVER edit BrowserOS code in response to an ask-internal question. The skill answers; it does not modify code. Use `/document-internal` for writes.
+- NEVER edit BrowserOS code or docs in response to an ask-internal question. The skill answers; it does not write files.
 - NEVER guess. If grep finds nothing useful in docs or code, say so plainly.
 - NEVER run this skill if `.internal-docs/` is missing. Stop with the init command.
 - NEVER cite a file or line number you have not actually read.
 
 ## Voice rules
 
-Apply the same voice rules as `document-internal` to the synthesized answer:
+Apply these voice rules to the synthesized answer:
 
 - Lead with the point.
 - Concrete nouns. Name files, functions, commands.
@@ -105,8 +105,8 @@ If Step 3 produced executable commands the user could run, ask:
 If Step 2 returned nothing useful (no doc hits AND no clear code answer):
 
 1. Tell the user: "No doc covers this. Tangentially relevant files: <list>."
-2. Ask: "Draft a new doc and open a PR to internal-docs?"
-3. On yes: invoke the full `/document-internal` flow (four sharp questions, draft, voice check, PR), forced to `setup/` doc type, with the code-grep findings handed in as initial context.
+2. Ask: "Draft a short internal-doc outline in this chat?"
+3. On yes: write the outline in the response only, using the code-grep findings as context. Do not create files or invoke another skill.
 
 ### Step 6: Completion status
 
@@ -144,7 +144,7 @@ If a doc says one thing and the code says another, surface the conflict explicit
 **Never:**
 - Cite a file:line you haven't read.
 - Run mutations without per-command confirmation.
-- Modify BrowserOS code from this skill (use `/document-internal` for writes).
+- Modify BrowserOS code or docs from this skill.
 
 **Always:**
 - Pre-flight check before any search.

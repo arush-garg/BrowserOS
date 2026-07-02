@@ -671,7 +671,6 @@ describe('AgentHarnessService', () => {
       expect(agents).toHaveLength(0)
     })
   })
-
   it('strips browser-context scaffolding from the active-turn prompt', () => {
     const { registry, service } = serviceWithRegistry()
     registry.register('agent-1', 'main', {

@@ -4,7 +4,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prepareAcpxAgentContext } from '../../../src/lib/agents/acpx/agent-adapter'
@@ -56,7 +56,7 @@ describe('prepareAcpxAgentContext', () => {
       /^agent:claude-agent:main:[a-f0-9]{16}$/,
     )
     expect(prepared.runPrompt).toContain(
-      'Available skills: browseros, memory, soul',
+      'Available skills: app-connections, browseros, memory, soul',
     )
     expect(
       await readFile(`${prepared.commandEnv.AGENT_HOME}/MEMORY.md`, 'utf8'),
@@ -121,7 +121,6 @@ describe('prepareAcpxAgentContext', () => {
       }),
     )
   })
-
   it('prepares Hermes with HERMES_HOME pointing at the host agent home', async () => {
     const browserosDir = await mkdtemp(join(tmpdir(), 'browseros-adapters-'))
     tempDirs.push(browserosDir)

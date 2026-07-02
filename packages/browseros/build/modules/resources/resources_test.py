@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import patch
 
+import yaml
 from .resources import ResourcesModule, copy_resources_impl
 from ...common.context import Context
 from ...common.module import ValidationError
@@ -184,6 +186,68 @@ class CopyResourcesTest(unittest.TestCase):
         self.assertTrue(copy_resources_impl(self.ctx))
 
         self.assertFalse((self.chromium.src / "chrome" / "ghost").exists())
+
+    def test_real_config_copies_browseros_and_claw_server_roots_apart(self):
+        self.root.write_copy_config(self._real_copy_config())
+        browseros_source = (
+            self.root.root
+            / "resources"
+            / "binaries"
+            / "browseros_server"
+            / "darwin-arm64"
+            / "resources"
+        )
+        claw_source = (
+            self.root.root
+            / "resources"
+            / "binaries"
+            / "browseros_claw_server"
+            / "darwin-arm64"
+            / "resources"
+        )
+        (browseros_source / "bin").mkdir(parents=True)
+        (browseros_source / "bin" / "browseros_server").write_text("browseros")
+        (claw_source / "bin").mkdir(parents=True)
+        (claw_source / "bin" / "browseros-claw-server").write_text("claw")
+
+        with patch("build.modules.resources.resources.get_platform", return_value="macos"):
+            ctx = make_context(
+                self.chromium,
+                self.root,
+                architecture="arm64",
+                build_type="release",
+            )
+            self.assertTrue(copy_resources_impl(ctx))
+
+        browseros_dest = (
+            self.chromium.src
+            / "chrome"
+            / "browser"
+            / "browseros"
+            / "server"
+            / "resources"
+            / "bin"
+            / "browseros_server"
+        )
+        claw_dest = (
+            self.chromium.src
+            / "chrome"
+            / "browser"
+            / "browseros"
+            / "claw_server"
+            / "resources"
+            / "bin"
+            / "browseros-claw-server"
+        )
+        self.assertEqual(browseros_dest.read_text(), "browseros")
+        self.assertEqual(claw_dest.read_text(), "claw")
+
+    def _real_copy_config(self) -> dict:
+        config_path = (
+            Path(__file__).resolve().parents[2] / "config" / "copy_resources.yaml"
+        )
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
 
 
 class ResourcesModuleValidateTest(unittest.TestCase):

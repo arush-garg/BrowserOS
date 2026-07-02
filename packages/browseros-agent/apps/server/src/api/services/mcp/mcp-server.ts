@@ -4,52 +4,53 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import type { Browser } from '../../../browser/browser'
-import type { BrowserSession } from '../../../browser/core/session'
-import {
-  type KlavisProxyRef,
-  registerKlavisTools,
-} from '../klavis/strata-proxy'
+import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { createBrowserMcpServer } from '@browseros/browser-mcp/mcp-server'
+import { logger } from '../../../lib/logger'
+import { metrics } from '../../../lib/metrics'
+import { registerFilesystemMcpTools } from '../../../tools/filesystem/register-mcp'
+import { shouldLogToolRegistration } from '../../../tools/registration-log-sampling'
+import type { ConnectorToolScope, KlavisService } from '../klavis'
 import { MCP_INSTRUCTIONS } from './mcp-prompt'
-import { registerTools } from './register-mcp'
+import type { RemoteAgentHarnessTools } from './register-mcp'
 
 export interface McpServiceDeps {
   version: string
-  browser: Browser
   browserSession: BrowserSession
-  klavisRef?: KlavisProxyRef
-  browserUseNewTools: boolean
+  klavis?: KlavisService
+  connectorScope?: ConnectorToolScope
   defaultWindowId?: number
   defaultTabGroupId?: string
+  executionDir: string
+  remoteAgentHarness?: RemoteAgentHarnessTools
 }
 
-export function createMcpServer(deps: McpServiceDeps): McpServer {
-  const server = new McpServer(
-    {
-      name: 'browseros_mcp',
-      title: 'BrowserOS MCP server',
-      version: deps.version,
-    },
-    { capabilities: { logging: {} }, instructions: MCP_INSTRUCTIONS },
-  )
-
-  server.server.setRequestHandler(SetLevelRequestSchema, () => {
-    return {}
-  })
-
-  registerTools(server, {
-    browser: deps.browser,
+/** Creates a per-request BrowserOS MCP server with tools for the requested surface. */
+export function createMcpServer(deps: McpServiceDeps) {
+  const server = createBrowserMcpServer({
+    name: 'browseros_mcp',
+    title: 'BrowserOS MCP server',
+    version: deps.version,
     browserSession: deps.browserSession,
-    useNewTools: deps.browserUseNewTools,
     defaultWindowId: deps.defaultWindowId,
     defaultTabGroupId: deps.defaultTabGroupId,
+    instructions: MCP_INSTRUCTIONS,
+    registration: {
+      outputFileAccess: deps.remoteAgentHarness?.outputFileAccess,
+      logger,
+      onToolExecuted: (event) => metrics.log('tool_executed', event),
+      shouldLogToolRegistration,
+      source: 'mcp',
+    },
   })
 
-  if (deps.klavisRef?.handle) {
-    registerKlavisTools(server, deps.klavisRef.handle)
+  if (deps.remoteAgentHarness) {
+    registerFilesystemMcpTools(server, deps.executionDir, {
+      outputFileAccess: deps.remoteAgentHarness.outputFileAccess,
+    })
   }
+
+  deps.klavis?.registerMcpTools(server, deps.connectorScope)
 
   return server
 }

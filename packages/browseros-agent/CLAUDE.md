@@ -4,15 +4,14 @@ A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, CLI,
 
 ## Before you push
 
-There is no root `bun run check` script here. Run the real checks:
+Run the root check suite and the tests:
 
 ```
-bun run lint
-bun run typecheck
-bun run test:main
+bun run check
+bun run test
 ```
 
-For docs-only changes, also run `git diff --check`. For release/build changes, run the relevant `bun run build:*` command.
+`bun run check` runs lint, typecheck, and Fallow. `bun run test` runs the full test suite. For docs-only changes, also run `git diff --check`. For release/build changes, run the relevant `bun run build:*` command.
 
 ## Universal rules
 
@@ -33,6 +32,6 @@ For docs-only changes, also run `git diff --check`. For release/build changes, r
 ## Where to look
 
 - For server-specific guidance, see `apps/server/CLAUDE.md`.
-- For extension/agent UI specifics, see `apps/agent/CLAUDE.md`.
+- For extension/app UI specifics, see `apps/app/CLAUDE.md`.
 - For the BrowserOS CLI (Go module — Go idioms, not the TS rules above), see `apps/cli/CLAUDE.md`.
 - For the eval harness (benchmarks, graders, suites, runs), see `apps/eval/CLAUDE.md`.

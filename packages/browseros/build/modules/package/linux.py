@@ -195,7 +195,12 @@ def copy_browser_files(
         else:
             log_warning(f"  ⚠ File not found: {file}")
 
-    dirs_to_copy = ["locales", "MEIPreload", "BrowserOSServer"]
+    dirs_to_copy = [
+        "locales",
+        "MEIPreload",
+        "BrowserOSServer",
+        "BrowserOSClawServer",
+    ]
     for dir_name in dirs_to_copy:
         src = join_paths(out_dir, dir_name)
         if Path(src).exists():

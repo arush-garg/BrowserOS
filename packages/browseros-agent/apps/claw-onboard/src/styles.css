@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(40 25% 97%);
+  --color-foreground: hsl(40 8% 10%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(40 8% 10%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(40 8% 10%);
+  --color-primary: hsl(19 89% 56%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(40 22% 95%);
+  --color-secondary-foreground: hsl(40 8% 10%);
+  --color-muted: hsl(40 18% 94%);
+  --color-muted-foreground: hsl(35 5% 51%);
+  --color-accent: hsl(19 89% 56%);
+  --color-accent-foreground: hsl(0 0% 100%);
+  --color-destructive: hsl(4 56% 50%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(40 22% 91%);
+  --color-input: hsl(40 22% 91%);
+  --color-ring: hsl(19 89% 56%);
+  --color-bg-canvas: hsl(40 30% 98%);
+  --color-bg-sunken: hsl(40 18% 94%);
+  --color-card-tint: hsl(40 35% 98.5%);
+  --color-border-2: hsl(40 18% 88%);
+  --color-border-strong: hsl(40 14% 83%);
+  --color-ink: hsl(40 8% 10%);
+  --color-ink-2: hsl(35 6% 32%);
+  --color-ink-3: hsl(35 5% 51%);
+  --color-ink-4: hsl(35 5% 66%);
+  --color-accent-2: hsl(20 79% 49%);
+  --color-accent-ink: hsl(22 86% 38%);
+  --color-accent-tint: hsl(25 88% 94%);
+  --color-accent-tint-2: hsl(25 87% 90%);
+  --color-green: hsl(140 65% 33%);
+  --color-green-tint: hsl(140 35% 92%);
+  --color-amber: hsl(35 80% 40%);
+  --color-amber-tint: hsl(40 75% 92%);
+  --color-red: hsl(4 56% 50%);
+  --color-red-tint: hsl(4 65% 95%);
+  --color-blue: hsl(217 75% 53%);
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --shadow-card:
+    0 1px 2px hsl(35 35% 12% / 0.04), 0 1px 3px hsl(35 35% 12% / 0.03);
+  --shadow-pop:
+    0 8px 30px hsl(35 35% 12% / 0.14), 0 2px 8px hsl(35 35% 12% / 0.08);
+  --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
+  --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-fade-in: fade-in 0.35s ease both;
+  --radius: 0.45rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  background: var(--color-bg-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-accent-tint-2);
+  color: var(--color-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
+  }
+}

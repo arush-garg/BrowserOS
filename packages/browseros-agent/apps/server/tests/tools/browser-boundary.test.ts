@@ -2,35 +2,29 @@ import { describe, it } from 'bun:test'
 import assert from 'node:assert'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { BROWSER_TOOLS } from '../../src/tools/browser/registry'
+import { BROWSER_TOOLS } from '@browseros/browser-mcp/registry'
 
 const compactBrowserToolFiles = [
   'act.ts',
   'diff.ts',
+  'download.ts',
+  'evaluate.ts',
   'framework.ts',
   'grep.ts',
   'navigate.ts',
   'output-file.ts',
+  'pdf.ts',
   'read.ts',
   'register.ts',
   'registry.ts',
   'run.ts',
   'screenshot.ts',
   'snapshot.ts',
+  'tab-groups.ts',
   'tabs.ts',
   'trust-boundary.ts',
+  'upload.ts',
   'wait.ts',
-]
-
-const legacyBrowserToolFiles = [
-  'bookmarks.ts',
-  'dom.ts',
-  'history.ts',
-  'input.ts',
-  'navigation.ts',
-  'page-actions.ts',
-  'snapshot.ts',
-  'tab-groups.ts',
   'windows.ts',
 ]
 
@@ -44,35 +38,32 @@ const legacyOnlyToolNames = [
   'take_snapshot',
   'group_tabs',
   'list_windows',
+  'create_window',
+  'create_hidden_window',
+  'close_window',
+  'activate_window',
+  'set_window_visibility',
 ]
 
 describe('browser tool boundary', () => {
-  it('keeps the compact browser tools under src/tools/browser', () => {
-    const toolsDir = join(import.meta.dir, '../../src/tools')
+  it('keeps the compact browser tools under the browser-mcp package', () => {
+    const toolsDir = join(
+      import.meta.dir,
+      '../../../../packages/browser-mcp/src/tools',
+    )
 
     for (const file of compactBrowserToolFiles) {
-      assert.ok(
-        existsSync(join(toolsDir, 'browser', file)),
-        `Expected browser/${file}`,
-      )
+      assert.ok(existsSync(join(toolsDir, file)), `Expected ${file}`)
     }
   })
 
-  it('keeps the old browser modules as legacy reference code only', () => {
-    const toolsDir = join(import.meta.dir, '../../src/tools')
+  it('does not keep legacy browser tool modules', () => {
+    const toolsDir = join(
+      import.meta.dir,
+      '../../../../packages/browser-mcp/src/tools',
+    )
 
-    for (const file of legacyBrowserToolFiles) {
-      assert.ok(
-        existsSync(join(toolsDir, 'legacy/browser', file)),
-        `Expected legacy/browser/${file}`,
-      )
-      if (file !== 'snapshot.ts') {
-        assert.ok(
-          !existsSync(join(toolsDir, 'browser', file)),
-          `Unexpected active legacy browser module ${file}`,
-        )
-      }
-    }
+    assert.ok(!existsSync(join(toolsDir, '../legacy')))
   })
 
   it('does not register the legacy-only browser tool names', () => {

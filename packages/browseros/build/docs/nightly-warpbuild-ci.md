@@ -11,15 +11,71 @@ up here, that workflow can be retired.
 
 | Platform | Label | Specs | Disk |
 | --- | --- | --- | --- |
-| Linux x64 | `warp-ubuntu-2204-x64-32x` | 32 vCPU / 128 GB | 150 GB |
+| Linux x64 | `warp-ubuntu-2204-x64-32x` | 32 vCPU / 128 GB | 256 GB |
 | Windows x64 | `warp-windows-2025-x64-32x` | 32 vCPU / 128 GB | 256 GB |
-| macOS arm64 | `warp-macos-15-arm64-12x` | M4 Pro, 12 vCPU / 44 GB | 270 GB |
+| macOS arm64 | `warp-macos-26-arm64-12x` | M4 Pro, 12 vCPU / 44 GB | 500 GB |
 
-There is no 32-core macOS tier; 12x is WarpBuild's largest Mac. WarpBuild
-runners register as self-hosted, so GitHub's 6-hour hosted-job cap does not
-apply — but `timeout-minutes` must be set explicitly (the implicit default is
-360). Linux's 150 GB disk is the tightest fit: ~60-75 GB checkout +
-~25-40 GB out dir + OS image. The workflow prints `df -h` after each build.
+There is no 32-core macOS tier; 12x is WarpBuild's largest Mac. The macOS
+image version must satisfy the chromium pin's SDK requirement — check
+`build/config/mac/mac_sdk.gni` (`mac_sdk_official_version`) in the pinned
+tree when bumping `CHROMIUM_VERSION`; chromium 148 needs the macOS 26 SDK,
+and the macOS 15 image (Xcode 16.4 / SDK 15.5) fails compiling
+`skia_utils_mac.mm` (`kCGImageByteOrder32Host` only exists in SDK 26).
+WarpBuild runners register as self-hosted, so GitHub's 6-hour hosted-job
+cap does not apply — but `timeout-minutes` must be set explicitly (the
+implicit default is 360). Disk is comfortable on all three tiers — the
+~60-75 GB checkout + ~25-40 GB out dir leave ample headroom. The workflow
+prints `df -h` after each build. Specs above come from the account's runner catalog
+(app.warpbuild.com → Runners), which is the source of truth for labels
+and sizes; WarpBuild's public docs pages can lag it.
+
+## One-time setup (WarpBuild)
+
+The `warpbuildbot` GitHub app is installed org-wide on `browseros-ai`
+(since 2026-06-11). Two more things must be true before any `warp-*` job
+leaves `queued`:
+
+1. **The org must allow self-hosted runners on public repos.** WarpBuild
+   runners register as org-level self-hosted runners, and GitHub blocks
+   those on public repositories by default
+   (https://www.warpbuild.com/docs/ci/public-repos). BrowserOS is public,
+   so an org admin must check: Organization Settings → Actions → Runner
+   groups → Default → "Allow public repositories". Via API (needs
+   `admin:org` scope):
+
+   ```bash
+   gh auth refresh -h github.com -s admin:org
+   gh api orgs/browseros-ai/actions/runner-groups \
+     --jq '.runner_groups[] | {id, name, allows_public_repositories}'
+   gh api -X PATCH "orgs/browseros-ai/actions/runner-groups/<id>" \
+     -F allows_public_repositories=true
+   ```
+
+   Before flipping the toggle, check what else lives in that group — it
+   widens exposure for every runner in it:
+
+   ```bash
+   gh api "orgs/browseros-ai/actions/runner-groups/<id>/runners" \
+     --jq '.runners[] | {name, status, labels: [.labels[].name]}'
+   ```
+
+   Expect only ephemeral `warp-*` runners (usually none while idle). The
+   signed-nightly Mac (`browseros-builder`) is registered at the repo
+   level, so this org-group toggle does not change its exposure. If the
+   group ever holds other persistent org-level runners, give WarpBuild a
+   dedicated runner group instead of widening Default.
+
+   Done for `browseros-ai` on 2026-06-13 — pickup verified live (a
+   queued job was claimed within ~60 s of dispatch).
+
+2. **The WarpBuild org must be active**: sign in at
+   https://app.warpbuild.com/, confirm the `browseros-ai` connection and
+   that billing/credits are set up — runners are not provisioned without
+   an active account.
+
+Smoke test after changing either:
+`gh workflow run "Nightly Release Build" -f platforms=linux`, then watch
+the build job leave `queued` within ~5 minutes (`gh run watch`).
 
 ## Per-night pipeline (per platform)
 
@@ -127,3 +183,48 @@ The first run per platform is the cache warm-up; expect cold timings. If a
 pin bump lands, the next night is cold again for that version. To force a
 fresh checkout, bump the `v1` in the cache key (workflow) — for Windows also
 delete the old object under `ci-cache/chromium/` in R2.
+
+## Troubleshooting: jobs stuck in `queued`
+
+A job no runner ever picked up shows `runner_id: 0` and empty steps:
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | {name, status}'
+gh api repos/browseros-ai/BrowserOS/actions/jobs/<job-id> \
+  --jq '{status, runner_id, runner_name, labels}'
+```
+
+Causes, in the order to check:
+
+1. **Runner group blocks public repos** — see one-time setup above. This
+   stalls all platforms at once.
+2. **Label not in the account's runner catalog** — the canonical list is
+   the Runners page at https://app.warpbuild.com/ (the public docs lag
+   it: in 2026-06 the preinstalled-software page omitted the Windows
+   Server 2025 images the catalog already offered). An unsupported label
+   queues forever; WarpBuild reports no error back to GitHub.
+3. **WarpBuild account** — org connection or billing lapsed
+   (https://app.warpbuild.com/).
+4. **WarpBuild capacity or incident** — rare; check their dashboard.
+
+Mechanics worth knowing:
+
+- GitHub discards self-hosted jobs queued for more than 24h, and the
+  workflow's `nightly-release` concurrency group
+  (`cancel-in-progress: false`) makes the next run wait (newer pending
+  runs supersede older pending ones) — one stuck night delays the next
+  by a full day (runs 27367077749 → 27407228486 did exactly this). The `queue-watchdog` job therefore steps in at the
+  20-minute mark: it cancels the run when no build job is actually
+  running (everything stuck in queue or already finished), and fails
+  loudly without cancelling while any build is in progress. In that
+  mixed case, cancel the run manually once the live builds finish — a
+  still-queued job otherwise pins the group for up to 24h with no
+  watcher left.
+- Fixing the root cause does not revive already-queued jobs: WarpBuild
+  provisions on the `workflow_job.queued` webhook, which has already
+  fired. Cancel the stuck run and re-dispatch.
+- A job that IS picked up but dies in "Set up job" within seconds with
+  `Unable to resolve action <owner>/<name>@vN` has nothing to do with
+  WarpBuild: the floating major tag does not exist upstream (e.g.
+  astral-sh/setup-uv publishes v8.x.y releases but no `v8` tag). Pin an
+  exact existing version.

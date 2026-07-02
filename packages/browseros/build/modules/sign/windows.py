@@ -7,7 +7,7 @@ from typing import List, Optional
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
 from ...common.env import EnvConfig
-from ...common.server_binaries import expected_windows_binary_paths
+from ...common.server_binaries import SERVER_BUNDLES, expected_windows_bundle_binary_paths
 from ...common.utils import (
     log_info,
     log_error,
@@ -61,7 +61,15 @@ class WindowsSignModule(CommandModule):
     def _sign_executables(self, build_output_dir: Path, env: EnvConfig) -> None:
         log_info("\nStep 1/3: Signing executables before packaging...")
         binaries_to_sign_first = [build_output_dir / "chrome.exe"]
-        binaries_to_sign_first.extend(get_browseros_server_binary_paths(build_output_dir))
+        binaries_to_sign_first.extend(
+            get_existing_browseros_server_binary_paths(build_output_dir)
+        )
+        missing = get_missing_required_browseros_server_binary_paths(build_output_dir)
+        if missing:
+            raise RuntimeError(
+                "Missing bundled server binaries: "
+                + ", ".join(str(path) for path in missing)
+            )
 
         existing_binaries = []
         for binary in binaries_to_sign_first:
@@ -95,9 +103,31 @@ class WindowsSignModule(CommandModule):
 
 
 def get_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
-    """Return absolute paths to BrowserOS Server binaries for signing."""
-    server_dir = build_output_dir / "BrowserOSServer" / "default" / "resources" / "bin"
-    return expected_windows_binary_paths(server_dir)
+    """Return absolute paths to bundled server binaries for signing."""
+    return expected_windows_bundle_binary_paths(build_output_dir)
+
+
+def get_existing_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
+    """Return bundled server binary paths that exist in a build output dir."""
+    return [
+        path for path in expected_windows_bundle_binary_paths(build_output_dir)
+        if path.exists()
+    ]
+
+
+def get_missing_required_browseros_server_binary_paths(build_output_dir: Path) -> List[Path]:
+    """Return missing bundled server binaries that should already be packaged."""
+    missing: List[Path] = []
+    for bundle in SERVER_BUNDLES:
+        bundle_root = build_output_dir / bundle.windows_bundle_resources_root
+        should_exist = bundle.required_in_chromium_output or bundle_root.exists()
+        if not should_exist:
+            continue
+        for rel in bundle.windows_binaries:
+            path = bundle_root / "bin" / rel
+            if not path.exists():
+                missing.append(path)
+    return missing
 
 
 def build_mini_installer(ctx: Context) -> bool:

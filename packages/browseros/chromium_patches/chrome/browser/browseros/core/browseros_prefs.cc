@@ -195,16 +195,17 @@ bool ShouldShowLLMChat(PrefService* pref_service) {
 }
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000..c191fb3963968
+index 0000000000000..c47c0fad94dda
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,106 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
 +
++#include "chrome/browser/browseros/core/browseros_constants.h"
 +#include "chrome/browser/ui/actions/chrome_action_id.h"
 +#include "chrome/common/pref_names.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
@@ -216,7 +217,7 @@ index 0000000000000..c191fb3963968
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 +  // Toolbar visibility prefs
 +  registry->RegisterBooleanPref(prefs::kShowLLMChat, true);
-+  registry->RegisterBooleanPref(prefs::kShowLLMHub, false);
++  registry->RegisterBooleanPref(prefs::kShowAssistant, true);
 +  registry->RegisterBooleanPref(prefs::kShowToolbarLabels, true);
 +
 +  // Vertical tabs pref
@@ -229,14 +230,15 @@ index 0000000000000..c191fb3963968
 +
 +  // NTP focus pref
 +  registry->RegisterBooleanPref(prefs::kNtpFocusContent, false);
++  registry->RegisterBooleanPref(prefs::kOnboardingCompleted, false);
 +}
 +
 +bool ShouldShowLLMChat(PrefService* pref_service) {
 +  return pref_service->GetBoolean(prefs::kShowLLMChat);
 +}
 +
-+bool ShouldShowLLMHub(PrefService* pref_service) {
-+  return pref_service->GetBoolean(prefs::kShowLLMHub);
++bool ShouldShowAssistant(PrefService* pref_service) {
++  return pref_service->GetBoolean(prefs::kShowAssistant);
 +}
 +
 +bool ShouldShowToolbarLabels(PrefService* pref_service) {
@@ -279,8 +281,8 @@ index 0000000000000..c191fb3963968
 +  switch (id) {
 +    case kActionSidePanelShowThirdPartyLlm:
 +      return prefs::kShowLLMChat;
-+    case kActionSidePanelShowClashOfGpts:
-+      return prefs::kShowLLMHub;
++    case kActionBrowserOSAgent:
++      return prefs::kShowAssistant;
 +    default:
 +      return nullptr;
 +  }
@@ -292,6 +294,14 @@ index 0000000000000..c191fb3963968
 +    return true;  // No pref means always show
 +  }
 +  return pref_service->GetBoolean(pref_key);
++}
++
++bool ShouldPinBrowserOSExtension(const std::string& extension_id,
++                                 PrefService* pref_service) {
++  if (extension_id == kAgentExtensionId) {
++    return ShouldShowAssistant(pref_service);
++  }
++  return IsBrowserOSPinnedExtension(extension_id);
 +}
 +
 +}  // namespace browseros
