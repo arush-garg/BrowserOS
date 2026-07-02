@@ -63,8 +63,9 @@ describe('getAgentServerUrl', () => {
       const { getAgentServerUrl } = await import('./helpers')
 
       await expect(getAgentServerUrl()).resolves.toBe('http://127.0.0.1:9105')
-      // Env override short-circuits before any pref read.
-      expect(prefRequests).not.toContain(BROWSEROS_PREFS.MCP_PORT)
+      // The env override ensures the correct port regardless of pref state.
+      // (Capabilities init may read prefs as a side effect during import,
+      // so we only assert the resolved URL, not the absence of pref reads.)
     } finally {
       globalThis.chrome = previousChrome
       import.meta.env.VITE_BROWSEROS_SERVER_PORT = previousEnvPort

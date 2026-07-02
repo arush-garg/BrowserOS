@@ -82,6 +82,42 @@ async function getPrefNumberWithRetry(prefKey: string): Promise<number | null> {
   return null
 }
 
+const HEALTH_CHECK_TIMEOUT_MS = 1500
+
+/**
+ * Probe the /health endpoint on a given port to verify a BrowserOS
+ * server is actually listening. Returns true on 200, false otherwise.
+ */
+async function probeHealthCheck(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Well-known dev server ports to try when the pref port is dead.
+ * Covers the default BROWSEROS_SERVER_PORT and a few nearby ports
+ * that the dev tool may fall back to when the default is taken.
+ */
+const FALLBACK_PORTS = [9105, 9106, 9107]
+
+/**
+ * When the persisted pref port is unreachable (common in dev where
+ * --browseros-mcp-port overrides the pref but the pref still holds
+ * the old value), probe the well-known dev server ports.
+ */
+async function probeFallbackPorts(): Promise<number | null> {
+  for (const port of FALLBACK_PORTS) {
+    if (await probeHealthCheck(port)) return port
+  }
+  return null
+}
+
 async function getMcpPort(): Promise<number> {
   const devPort = getDevServerPort()
   if (devPort !== null) {
@@ -90,7 +126,17 @@ async function getMcpPort(): Promise<number> {
 
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.MCP_PORT)
   if (prefPort !== null) {
-    return prefPort
+    // Verify the port is actually listening. In dev the BrowserOS binary
+    // may have been launched with --browseros-mcp-port=9105 but the
+    // persisted pref still points at the production server port. A quick
+    // health check avoids connecting to a stale port.
+    if (await probeHealthCheck(prefPort)) {
+      return prefPort
+    }
+    // Pref returned a dead port — try the well-known dev server ports
+    // as a fallback before giving up.
+    const devFallback = await probeFallbackPorts()
+    if (devFallback !== null) return devFallback
   }
 
   throw new McpPortError()
@@ -124,7 +170,11 @@ export async function getProxyPort(): Promise<number> {
 
   const prefPort = await getPrefNumberWithRetry(BROWSEROS_PREFS.PROXY_PORT)
   if (prefPort !== null) {
-    return prefPort
+    if (await probeHealthCheck(prefPort)) {
+      return prefPort
+    }
+    const devFallback = await probeFallbackPorts()
+    if (devFallback !== null) return devFallback
   }
 
   throw new ProxyPortError()
