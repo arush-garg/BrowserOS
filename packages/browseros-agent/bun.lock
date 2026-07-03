@@ -426,6 +426,16 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/build-tools": {
+      "name": "@browseros/build-tools",
+      "version": "0.0.0",
+      "dependencies": {
+        "@aws-sdk/client-s3": "^3.933.0",
+      },
+      "devDependencies": {
+        "@types/node": "^24.3.3",
+      },
+    },
     "packages/cdp-protocol": {
       "name": "@browseros/cdp-protocol",
       "version": "0.0.1",
@@ -679,6 +689,8 @@
     "@browseros/browser-mcp": ["@browseros/browser-mcp@workspace:packages/browser-mcp"],
 
     "@browseros/build-server-tools": ["@browseros/build-server-tools@workspace:packages/build-server-tools"],
+
+    "@browseros/build-tools": ["@browseros/build-tools@workspace:packages/build-tools"],
 
     "@browseros/cdp-protocol": ["@browseros/cdp-protocol@workspace:packages/cdp-protocol"],
 
