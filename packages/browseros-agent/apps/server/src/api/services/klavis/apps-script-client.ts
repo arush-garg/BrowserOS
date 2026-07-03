@@ -6,7 +6,7 @@
 
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
-import { logger } from '../../logger'
+import { logger } from '../../../lib/logger'
 
 export interface AppsScriptPayload {
   app: 'docs' | 'sheets' | 'slides'
