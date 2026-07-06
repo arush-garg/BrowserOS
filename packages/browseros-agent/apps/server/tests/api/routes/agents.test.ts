@@ -107,8 +107,9 @@ describe('createAgentRoutes', () => {
     })
   })
 
-  it('rejects the removed Hermes harness adapter', async () => {
-    const route = createMountedRoutes([])
+  it('accepts the Hermes harness adapter', async () => {
+    const agents: AgentDefinition[] = []
+    const route = createMountedRoutes(agents)
     const response = await route.request('/agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -118,8 +119,10 @@ describe('createAgentRoutes', () => {
       }),
     })
 
-    expect(response.status).toBe(400)
-    expect(await response.json()).toEqual({ error: 'Invalid adapter' })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      agent: { name: 'Hermes bot', adapter: 'hermes' },
+    })
   })
 
   it('streams chat for an agent main session', async () => {

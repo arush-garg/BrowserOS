@@ -681,6 +681,48 @@ function createAcpxEventStream(
   let cancelled = false
   let hasOutputStarted = false
 
+  const handleError = async (
+    err: unknown,
+    attempt: number,
+    controller: ReadableStreamDefaultController<AgentStreamEvent>,
+  ): Promise<'retry' | 'fail'> => {
+    if (
+      !cancelled &&
+      !hasOutputStarted &&
+      attempt < MAX_RETRIES &&
+      isTransientError(err)
+    ) {
+      logger.warn('Agent harness acpx transient error, retrying', {
+        agentId: input.agent.id,
+        adapter: input.agent.adapter,
+        sessionKey: prepared.runtimeSessionKey,
+        attempt: attempt + 1,
+        maxRetries: MAX_RETRIES,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      controller.enqueue({
+        type: 'status',
+        text: `Connection error, retrying (${attempt + 1}/${MAX_RETRIES})…`,
+      })
+      activeTurn = null
+      await retryDelay(attempt, prepared.retryDelayMs)
+      return 'retry'
+    }
+    logger.error('Agent harness acpx turn failed', {
+      agentId: input.agent.id,
+      adapter: input.agent.adapter,
+      sessionKey: prepared.runtimeSessionKey,
+      browserosSessionKey: input.sessionKey,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    controller.enqueue({
+      type: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    })
+    controller.close()
+    return 'fail'
+  }
+
   return new ReadableStream<AgentStreamEvent>({
     start(controller) {
       const attemptRun = async (attempt: number): Promise<void> => {
@@ -743,42 +785,11 @@ function createAcpxEventStream(
           })
           controller.close()
         } catch (err) {
-          if (
-            !cancelled &&
-            !hasOutputStarted &&
-            attempt < MAX_RETRIES &&
-            isTransientError(err)
-          ) {
-            logger.warn('Agent harness acpx transient error, retrying', {
-              agentId: input.agent.id,
-              adapter: input.agent.adapter,
-              sessionKey: prepared.runtimeSessionKey,
-              attempt: attempt + 1,
-              maxRetries: MAX_RETRIES,
-              error: err instanceof Error ? err.message : String(err),
-            })
-            controller.enqueue({
-              type: 'status',
-              text: `Connection error, retrying (${attempt + 1}/${MAX_RETRIES})…`,
-            })
-            activeTurn = null
-            await retryDelay(attempt, prepared.retryDelayMs)
+          const outcome = await handleError(err, attempt, controller)
+          if (outcome === 'retry') {
             if (!cancelled) return attemptRun(attempt + 1)
             controller.close()
-            return
           }
-          logger.error('Agent harness acpx turn failed', {
-            agentId: input.agent.id,
-            adapter: input.agent.adapter,
-            sessionKey: prepared.runtimeSessionKey,
-            browserosSessionKey: input.sessionKey,
-            error: err instanceof Error ? err.message : String(err),
-          })
-          controller.enqueue({
-            type: 'error',
-            message: err instanceof Error ? err.message : String(err),
-          })
-          controller.close()
         }
       }
 
@@ -825,7 +836,11 @@ function createBrowserosAgentRegistry(input: {
   resourcesDir: string | null
   browserosDir: string
 }): AcpRuntimeOptions['agentRegistry'] {
-  const registry = createAgentRegistry()
+  const registry = createAgentRegistry({
+    overrides: {
+      hermes: 'hermes acp',
+    },
+  })
 
   return {
     list() {
@@ -855,6 +870,7 @@ function createBrowserosAgentRegistry(input: {
         )
       }
 
+      // hermes resolves via the acpx registry override to `hermes acp`
       return registry.resolve(agentName)
     },
   }

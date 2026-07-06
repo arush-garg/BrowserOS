@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-export type HostAcpAdapter = 'claude' | 'codex'
+export type HostAcpAdapter = 'claude' | 'codex' | 'hermes'
 
 export interface HostAcpAdapterConfig {
   displayName: string
@@ -35,6 +35,11 @@ export const HOST_ACP_ADAPTER_CONFIG = {
     acpPackageVersionRange: '^0.12.0',
     acpBin: 'codex-acp',
   },
+  hermes: {
+    displayName: 'Hermes',
+    nativeBinary: 'hermes',
+    acpCommand: 'hermes acp',
+  },
 } as const satisfies Record<HostAcpAdapter, HostAcpAdapterConfig>
 
 /**
@@ -56,7 +61,7 @@ export const DANGEROUS_ALLOW_MODE_CANDIDATES: Readonly<
 }
 
 export function isHostAcpAdapter(value: string): value is HostAcpAdapter {
-  return value === 'claude' || value === 'codex'
+  return value === 'claude' || value === 'codex' || value === 'hermes'
 }
 
 export function hasAcpPackageConfig(

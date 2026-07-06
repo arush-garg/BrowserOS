@@ -6,7 +6,7 @@ export interface AgentEntry {
   source?: 'agent-harness'
 }
 
-export type HarnessAgentAdapter = 'claude' | 'codex'
+export type HarnessAgentAdapter = 'claude' | 'codex' | 'hermes'
 
 export type AgentHarnessStreamEvent =
   | {

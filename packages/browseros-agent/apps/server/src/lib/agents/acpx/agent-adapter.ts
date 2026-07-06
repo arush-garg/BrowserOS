@@ -5,7 +5,11 @@
  */
 
 import type { AgentDefinition, AgentSessionId } from '../agent-types'
-import { prepareClaudeCodeContext, prepareCodexContext } from '../runtime'
+import {
+  prepareClaudeCodeContext,
+  prepareCodexContext,
+  prepareHermesContext,
+} from '../runtime'
 
 export interface PreparedAcpxAgentContext {
   cwd: string
@@ -40,6 +44,7 @@ interface AcpxAgentAdapter {
 const ADAPTERS: Record<AgentDefinition['adapter'], AcpxAgentAdapter> = {
   claude: { prepare: prepareClaudeCodeContext },
   codex: { prepare: prepareCodexContext },
+  hermes: { prepare: prepareHermesContext },
 }
 
 function getAcpxAgentAdapter(

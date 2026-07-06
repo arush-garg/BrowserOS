@@ -422,6 +422,9 @@ export const ConversationInput: FC<ConversationInputProps> = ({
     setAttachmentError(null)
   }
 
+  // Only recalculate when input changes or the variant toggles.
+  // The dep array prevents setState-in-LayoutEffect from re-triggering
+  // itself, which React would detect as an infinite update loop.
   useLayoutEffect(() => {
     const element = textareaRef.current
     if (!element) return
@@ -434,14 +437,17 @@ export const ConversationInput: FC<ConversationInputProps> = ({
     element.style.overflowY =
       element.scrollHeight > maxHeight ? 'auto' : 'hidden'
     setIsExpandedDraft(nextHeight > collapsedHeight)
-  })
+  }, [input, isConversation])
 
+  // Primitive-only deps: the `voice` object is recreated every render
+  // (useVoiceInput returns a new object literal), so including it would
+  // re-fire this effect on every render and could cascade into a loop.
   useEffect(() => {
     if (voice.transcript && !voice.isTranscribing) {
       setInput(voice.transcript)
       voice.clearTranscript()
     }
-  }, [voice.transcript, voice.isTranscribing, voice])
+  }, [voice.transcript, voice.isTranscribing])
 
   useEffect(() => {
     if (attachmentsEnabled) return

@@ -19,6 +19,7 @@ import { INLINED_ENV } from './env'
 import {
   configureClaudeRuntime,
   configureCodexRuntime,
+  configureHermesHostRuntime,
 } from './lib/agents/runtime'
 import {
   cleanOldSessions,
@@ -52,6 +53,7 @@ export class Application {
 
     configureClaudeRuntime()
     configureCodexRuntime()
+    configureHermesHostRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {

@@ -13,7 +13,6 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { AcpxProvider } from 'acpx-ai-provider'
 import type { LanguageModel } from 'ai'
 import { buildAcpxProvider } from '../lib/agents/acpx-provider/buildAcpxProvider'
-import { resolveBundledNativeBinary } from '../lib/agents/host-acp/bundled-native-binary'
 import {
   DANGEROUS_ALLOW_MODE_CANDIDATES,
   isHostAcpAdapter,
@@ -191,17 +190,11 @@ async function createAcpLanguageModel(
       agentRegistryOverrides[builtIn] = launcher.command
     }
   }
-  // Hermes: resolve bundled native binary when available; otherwise fall
-  // back to `hermes acp` from PATH. acpx-ai-provider has no built-in
+  // Hermes: always use `hermes acp` from PATH. acpx-ai-provider has no built-in
   // 'hermes' registry entry, so we always provide the override here.
   if (config.provider === LLM_PROVIDERS.HERMES || agentId === 'hermes') {
-    const bundled = resolveBundledNativeBinary({
-      adapter: 'hermes',
-      resourcesDir: config.resourcesDir,
-    })
-    agentRegistryOverrides.hermes = bundled
-      ? `${bundled.path} acp`
-      : 'hermes acp'
+    // Hermes has no bundled native binary; always use PATH.
+    agentRegistryOverrides.hermes = 'hermes acp'
   }
   if (config.provider === LLM_PROVIDERS.ACP_CUSTOM && config.acpCommand) {
     agentRegistryOverrides[agentId] = config.acpCommand
