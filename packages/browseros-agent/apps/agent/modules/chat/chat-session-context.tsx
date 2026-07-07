@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 import { useSyncRemoteIntegrations } from '@/modules/mcp/sync-remote-integrations.hooks'
@@ -50,8 +51,24 @@ export const ChatSessionProvider: FC<
     activeTabId,
     isIntegrationsSynced: hasSynced,
   })
+  // Memoize the context value so consumer components don't cascade-render
+  // when an ancestor (ThemeProvider, etc.) forces a re-render without any
+  // actual chat state change. The hook return already changes identity on
+  // every message / status update, so this only helps for idle re-renders,
+  // but those are exactly the ones that trigger "Maximum update depth" loops.
+  const value = useMemo(
+    () => session,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      session.messages,
+      session.status,
+      session.chatError,
+      session.conversationId,
+      session,
+    ],
+  )
   return (
-    <ChatSessionContext.Provider value={session}>
+    <ChatSessionContext.Provider value={value}>
       {children}
     </ChatSessionContext.Provider>
   )

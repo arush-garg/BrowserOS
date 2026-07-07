@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 import { useSyncRemoteIntegrations } from '@/modules/mcp/sync-remote-integrations.hooks'
@@ -50,8 +51,18 @@ export const ChatSessionProvider: FC<
     activeTabId,
     isIntegrationsSynced: hasSynced,
   })
+  const value = useMemo(
+    () => session,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      session.messages,
+      session.status,
+      session.chatError,
+      session.conversationId,
+    ],
+  )
   return (
-    <ChatSessionContext.Provider value={session}>
+    <ChatSessionContext.Provider value={value}>
       {children}
     </ChatSessionContext.Provider>
   )
