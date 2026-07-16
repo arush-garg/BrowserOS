@@ -1092,6 +1092,23 @@ function mapRuntimeEvent(event: AcpRuntimeEvent): AgentStreamEvent {
         stopReason: event.stopReason,
       }
     case 'error':
+      // Hermes adapter fires transient errors when its first upstream
+      // provider fails (e.g. Omniroute returns an empty stream). These
+      // are NOT terminal — hermes will internally fall back to its next
+      // provider.  Convert them to status events so the turn registry
+      // doesn't mark the turn as error before the fallback completes.
+      // All other errors (auth, rate-limit, content-filter,
+      // model-not-found, etc.) still propagate as errors.
+      if (
+        event.message?.includes(
+          'Provider returned an empty stream with no finish_reason',
+        )
+      ) {
+        return {
+          type: 'status',
+          text: `Provider transient error: ${event.message}`,
+        }
+      }
       return {
         type: 'error',
         message: event.message,

@@ -17,6 +17,7 @@ import {
   ReasoningTrigger,
 } from '@/components/ai-elements/reasoning'
 import type { ChatAction } from '@/lib/chat-actions/types'
+import { cn } from '@/lib/utils'
 import { ChatMessageActions } from './ChatMessageActions'
 import { ConnectAppCard } from './ConnectAppCard'
 import { getMessageSegments } from './getMessageSegments'
@@ -25,9 +26,16 @@ import { ScheduleSuggestionCard } from './ScheduleSuggestionCard'
 import { ToolBatch } from './ToolBatch'
 import { UserActionMessage } from './UserActionMessage'
 
+export interface SteerMessageItem {
+  id: string
+  text: string
+  status: 'pending' | 'injected'
+}
+
 export interface ChatMessagesProps {
   messages: UIMessage[]
   status: 'streaming' | 'submitted' | 'ready' | 'error'
+  steerMessages?: SteerMessageItem[]
   getActionForMessage?: (message: UIMessage) => ChatAction | undefined
   liked: Record<string, boolean>
   onClickLike: (messageId: string) => void
@@ -47,6 +55,7 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
   disliked,
   onClickLike,
   onClickDislike,
+  steerMessages,
   showJtbdPopup,
   showDontShowAgain,
   onTakeSurvey,
@@ -152,6 +161,25 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
               </Fragment>
             )
           })}
+          {steerMessages?.map((msg) => (
+            <Fragment key={msg.id}>
+              <Message from="user">
+                <MessageContent>
+                  <div
+                    className={cn(
+                      'flex items-start gap-2 rounded-lg px-3 py-2 text-sm',
+                      msg.status === 'pending'
+                        ? 'border-2 border-[var(--accent-orange)]/50 border-dashed bg-muted/30 text-muted-foreground italic'
+                        : 'border border-border/50 border-solid bg-muted/50',
+                    )}
+                  >
+                    <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" />
+                    <span>{msg.text}</span>
+                  </div>
+                </MessageContent>
+              </Message>
+            </Fragment>
+          ))}
           {showJtbdPopup && (
             <JtbdPopup
               onTakeSurvey={onTakeSurvey}

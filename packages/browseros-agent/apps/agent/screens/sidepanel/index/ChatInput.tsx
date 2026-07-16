@@ -1,5 +1,4 @@
 import {
-  Bot,
   ChevronDown,
   Loader2,
   Mic,
@@ -41,6 +40,10 @@ interface ChatInputProps {
   onTabMentionOpenChange?: (isOpen: boolean) => void
   voice?: VoiceInputState
   steer?: UseSteerReturn
+  /** Called when a steer is sent via the send button or Enter. */
+  onSteerSent?: (text: string) => void
+  /** Called when user picks "Interrupt and Send" from the dropdown. */
+  onInterruptAndSend?: (text: string) => void
 }
 
 export interface ChatInputHandle {
@@ -65,6 +68,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onTabMentionOpenChange,
       voice,
       steer,
+      onSteerSent,
+      onInterruptAndSend,
     },
     ref,
   ) => {
@@ -254,8 +259,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         !e.nativeEvent.isComposing
       ) {
         e.preventDefault()
-        if (input.trim() && !isSubmitDisabled) {
-          e.currentTarget.form?.requestSubmit()
+        if (input.trim()) {
+          if (isBusy && steer) {
+            steer.sendSteer(input)
+            onInputChange('')
+            onSteerSent?.(input)
+          } else if (!isSubmitDisabled) {
+            e.currentTarget.form?.requestSubmit()
+          }
         }
       }
     }
@@ -338,48 +349,44 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       if (isBusy && steer) {
         return (
           <div className="relative" ref={steerMenuRef}>
-            <div className="flex items-center overflow-hidden rounded-full bg-muted/70 transition-all hover:bg-muted">
+            <div className="flex items-center gap-0">
               <button
                 type="button"
                 onClick={() => {
-                  steer.toggleExpanded()
-                  setShowSteerMenu(false)
+                  steer.sendSteer(input)
+                  onInputChange('')
+                  onSteerSent?.(input)
                 }}
-                className="flex cursor-pointer items-center gap-1 px-2 py-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground"
-                title="Steer agent"
+                disabled={!input.trim()}
+                className="cursor-pointer rounded-full bg-[var(--accent-orange)] p-2 text-white shadow-sm transition-all duration-200 hover:bg-[var(--accent-orange-bright)] disabled:cursor-not-allowed disabled:opacity-50"
+                title="Send steer (mid-turn guidance)"
               >
-                <Bot className="h-3.5 w-3.5" />
-                <span>Steer</span>
+                <Send className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={() => setShowSteerMenu((v) => !v)}
                 className="flex cursor-pointer items-center px-1 py-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                title="More options"
               >
                 <ChevronDown className="h-3 w-3" />
               </button>
             </div>
 
             {showSteerMenu && (
-              <div className="absolute right-0 bottom-full z-50 mb-1 min-w-[120px] overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-lg">
+              <div className="absolute right-0 bottom-full z-50 mb-1 min-w-[160px] overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-lg">
                 <button
                   type="button"
                   onClick={() => {
                     setShowSteerMenu(false)
-                    onStop()
+                    onInterruptAndSend?.(input)
+                    onInputChange('')
                   }}
-                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-foreground text-sm transition-colors hover:bg-muted"
-                >
-                  <SquareStop className="h-3.5 w-3.5 text-red-500" />
-                  Interrupt
-                </button>
-                <button
-                  type="submit"
                   disabled={!input.trim()}
                   className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-foreground text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Send className="h-3.5 w-3.5" />
-                  Send
+                  <SquareStop className="h-3.5 w-3.5 text-red-500" />
+                  Interrupt and Send
                 </button>
               </div>
             )}

@@ -1,5 +1,5 @@
 import { Loader2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import {
   SIDEPANEL_AI_TRIGGERED_EVENT,
@@ -54,6 +54,34 @@ export const Chat = () => {
   } = useChatSessionContext()
 
   const steer = useSteer({ conversationId })
+
+  interface SteerMessageItem {
+    id: string
+    text: string
+    status: 'pending' | 'injected'
+  }
+  const [steerMessages, setSteerMessages] = useState<SteerMessageItem[]>([])
+
+  // When a steer is sent, optimistically add it to the chat frame as pending.
+  const handleSteerSent = useCallback((text: string) => {
+    setSteerMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), text, status: 'pending' as const },
+    ])
+  }, [])
+
+  // When the agent starts streaming, mark pending steer messages as injected (solid).
+  const prevChatStatusRef = useRef(status)
+  useEffect(() => {
+    if (status === 'streaming' && prevChatStatusRef.current !== 'streaming') {
+      setSteerMessages((prev) =>
+        prev.map((m) =>
+          m.status === 'pending' ? { ...m, status: 'injected' as const } : m,
+        ),
+      )
+    }
+    prevChatStatusRef.current = status
+  }, [status])
 
   const {
     popupVisible,
@@ -185,6 +213,26 @@ export const Chat = () => {
     setAttachedTabs([])
   }
 
+  // Interrupt the agent, then send text as a normal message.
+  const handleInterruptAndSend = useCallback(
+    (text: string) => {
+      stop()
+      recordMessageSent()
+      if (attachedTabs.length) {
+        const action = createBrowserOSAction({
+          mode,
+          message: text,
+          tabs: attachedTabs,
+        })
+        sendMessage({ text, action })
+      } else {
+        sendMessage({ text })
+      }
+      setAttachedTabs([])
+    },
+    [stop, sendMessage, mode, attachedTabs, recordMessageSent],
+  )
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (messages.length === 0) {
@@ -250,6 +298,7 @@ export const Chat = () => {
           <ChatMessages
             messages={messages}
             status={status}
+            steerMessages={steerMessages}
             getActionForMessage={getActionForMessage}
             liked={liked}
             onClickLike={onClickLike}
@@ -290,6 +339,8 @@ export const Chat = () => {
         voice={voiceState}
         activeTabId={activeTabId}
         steer={steer}
+        onSteerSent={handleSteerSent}
+        onInterruptAndSend={handleInterruptAndSend}
       />
     </>
   )

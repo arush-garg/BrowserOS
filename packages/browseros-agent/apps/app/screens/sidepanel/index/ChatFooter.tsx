@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, Folder, Layers, PlugZap, X } from 'lucide-react'
+import { Bot, ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
 import type { FC, FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
@@ -46,6 +46,10 @@ export interface ChatFooterProps {
   steer?: UseSteerReturn
   voiceLoop?: VoiceLoopApi
   onOpenVoiceMode?: () => void
+  /** Called when a steer is sent via the input. */
+  onSteerSent?: (text: string) => void
+  /** Called when user picks "Interrupt and Send". */
+  onInterruptAndSend?: (text: string) => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
@@ -68,12 +72,13 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   steer,
   voiceLoop,
   onOpenVoiceMode,
+  onSteerSent,
+  onInterruptAndSend,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
   const chatInputRef = useRef<ChatInputHandle>(null)
-  const steerInputRef = useRef<HTMLInputElement>(null)
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
   >({})
@@ -112,11 +117,12 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   }, [])
 
   // Clear pending steer text when chat starts streaming (steer was injected)
+  const clearPendingText = steer?.clearPendingText
   useEffect(() => {
     if (status === 'streaming') {
-      steer?.clearPendingText()
+      clearPendingText?.()
     }
-  }, [status, steer])
+  }, [status, clearPendingText])
 
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
@@ -262,72 +268,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        {steer?.isExpanded && (
-          <div className="flex flex-col gap-2 p-2 pt-0">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground text-sm">Steer:</span>
-              <input
-                ref={steerInputRef}
-                type="text"
-                className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:font-medium file:text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="Enter steer message..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    steer?.sendSteer(e.currentTarget.value)
-                    e.currentTarget.value = ''
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const value = steerInputRef.current?.value ?? ''
-                  steer?.sendSteer(value)
-                  if (steerInputRef.current) steerInputRef.current.value = ''
-                }}
-                className="rounded-md bg-muted px-4 py-2 font-medium text-sm transition-colors hover:bg-muted/80"
-              >
-                Send
-              </button>
-            </div>
-            {steer?.status === 'sending' && (
-              <span className="text-muted-foreground text-xs">
-                Sending steer!...
-              </span>
-            )}
-            {steer?.status === 'queued_active_turn' && (
-              <span className="text-green-500 text-xs">
-                Steer queued for active turn.
-              </span>
-            )}
-            {steer?.status === 'queued_next_turn' && (
-              <span className="text-xs text-yellow-500">
-                Steer queued for next turn.
-              </span>
-            )}
-            {steer?.error && (
-              <span className="text-red-500 text-xs">Error: {steer.error}</span>
-            )}
-          </div>
-        )}
-
-        {steer?.lastSentText && steer.status !== 'idle' && (
-          <div className="mt-2 flex items-center gap-2 rounded-md border border-border/30 bg-muted/30 px-3 py-2">
-            <Bot className="h-3 w-3 shrink-0 text-muted-foreground/50" />
-            <p className="flex-1 truncate text-muted-foreground/70 text-sm italic">
-              {steer.lastSentText}
-            </p>
-            <button
-              type="button"
-              onClick={steer.clearPendingText}
-              className="shrink-0 rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-foreground"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-
         <VoiceModeArea voiceLoop={voiceLoop}>
           <ChatInput
             input={input}
@@ -342,6 +282,8 @@ export const ChatFooter: FC<ChatFooterProps> = ({
             onTabMentionOpenChange={setIsTabMentionOpen}
             voice={voice}
             steer={steer}
+            onSteerSent={onSteerSent}
+            onInterruptAndSend={onInterruptAndSend}
             onOpenVoiceMode={onOpenVoiceMode}
             ref={chatInputRef}
           />

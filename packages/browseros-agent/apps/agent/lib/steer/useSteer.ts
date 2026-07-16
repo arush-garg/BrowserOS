@@ -2,7 +2,7 @@
  * @fileoverview Steer hook — sends mid-turn guidance to the agent via
  * POST /chat/:conversationId/steer and tracks the queued status.
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
 export type SteerStatus =
@@ -143,15 +143,28 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
     setLastSentText('')
   }, [])
 
-  return {
-    isExpanded,
-    toggleExpanded,
-    closeExpanded,
-    status,
-    error,
-    sendSteer,
-    abort,
-    lastSentText,
-    clearPendingText,
-  }
+  return useMemo(
+    () => ({
+      isExpanded,
+      toggleExpanded,
+      closeExpanded,
+      status,
+      error,
+      sendSteer,
+      abort,
+      lastSentText,
+      clearPendingText,
+    }),
+    [
+      isExpanded,
+      toggleExpanded,
+      closeExpanded,
+      status,
+      error,
+      sendSteer,
+      abort,
+      lastSentText,
+      clearPendingText,
+    ],
+  )
 }
