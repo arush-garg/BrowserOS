@@ -43,15 +43,26 @@ function chromiumProfile(): string {
   return profile
 }
 
+function browserOSProduct(defaultProduct: 'browseros' | 'browserclaw') {
+  const product = env.BROWSEROS_PRODUCT?.trim() || defaultProduct
+  if (product !== 'browseros' && product !== 'browserclaw') {
+    throw new Error(
+      `BROWSEROS_PRODUCT must be browseros or browserclaw: ${product}`,
+    )
+  }
+  return product
+}
+
 const chromiumArgs = [
   '--use-mock-keychain',
   '--show-component-extension-options',
   // The dev BrowserOS binary ships an MCP server on port 9100; this
-  // package brings its own (@browseros/claw-server on 9200),
+  // package brings its own BrowserClaw API server on port 9200,
   // so disable the bundled one to avoid port + behaviour drift.
   '--disable-browseros-server',
   '--disable-browseros-extensions',
   '--browseros-dock-icon=dev',
+  `--browseros-product=${browserOSProduct('browserclaw')}`,
 ]
 
 if (env.BROWSEROS_CLAW_CDP_PORT) {

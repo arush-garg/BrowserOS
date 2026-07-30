@@ -1,6 +1,5 @@
 import type { Browser } from '@browseros/browser-core/browser'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import { REMOTE_HERMES_PROVIDER_TYPE } from '@browseros/shared/constants/hermes'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -11,9 +10,8 @@ import { metrics } from '../../lib/metrics'
 import { Sentry } from '../../lib/sentry'
 import { ChatService } from '../services/chat-service'
 import type { KlavisService } from '../services/klavis'
-import type { RemoteHermesService } from '../services/remote-hermes/remote-hermes-service'
+import type { ServerActivity } from '../services/server-activity'
 import { ChatRequestSchema } from '../types'
-import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 import { ConversationIdParamSchema } from '../utils/validation'
 
 const SteerRequestSchema = z.object({
@@ -34,9 +32,7 @@ interface ChatRouteDeps {
    *  bundled-Bun launcher under <resourcesDir>/bin/third_party/bun
    *  can be located for built-in adapters (claude / codex). */
   resourcesDir?: string | null
-  /** Configured at server startup when AGENT_RUNNER_JWT_SECRET is set.
-   *  Null otherwise; `remote-hermes` chat requests get a soft 500. */
-  remoteHermes?: RemoteHermesService | null
+  activity?: ServerActivity
 }
 
 export function createChatRoutes(deps: ChatRouteDeps) {
@@ -55,6 +51,7 @@ export function createChatRoutes(deps: ChatRouteDeps) {
     serverPort: deps.serverPort,
     resourcesDir: deps.resourcesDir,
     steerQueue,
+    activity: deps.activity,
   })
 
   return new Hono()
@@ -90,41 +87,6 @@ export function createChatRoutes(deps: ChatRouteDeps) {
         provider: request.provider,
         model: request.model,
       })
-
-      if (request.provider === REMOTE_HERMES_PROVIDER_TYPE) {
-        if (!deps.remoteHermes) {
-          logger.warn(
-            'Remote Hermes chat received but service not configured',
-            {
-              conversationId: request.conversationId,
-            },
-          )
-          return c.json({ error: 'remote_hermes_not_configured' }, 500)
-        }
-        logger.info('Routing chat to Remote Hermes', {
-          conversationId: request.conversationId,
-          model: request.model,
-        })
-        // Resolve Chrome tab IDs to CDP pageIds on the laptop before
-        // forwarding — the remote worker has no CDP target visibility
-        // and the LLM needs pageIds in the prompt to dispatch browser
-        // tools through the WS RPC bridge.
-        const remoteBrowserContext = await resolveBrowserContextPageIds(
-          deps.browser,
-          request.browserContext,
-        )
-        return deps.remoteHermes.streamTurn(
-          {
-            conversationId: request.conversationId,
-            message: request.message,
-            modelId: request.model,
-            browserContext: remoteBrowserContext,
-            selectedText: request.selectedText,
-            selectedTextSource: request.selectedTextSource,
-          },
-          c.req.raw.signal,
-        )
-      }
 
       return service.processMessage(request, c.req.raw.signal)
     })

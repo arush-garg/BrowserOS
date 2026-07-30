@@ -8,6 +8,7 @@ import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
+import { Feature } from '@/lib/browseros/capabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
@@ -15,6 +16,7 @@ import {
 } from '@/lib/selected-text/selectedTextStorage'
 import type { UseSteerReturn } from '@/lib/steer/useSteer'
 import { cn } from '@/lib/utils'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import type { VoiceInputState } from '@/modules/voice/voice.hooks'
@@ -79,6 +81,8 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
+  const { supports } = useCapabilities()
+  const supportsVoiceInput = supports(Feature.VOICE_INPUT_SUPPORT)
   const chatInputRef = useRef<ChatInputHandle>(null)
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
@@ -267,11 +271,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           </div>
         </div>
 
-        {voice?.error && (
+        {supportsVoiceInput && voice?.error && (
           <div className="mt-1 text-destructive text-xs">{voice.error}</div>
         )}
 
-        <VoiceModeArea voiceLoop={voiceLoop}>
+        <VoiceModeArea voiceLoop={supportsVoiceInput ? voiceLoop : undefined}>
           <ChatInput
             input={input}
             status={status}
@@ -283,11 +287,11 @@ export const ChatFooter: FC<ChatFooterProps> = ({
             selectedTabs={attachedTabs}
             onToggleTab={onToggleTab}
             onTabMentionOpenChange={setIsTabMentionOpen}
-            voice={voice}
+            voice={supportsVoiceInput ? voice : undefined}
             steer={steer}
             onSteerSent={onSteerSent}
             onInterruptAndSend={onInterruptAndSend}
-            onOpenVoiceMode={onOpenVoiceMode}
+            onOpenVoiceMode={supportsVoiceInput ? onOpenVoiceMode : undefined}
             ref={chatInputRef}
           />
         </VoiceModeArea>

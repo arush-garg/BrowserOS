@@ -1,44 +1,47 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Spinner } from '@/components/ui/spinner'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  useBrowserosConnections,
-  useConnectBrowseros,
-  useDisconnectBrowseros,
+  type Harness,
+  isUserFacingHarness,
+} from '@/components/harness/harness.types'
+import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
+import {
+  useConnectHarness,
+  useConnections,
+  useDisconnectHarness,
 } from '@/modules/api/connections.hooks'
-import {
-  buildCanonicalMcpCliCommand,
-  buildCanonicalMcpEndpointUrl,
-} from '@/modules/api/mcp-endpoint'
-import type { Harness } from '@/screens/new-agent/new-agent.schemas'
+import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
 
-/**
- * v2 MCP page. Hero card with the single canonical endpoint plus a
- * per-harness "Connect" board that drives `agent-mcp-manager` so the
- * user installs BrowserOS into Claude Code / Cursor / VS Code / Codex
- * with one click. Hermes and OpenClaw are BrowserOS-internal and
- * render as "Built-in" rows.
- *
- * Live MCP-session state (who is connected right now) is surfaced on
- * the homepage's running grid, not here; this page is the install
- * board.
- */
 export function Mcp() {
-  const url = buildCanonicalMcpEndpointUrl()
-  const cli = buildCanonicalMcpCliCommand()
-  const connections = useBrowserosConnections()
-  const connect = useConnectBrowseros()
-  const disconnect = useDisconnectBrowseros()
+  const [url, setUrl] = useState<string | null>(null)
+  const connections = useConnections()
+  const connect = useConnectHarness()
+  const disconnect = useDisconnectHarness()
   const queryClient = useQueryClient()
   const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
 
+  useEffect(() => {
+    let active = true
+    resolveCanonicalMcpEndpointUrl().then((resolved) => {
+      if (active) setUrl(resolved)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
   const isLoading = connections.isPending && !connections.data
-  const list = connections.data?.connections ?? []
-  const externalRows = list.filter((c) => c.agentId !== null)
-  const externalConnected = externalRows.filter((c) => c.installed).length
-  const externalTotal = externalRows.length
+
+  const visibleRows = useMemo(() => {
+    const list = connections.data?.items ?? []
+    return list.filter((c) => isUserFacingHarness(c.harness))
+  }, [connections.data])
+
+  const connectedCount = visibleRows.filter((c) => c.installed).length
+  const totalCount = visibleRows.length
 
   const onConnect = async (harness: Harness) => {
     setErrors((prev) => ({ ...prev, [harness]: undefined }))
@@ -48,7 +51,7 @@ export function Mcp() {
         setErrors((prev) => ({ ...prev, [harness]: result.message }))
       }
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -63,7 +66,7 @@ export function Mcp() {
     try {
       await disconnect.mutateAsync({ harness })
       void queryClient.invalidateQueries({
-        queryKey: useBrowserosConnections.getKey(),
+        queryKey: useConnections.getKey(),
       })
     } catch (err) {
       setErrors((prev) => ({
@@ -81,35 +84,29 @@ export function Mcp() {
         : null
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-8 pt-6 pb-20">
-      <HeroCard url={url} cli={cli} />
-      <section className="rounded-2xl border border-border-2 bg-card">
-        <div className="flex items-start gap-3 border-border-2 border-b px-4 py-4">
-          <div className="flex-1">
-            <h2 className="font-bold text-base">Connected agents</h2>
-            <p className="mt-0.5 text-ink-3 text-sm">
-              Add BrowserOS as an MCP server in your AI agents. No copy-paste
-              required.
-            </p>
-          </div>
-          {!isLoading && (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-bg-sunken px-3 py-1 font-bold text-[12px] text-ink-2">
-              {externalConnected} of {externalTotal} connected
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-8 pb-16">
+      <HeroCard url={url} />
+      <section className="space-y-2">
+        <header className="flex items-baseline justify-between gap-3">
+          <h2 className="font-semibold text-ink text-lg">Connected agents</h2>
+          {!isLoading && !connections.isError && (
+            <span className="font-mono text-[10.5px] text-ink-3 uppercase tabular-nums tracking-[0.08em]">
+              {connectedCount} of {totalCount} connected
             </span>
           )}
-        </div>
+        </header>
         {isLoading ? (
-          <div className="flex justify-center py-10 text-ink-3">
-            <Spinner />
-          </div>
+          <SkeletonList />
         ) : connections.isError ? (
-          <div className="px-4 py-6 text-center text-ink-3 text-sm">
-            Could not load the connection list. Check that the cockpit server is
-            running.
-          </div>
+          <EditorialEmpty
+            leading="could not"
+            accent="reach"
+            trailing="the cockpit."
+            hint="Check that the local claw-server is running."
+          />
         ) : (
-          <div className="flex flex-col">
-            {list.map((state) => (
+          <div>
+            {visibleRows.map((state) => (
               <ConnectionRow
                 key={state.harness}
                 state={state}
@@ -122,9 +119,29 @@ export function Mcp() {
           </div>
         )}
       </section>
-      <p className="text-[12px] text-ink-3 leading-relaxed">
-        Hermes and OpenClaw run inside BrowserOS and don't need a config write.
-      </p>
+      <ClaudeDesktopCard />
+    </div>
+  )
+}
+
+/**
+ * 6 hairline skeleton rows shaped like the real ConnectionRow so
+ * the layout does not jump when the connections query resolves.
+ */
+function SkeletonList() {
+  return (
+    <div>
+      {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
+        <div key={id} className="border-border-2 border-t">
+          <div className="flex items-center gap-3 py-3">
+            <div className="size-5 shrink-0 animate-pulse rounded bg-card-tint" />
+            <div className="flex-1">
+              <div className="h-3 w-32 animate-pulse rounded bg-card-tint" />
+            </div>
+            <div className="h-3 w-16 animate-pulse rounded bg-card-tint" />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

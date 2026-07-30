@@ -28,6 +28,7 @@ import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { z } from 'zod'
 import { CHAT_MODE_ALLOWED_TOOLS } from '../../../src/agent/chat-mode'
 import { buildBrowserToolSet } from '../../../src/agent/tool-adapter'
+import { logger } from '../../../src/lib/logger'
 import { createReadTool } from '../../../src/tools/filesystem/read'
 
 type RegisteredHandler = (args: Record<string, unknown>) => Promise<{
@@ -158,7 +159,6 @@ describe('registerBrowserTools', () => {
         page: 1,
         format: 'jpeg',
         bytes: Buffer.from('jpeg-data', 'base64').length,
-        image: 'jpeg-data',
       },
     })
     await expect(
@@ -173,7 +173,6 @@ describe('registerBrowserTools', () => {
         page: 1,
         format: 'jpeg',
         bytes: Buffer.from('jpeg-data', 'base64').length,
-        image: 'jpeg-data',
       },
     })
     expect(captureOptions).toEqual([
@@ -181,7 +180,7 @@ describe('registerBrowserTools', () => {
         format: 'jpeg',
         quality: 80,
         fullPage: false,
-        annotate: true,
+        annotate: false,
         clip: {
           x: 5,
           y: 7,
@@ -194,7 +193,7 @@ describe('registerBrowserTools', () => {
         format: 'jpeg',
         quality: 60,
         fullPage: false,
-        annotate: true,
+        annotate: false,
         clip: {
           x: 5,
           y: 7,
@@ -260,7 +259,6 @@ describe('registerBrowserTools', () => {
         page: 1,
         format: 'png',
         bytes: Buffer.from('png-data', 'base64').length,
-        image: 'png-data',
       },
     })
     await expect(
@@ -271,7 +269,6 @@ describe('registerBrowserTools', () => {
         page: 1,
         format: 'jpeg',
         bytes: Buffer.from('jpeg-data', 'base64').length,
-        image: 'jpeg-data',
       },
     })
 
@@ -280,7 +277,7 @@ describe('registerBrowserTools', () => {
       {
         format: 'png',
         fullPage: false,
-        annotate: true,
+        annotate: false,
         clip: {
           x: 0,
           y: 0,
@@ -293,7 +290,7 @@ describe('registerBrowserTools', () => {
         format: 'jpeg',
         quality: 80,
         fullPage: true,
-        annotate: true,
+        annotate: false,
       },
     ])
   })
@@ -309,39 +306,21 @@ describe('registerBrowserTools', () => {
       isVisible: true,
       tabCount: 2,
     }
-    const hiddenWindow = {
-      ...window,
-      windowId: 8,
-      isActive: false,
-      isVisible: false,
-    }
     const session = {
       windows: {
         list: async () => {
           calls.push({ method: 'list' })
           return [window]
         },
-        create: async (args?: { hidden?: boolean }) => {
-          calls.push({ method: 'create', args })
-          return args?.hidden ? hiddenWindow : window
+        create: async () => {
+          calls.push({ method: 'create' })
+          return window
         },
         close: async (windowId: number) => {
           calls.push({ method: 'close', args: windowId })
         },
         activate: async (windowId: number) => {
           calls.push({ method: 'activate', args: windowId })
-        },
-        setVisibility: async (
-          windowId: number,
-          args: { visible: boolean; activate?: boolean },
-        ) => {
-          calls.push({ method: 'setVisibility', args: { windowId, ...args } })
-          return {
-            previousWindowId: windowId,
-            newWindowId: 9,
-            replaced: true,
-            window: { ...window, windowId: 9, isVisible: args.visible },
-          }
         },
       },
       pages: {
@@ -366,10 +345,10 @@ describe('registerBrowserTools', () => {
       }),
     ])
 
-    const create = await handler?.({ action: 'create', hidden: true })
+    const create = await handler?.({ action: 'create' })
     expect(create?.structuredContent).toEqual({
       action: 'create',
-      window: hiddenWindow,
+      window,
     })
 
     const close = await handler?.({ action: 'close', windowId: 7 })
@@ -381,29 +360,11 @@ describe('registerBrowserTools', () => {
       windowId: 8,
     })
 
-    const visibility = await handler?.({
-      action: 'set_visibility',
-      windowId: 8,
-      visible: true,
-      activate: false,
-    })
-    expect(visibility?.structuredContent).toEqual({
-      action: 'set_visibility',
-      previousWindowId: 8,
-      newWindowId: 9,
-      replaced: true,
-      window: { ...window, windowId: 9, isVisible: true },
-    })
-
     expect(calls).toEqual([
       { method: 'list' },
-      { method: 'create', args: { hidden: true } },
+      { method: 'create' },
       { method: 'close', args: 7 },
       { method: 'activate', args: 8 },
-      {
-        method: 'setVisibility',
-        args: { windowId: 8, visible: true, activate: false },
-      },
     ])
   })
 
@@ -426,28 +387,6 @@ describe('registerBrowserTools', () => {
         text: 'windows close: windowId is required.',
       }),
     ])
-
-    const visibilityWindow = await handler?.({
-      action: 'set_visibility',
-      visible: true,
-    })
-    expect(visibilityWindow?.isError).toBe(true)
-    expect(visibilityWindow?.content).toEqual([
-      expect.objectContaining({
-        text: 'windows set_visibility: windowId is required.',
-      }),
-    ])
-
-    const visibilityState = await handler?.({
-      action: 'set_visibility',
-      windowId: 7,
-    })
-    expect(visibilityState?.isError).toBe(true)
-    expect(visibilityState?.content).toEqual([
-      expect.objectContaining({
-        text: 'windows set_visibility: visible is required.',
-      }),
-    ])
   })
 
   it('applies scoped defaults when opening a new tab', async () => {
@@ -456,7 +395,6 @@ describe('registerBrowserTools', () => {
       url: string
       opts?: {
         background?: boolean
-        hidden?: boolean
         windowId?: number
         tabGroupId?: string
       }
@@ -467,7 +405,6 @@ describe('registerBrowserTools', () => {
           url: string,
           opts?: {
             background?: boolean
-            hidden?: boolean
             windowId?: number
             tabGroupId?: string
           },
@@ -495,7 +432,6 @@ describe('registerBrowserTools', () => {
         url: 'https://example.com',
         opts: {
           background: true,
-          hidden: false,
           windowId: 7,
           tabGroupId: 'group-a',
         },
@@ -790,7 +726,6 @@ return 'late'
           urlChanged: boolean
           beforeUrl: string
           afterUrl: string
-          snapshot: string
         }
       | undefined
     expect(data).toMatchObject({
@@ -800,8 +735,8 @@ return 'late'
       beforeUrl: 'https://example.com/old',
       afterUrl: 'https://example.com/new',
     })
-    expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
-    expect(data?.snapshot).toContain('- heading "New page"')
+    expect(data).not.toHaveProperty('snapshot')
+    expect(data).not.toHaveProperty('diff')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -853,12 +788,11 @@ return 'late'
 
     expect(result?.isError).toBeFalsy()
     const data = result?.structuredContent as
-      | { added: number; removed: number; diff: string }
+      | { added: number; removed: number }
       | undefined
     expect(data).toMatchObject({ added: 1, removed: 0 })
-    expect(data?.diff).toContain('origin=https://example.com/current')
-    expect(data?.diff).toContain('+   button "Saved" [ref=e1]')
-    expect(data?.diff).not.toContain('origin=https://example.com/stale')
+    expect(data).not.toHaveProperty('diff')
+    expect(data).not.toHaveProperty('snapshot')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -929,15 +863,14 @@ return 'late'
         | {
             added: number
             removed: number
-            diff: string
           }
         | undefined
       expect(data).toMatchObject({
         added: 2001,
         removed: 0,
       })
-      expect(data?.diff).toContain('word-2000')
-      expect(data?.diff).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(data).not.toHaveProperty('diff')
+      expect(data).not.toHaveProperty('snapshot')
       expect(JSON.stringify(result?.structuredContent)).not.toContain('path')
       expect(JSON.stringify(result?.structuredContent)).not.toContain(
         'writtenToFile',
@@ -993,7 +926,6 @@ return 'late'
             path: string
             contentLength: number
             writtenToFile: boolean
-            diff: string
           }
         | undefined
       expect(data).toMatchObject({
@@ -1030,7 +962,8 @@ return 'late'
       const savedContent = readFileSync(savedPath ?? '', 'utf8')
       expect(savedContent).toContain('[UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain(lastMarker)
-      expect(data?.diff).toBe(savedContent)
+      expect(data).not.toHaveProperty('diff')
+      expect(data).not.toHaveProperty('snapshot')
       expect(data?.contentLength).toBe(savedContent.length)
     })
   })
@@ -1495,11 +1428,18 @@ return 'late'
 
     expect(result?.isError).toBeFalsy()
     const data = result?.structuredContent as
-      | { page: number; snapshot: string }
+      | {
+          page: number
+          contentLength: number
+          tokenEstimate: number
+          writtenToFile: boolean
+        }
       | undefined
     expect(data).toMatchObject({ page: 2 })
-    expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
-    expect(data?.snapshot).toContain('- button "Save" [ref=e1]')
+    expect(data?.contentLength).toEqual(expect.any(Number))
+    expect(data?.tokenEstimate).toEqual(expect.any(Number))
+    expect(data?.writtenToFile).toBe(false)
+    expect(data).not.toHaveProperty('snapshot')
     expect(result?.content).toEqual([
       expect.objectContaining({
         type: 'text',
@@ -1535,14 +1475,18 @@ return 'late'
       const data = result?.structuredContent as
         | {
             page: number
-            snapshot: string
+            contentLength: number
+            tokenEstimate: number
+            writtenToFile: boolean
           }
         | undefined
       expect(data).toMatchObject({
         page: 4,
+        writtenToFile: false,
       })
-      expect(data?.snapshot).toContain('last-node')
-      expect(data?.snapshot).toContain('[UNTRUSTED_PAGE_CONTENT')
+      expect(data?.contentLength).toEqual(expect.any(Number))
+      expect(data?.tokenEstimate).toEqual(expect.any(Number))
+      expect(data).not.toHaveProperty('snapshot')
       expect(JSON.stringify(result?.structuredContent)).not.toContain('path')
       expect(result?.content).toEqual([
         expect.objectContaining({
@@ -1587,7 +1531,6 @@ return 'late'
             contentLength: number
             tokenEstimate: number
             writtenToFile: boolean
-            snapshot: string
           }
         | undefined
       expect(data).toMatchObject({
@@ -1620,7 +1563,7 @@ return 'late'
       expect(savedContent).toContain('[UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain('[END_UNTRUSTED_PAGE_CONTENT')
       expect(savedContent).toContain(lastMarker)
-      expect(data?.snapshot).toBe(savedContent)
+      expect(data).not.toHaveProperty('snapshot')
       expect(data?.contentLength).toBe(savedContent.length)
     })
   })
@@ -1984,7 +1927,6 @@ describe('buildBrowserToolSet', () => {
       isLoading: false,
       loadProgress: 1,
       isPinned: false,
-      isHidden: false,
     }
     const session = {
       pages: {
@@ -2013,6 +1955,49 @@ describe('buildBrowserToolSet', () => {
     expect(activeResult).toMatchObject({ isError: false })
     expect(newResult).toMatchObject({ isError: true })
     expect(calls).toEqual([])
+  })
+
+  it('logs browser chat returned errors without raw result text', async () => {
+    const originalInfo = logger.info
+    const infoLogs: Array<{ message: string; meta?: Record<string, unknown> }> =
+      []
+    logger.info = ((message: string, meta?: Record<string, unknown>) => {
+      infoLogs.push({ message, meta })
+    }) as typeof logger.info
+
+    try {
+      const tools = buildBrowserToolSet(
+        { pages: {} } as unknown as BrowserSession,
+        { readOnly: true },
+      )
+      const result = await tools.tabs.execute?.(
+        { action: 'new', url: 'https://example.com' },
+        { abortSignal: new AbortController().signal } as never,
+      )
+
+      expect(result).toMatchObject({ isError: true })
+      expect(JSON.stringify(infoLogs)).not.toContain('chat mode only supports')
+      expect(
+        infoLogs.find(
+          (log) => log.message === 'Browser chat tool returned error',
+        ),
+      ).toEqual(
+        expect.objectContaining({
+          meta: expect.objectContaining({
+            toolName: 'tabs',
+            source: 'chat',
+            errorSummary: expect.objectContaining({
+              contentCount: expect.any(Number),
+              textBlockCount: expect.any(Number),
+              textLength: expect.any(Number),
+              lineCount: expect.any(Number),
+            }),
+          }),
+        }),
+      )
+    } finally {
+      logger.info = originalInfo
+    }
   })
 
   it('propagates AI SDK abort signals into browser tools', async () => {

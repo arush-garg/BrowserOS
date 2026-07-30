@@ -1,5 +1,6 @@
-import { Check, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
+import { cn } from '@/lib/utils'
 import type { ConnectionState } from '@/modules/api/connections.hooks'
 
 interface ConnectionRowProps {
@@ -11,13 +12,20 @@ interface ConnectionRowProps {
 }
 
 /**
- * One row per supported harness. Click "Connect" to write BrowserOS
- * into the harness's MCP config file; the row flips to a green
- * "Connected" pill on success. Click "Disconnect" to remove it.
- * Errors render below the row in a small red strip.
+ * One row per supported harness in the editorial MCP install board.
+ * Hairline-separated (parent applies `border-t`), no card frame, no
+ * icon square. The whole row is a single click target: clicking
+ * anywhere on the row fires the currently visible action.
  *
- * BrowserOS-internal harnesses (Hermes, OpenClaw) ship `installed:
- * true` from the server and render a non-interactive "Built-in" pill.
+ *   Not connected   click row -> connect. Row shows `connect →` as
+ *                    the visual label (mono uppercase accent green).
+ *   Connected       click row -> disconnect. Row shows
+ *                    `● connected · disconnect →` as the label.
+ *
+ * The row highlights on hover / focus / active with `bg-card-tint`
+ * so the affordance is unambiguous. Errors render as a red hairline
+ * strip below the row (still inside the button so hovering the whole
+ * thing keeps the highlight).
  */
 export function ConnectionRow({
   state,
@@ -26,71 +34,94 @@ export function ConnectionRow({
   onConnect,
   onDisconnect,
 }: ConnectionRowProps) {
-  const internal = state.agentId === null
-
   return (
-    <div className="border-border-2 border-b last:border-b-0">
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-card">
-          <HarnessIcon harness={state.harness} className="size-5" />
-        </span>
+    <button
+      type="button"
+      onClick={state.installed ? onDisconnect : onConnect}
+      disabled={isPending}
+      aria-label={
+        state.installed
+          ? `Disconnect ${state.harness}`
+          : `Connect ${state.harness}`
+      }
+      className={cn(
+        'group block w-full border-border-2 border-t text-left transition-colors',
+        'hover:bg-card-tint focus-visible:bg-card-tint focus-visible:outline-none',
+        'disabled:cursor-not-allowed disabled:opacity-70',
+      )}
+    >
+      <div className="flex items-center gap-3 px-2 py-3">
+        <HarnessIcon harness={state.harness} className="size-5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="font-bold text-[14px]">{state.harness}</div>
+          <div className="font-semibold text-[14px] text-ink">
+            {state.harness}
+          </div>
           {state.installed && state.configPath && (
             <div className="truncate font-mono text-[11px] text-ink-3">
               {state.configPath}
             </div>
           )}
-          {internal && (
-            <div className="text-[11.5px] text-ink-3">
-              Runs inside BrowserOS
-            </div>
-          )}
         </div>
-        {internal ? (
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-bg-sunken px-3 py-1.5 font-bold text-[12px] text-ink-2">
-            <Check className="size-3" />
-            Built-in
-          </span>
-        ) : state.installed ? (
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-tint px-3 py-1 font-bold text-[12px] text-green">
-              <Check className="size-3" />
-              Connected
-            </span>
-            <button
-              type="button"
-              onClick={onDisconnect}
-              disabled={isPending}
-              className="rounded-md px-2 py-1 font-semibold text-[12px] text-ink-3 transition hover:bg-bg-sunken hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                'Disconnect'
-              )}
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onConnect}
-            disabled={isPending}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 font-bold text-[12.5px] text-accent-foreground transition hover:bg-accent-2 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              'Connect'
-            )}
-          </button>
-        )}
+        <RowAction state={state} isPending={isPending} />
       </div>
       {errorMessage && (
-        <div className="border-red/10 border-t bg-red-tint px-4 py-2 text-[12px] text-red">
+        <div className="px-10 pb-2 font-mono text-[11.5px] text-red-600">
           {errorMessage}
         </div>
       )}
-    </div>
+    </button>
+  )
+}
+
+function RowAction({
+  state,
+  isPending,
+}: {
+  state: ConnectionState
+  isPending: boolean
+}) {
+  if (isPending) {
+    return <Loader2 className="size-3.5 shrink-0 animate-spin text-ink-3" />
+  }
+  if (state.installed) {
+    return (
+      <div className="flex shrink-0 items-center gap-3">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-ink-2 uppercase tracking-[0.08em]">
+          <span
+            aria-hidden
+            className="inline-block size-1.5 rounded-full bg-green"
+          />
+          connected
+        </span>
+        <span aria-hidden className="text-ink-4">
+          ·
+        </span>
+        <span className="inline-flex items-center gap-1 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em] transition-colors group-hover:text-ink">
+          disconnect
+          <span
+            aria-hidden
+            className="transition-transform group-hover:translate-x-0.5"
+          >
+            →
+          </span>
+        </span>
+      </div>
+    )
+  }
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]',
+        'transition-colors group-hover:text-accent-2',
+      )}
+    >
+      connect
+      <span
+        aria-hidden
+        className="transition-transform group-hover:translate-x-0.5"
+      >
+        →
+      </span>
+    </span>
   )
 }

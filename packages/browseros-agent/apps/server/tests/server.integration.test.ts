@@ -58,7 +58,7 @@ describe('HTTP Server Integration Tests', () => {
 
   describe('Health endpoint', () => {
     it('responds with 200 OK', async () => {
-      const response = await fetch(`${getBaseUrl()}/health`)
+      const response = await fetch(`${getBaseUrl()}/system/health`)
       assert.strictEqual(response.status, 200)
 
       const json = await response.json()

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
+import { isIncognitoWindow } from '@/lib/browseros/incognito'
 import {
   getWindowConversation,
   setWindowConversation,
@@ -32,13 +33,19 @@ import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
+import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
-  buildSidepanelPreparedSendMessagesRequest,
+  didStreamingTurnFinish,
+  getPersistableMessages,
+  shouldPersistHistory,
+} from './chat-session-persistence'
+import {
+  prepareSidepanelSendMessagesRequest,
   toProviderOption,
 } from './chat-session-request'
 import type { ChatMode } from './chat-types'
@@ -47,6 +54,7 @@ import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
 import { useNotifyActiveTab } from './notify-active-tab.hooks'
 import { useRemoteConversationSave } from './remote-conversation-save.hooks'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
+import { stripImageToolOutputs } from './tool-output-strip'
 
 const getLastMessageText = (messages: UIMessage[]) => {
   const lastMessage = messages[messages.length - 1]
@@ -170,10 +178,22 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoadingProviders,
   } = useChatRefs({ activeTabId: options?.activeTabId })
   const invalidateCredits = useInvalidateCredits()
-  const [vmStatus, setVmStatus] = useState<{
-    status: 'booting' | 'error'
-    progress?: string
-  } | null>(null)
+
+  // Incognito chats are never written to history or the cloud (#1189). Resolved
+  // from the hosting window on mount (chrome.extension.inIncognitoContext is
+  // false for a side panel in spanning mode). This settles long before any turn
+  // ends, so the turn-end save always sees the correct value.
+  const [isIncognito, setIsIncognito] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    isIncognitoWindow().then((incognito) => {
+      if (!cancelled) setIsIncognito(incognito)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const persistHistory = shouldPersistHistory(isIncognito)
 
   const {
     baseUrl: agentServerUrl,
@@ -192,15 +212,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const conversationIdParam = searchParams.get('conversationId')
 
   const agentUrlRef = useRef(agentServerUrl)
-  const agentUrlErrorRef = useRef(agentUrlError)
 
   useEffect(() => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
-
-  useEffect(() => {
-    agentUrlErrorRef.current = agentUrlError
-  }, [agentUrlError])
 
   const canSend = !isLoadingAgentUrl && !agentUrlError && !!agentServerUrl
 
@@ -214,8 +229,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [disliked, setDisliked] = useState<Record<string, boolean>>({})
   const [conversationId, setConversationId] = useState(crypto.randomUUID())
   const conversationIdRef = useRef(conversationId)
+  const optionsRef = useRef(options)
   // The window this panel belongs to, resolved on mount in per-window scope.
   const windowIdRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
 
   useEffect(() => {
     conversationIdRef.current = conversationId
@@ -225,7 +245,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     startTask: startExecutionTask,
     syncFromMessages: syncExecutionHistory,
     finishTask: finishExecutionTask,
-  } = useExecutionHistoryTracker()
+  } = useExecutionHistoryTracker({ enabled: persistHistory })
 
   const onClickLike = (messageId: string) => {
     const { responseText, queryText } = getResponseAndQueryFromMessageId(
@@ -311,15 +331,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     ? toProviderOption(selectedChatTarget)
     : providers[0]
 
-  const {
-    messages,
-    sendMessage: baseSendMessage,
-    setMessages,
-    status,
-    stop,
-    error: chatError,
-  } = useChat({
-    transport: new DefaultChatTransport({
+  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
+  if (!transportRef.current) {
+    transportRef.current = new DefaultChatTransport<UIMessage>({
       prepareSendMessagesRequest: async ({ messages }) => {
         const target = selectedChatTargetRef.current
         const fallbackProvider =
@@ -357,11 +371,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const previousConversation = history?.length ? history : undefined
 
         const userSystemPrompt = getUserSystemPrompt(
-          options?.origin,
+          optionsRef.current?.origin,
           personalizationRef.current,
         )
         const agentSessionStrategy =
-          options?.agentSessionStrategy ?? 'conversation'
+          optionsRef.current?.agentSessionStrategy ?? 'conversation'
         const agentSessionId =
           agentSessionStrategy === 'main' ? 'main' : conversationIdRef.current
 
@@ -378,16 +392,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
         const message = getLastMessageText(messages)
 
-        const currentAgentServerUrl = agentUrlRef.current
-        if (!currentAgentServerUrl) {
-          throw (
-            agentUrlErrorRef.current ??
-            new Error('Agent server URL not configured.')
-          )
-        }
-
-        const result = buildSidepanelPreparedSendMessagesRequest({
-          agentServerUrl: currentAgentServerUrl,
+        const result = await prepareSidepanelSendMessagesRequest({
+          resolveAgentServerUrl: resolveAgentServerUrlWithRetry,
           target,
           fallbackProvider,
           message,
@@ -407,24 +413,22 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
         return result
       },
-    }),
-    onData: (part) => {
-      if (part.type !== 'data-vm-status') return
-      const data = part.data as
-        | { status?: string; progress?: string }
-        | undefined
-      const status = data?.status
-      if (!status || status === 'running') {
-        setVmStatus(null)
-        return
-      }
-      setVmStatus({
-        status: status as 'booting' | 'error',
-        progress: data?.progress,
-      })
-    },
+    })
+  }
+
+  const chatTransport = transportRef.current
+
+  const {
+    messages,
+    sendMessage: baseSendMessage,
+    setMessages,
+    status,
+    stop,
+    error: chatError,
+    regenerate,
+  } = useChat({
+    transport: chatTransport,
     onFinish: async ({ message, messages, isAbort, isError, finishReason }) => {
-      setVmStatus(null)
       const nextMessages = addContentFilterNotice(
         messages,
         message,
@@ -443,13 +447,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     },
   })
 
-  // Remove messages with empty parts (e.g. interrupted assistant responses)
-  // to prevent AI SDK validation errors on subsequent sends
+  // Two cleanups once a turn is no longer streaming: drop messages with
+  // empty parts (interrupted responses trip AI SDK validation on the next
+  // send), and strip retained base64 image tool outputs from older turns.
+  // Nothing renders those screenshots, but the AI SDK keeps every message
+  // resident, so they accumulate until the renderer OOMs (#1972). The latest
+  // message stays intact so the just-finished turn is untouched.
   useEffect(() => {
     if (status === 'streaming') return
-    if (messages.some((m) => !m.parts?.length)) {
-      setMessages(messages.filter((m) => m.parts?.length > 0))
-    }
+    const nonEmpty = messages.some((m) => !m.parts?.length)
+      ? messages.filter((m) => m.parts?.length > 0)
+      : messages
+    const cleaned = stripImageToolOutputs(nonEmpty, { keepLastMessage: true })
+    if (cleaned !== messages) setMessages(cleaned)
   }, [messages, status, setMessages])
 
   useNotifyActiveTab({
@@ -560,22 +570,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     syncExecutionHistory(messages, status)
   }, [messages, status, syncExecutionHistory])
 
-  // Save conversation only after streaming completes — not on every token
+  // Save conversation only after a turn terminates — not on every token
   const previousStatusRef = useRef(status)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only save when streaming finishes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only save when a turn terminates
   useEffect(() => {
-    const wasStreaming =
-      previousStatusRef.current === 'streaming' ||
-      previousStatusRef.current === 'submitted'
-    const justFinished =
-      wasStreaming && (status === 'ready' || status === 'error')
+    const justFinished = didStreamingTurnFinish(
+      previousStatusRef.current,
+      status,
+    )
     previousStatusRef.current = status
 
     if (!justFinished) return
 
     // Clear the selected text that was sent with this request
     const tabKey = pendingSelectionTabKeyRef.current
-    if (tabKey) {
+    if (status === 'ready' && tabKey) {
       pendingSelectionTabKeyRef.current = null
       delete selectionMapRef.current[tabKey]
       selectedTextStorage.getValue().then((map) => {
@@ -586,13 +595,17 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     }
 
-    const messagesToSave = messages.filter((m) => m.parts?.length > 0)
+    const messagesToSave = getPersistableMessages(messages)
     if (messagesToSave.length === 0) return
 
-    if (isLoggedIn) {
-      saveRemoteConversation(conversationIdRef.current, messagesToSave)
-    } else {
-      saveLocalConversation(conversationIdRef.current, messagesToSave)
+    // Skip all history writes in incognito so the chat never becomes durable
+    // (neither local nor cloud) and can't surface in a normal window (#1189).
+    if (persistHistory) {
+      if (isLoggedIn) {
+        saveRemoteConversation(conversationIdRef.current, messagesToSave)
+      } else {
+        saveLocalConversation(conversationIdRef.current, messagesToSave)
+      }
     }
 
     invalidateCredits()
@@ -779,9 +792,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isLoading: isLoadingProviders || isLoadingAgentUrl,
     canSend,
     isSyncing: !isIntegrationsSynced,
+    isIncognito,
     isRestoringConversation,
     agentUrlError,
     chatError,
+    retryLastTurn: regenerate,
     handleSelectProvider,
     getActionForMessage,
     resetConversation,

@@ -17,6 +17,8 @@ export const MOCK_BROWSEROS_IMPORT_SOURCES: readonly BrowserOSImportSource[] = [
     displayName: 'Google Chrome - Work',
     browserName: 'Google Chrome',
     profileName: 'Work',
+    accountName: 'work@example.com',
+    isManaged: true,
     supportedItems: [
       'history',
       'bookmarks',
@@ -41,6 +43,8 @@ export const MOCK_BROWSEROS_IMPORT_SOURCES: readonly BrowserOSImportSource[] = [
     displayName: 'Google Chrome - Personal',
     browserName: 'Google Chrome',
     profileName: 'Personal',
+    accountName: 'personal@example.com',
+    isManaged: false,
     supportedItems: [
       'history',
       'bookmarks',
@@ -55,6 +59,8 @@ export const MOCK_BROWSEROS_IMPORT_SOURCES: readonly BrowserOSImportSource[] = [
     displayName: 'Microsoft Edge - Default',
     browserName: 'Microsoft Edge',
     profileName: 'Default',
+    accountName: '',
+    isManaged: false,
     supportedItems: ['history', 'bookmarks', 'cookies', 'passwords'],
     recommendedItems: ['history', 'bookmarks', 'cookies'],
   },
@@ -101,6 +107,67 @@ export function selectableItemsForSource(
   ]
 }
 
+/**
+ * The only items that let an agent act inside your accounts. Everything else
+ * Chromium offers is human-browser furniture — no MCP tool exposes history,
+ * bookmarks, search engines, autofill or extensions to an agent, so copying
+ * them buys nothing and makes the ask look bigger than it is.
+ */
+export const AGENT_LOGIN_ITEMS: readonly BrowserOSImportItem[] = [
+  'cookies',
+  'passwords',
+]
+
+function isLoginItem(item: BrowserOSImportItem): boolean {
+  return AGENT_LOGIN_ITEMS.includes(item)
+}
+
+export function loginItemsForSource(
+  source: BrowserOSImportSource,
+): BrowserOSImportItem[] {
+  return source.supportedItems.filter(isLoginItem)
+}
+
+/**
+ * Default checked set for a profile: logins only. Falls back to Chromium's own
+ * recommendation when a profile carries no logins at all, so a history-only
+ * profile still offers something to copy instead of a dead Import button.
+ */
+export function defaultImportItemsForSource(
+  source: BrowserOSImportSource,
+): BrowserOSImportItem[] {
+  const loginItems = loginItemsForSource(source)
+  return loginItems.length > 0 ? loginItems : selectableItemsForSource(source)
+}
+
+export interface ImportSelectionSplit {
+  loginItems: BrowserOSImportItem[]
+  extraItems: BrowserOSImportItem[]
+}
+
+/** Splits a selection into logins and the optional browsing-setup extras. */
+export function splitImportSelection(
+  items: readonly BrowserOSImportItem[],
+): ImportSelectionSplit {
+  return {
+    loginItems: items.filter(isLoginItem),
+    extraItems: items.filter((item) => !isLoginItem(item)),
+  }
+}
+
+export function sanitizeImportSelection(
+  source: BrowserOSImportSource,
+  items: readonly BrowserOSImportItem[],
+): BrowserOSImportItem[] {
+  const selectedItems = new Set(items)
+  const emittedItems = new Set<BrowserOSImportItem>()
+  return source.supportedItems.filter((item) => {
+    if (!selectedItems.has(item) || emittedItems.has(item)) return false
+    emittedItems.add(item)
+    return true
+  })
+}
+
 export function selectedSourceById(
   sources: readonly BrowserOSImportSource[],
   sourceId: string,
@@ -108,14 +175,38 @@ export function selectedSourceById(
   return sources.find((source) => source.id === sourceId)
 }
 
+export interface ImportSourceSelectionChange {
+  selectedSourceId: string
+  selectedItems: BrowserOSImportItem[]
+}
+
+export function importSourceSelectionChangeFor(
+  sources: readonly BrowserOSImportSource[],
+  currentSourceId: string,
+): ImportSourceSelectionChange | null {
+  if (sources.length === 0) {
+    return { selectedSourceId: '', selectedItems: [] }
+  }
+  if (selectedSourceById(sources, currentSourceId)) return null
+  const nextSource = sources[0]
+  return {
+    selectedSourceId: nextSource.id,
+    selectedItems: defaultImportItemsForSource(nextSource),
+  }
+}
+
 export function startImportRequestFor(
   source: BrowserOSImportSource,
+  items?: readonly BrowserOSImportItem[],
 ): BrowserOSStartImportRequest | null {
-  const items = selectableItemsForSource(source)
-  if (items.length === 0) return null
+  const importItems =
+    items === undefined
+      ? defaultImportItemsForSource(source)
+      : sanitizeImportSelection(source, items)
+  if (importItems.length === 0) return null
   return {
     sourceId: source.id,
-    items,
+    items: importItems,
   }
 }
 
@@ -126,13 +217,13 @@ export function completedImportItemCount(
 }
 
 export function importProgressTotal(
-  source: BrowserOSImportSource,
+  selectedItemCount: number,
   progress: BrowserOSImportProgress | undefined,
 ): number {
-  return progress?.totalItems ?? selectableItemsForSource(source).length
+  return progress?.totalItems ?? selectedItemCount
 }
 
 export const STARTER_PROMPTS: readonly string[] = [
-  'Find me a coffee shop within walking distance and save it to my Maps.',
-  'Apply for the SF visa for me, you have my passport scan in iCloud.',
+  'Search for the cheapest morning flight from SFO to NYC next Friday and show me the top three.',
+  'Open the pull requests assigned to me on GitHub and summarize each.',
 ]

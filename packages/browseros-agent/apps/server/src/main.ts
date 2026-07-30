@@ -31,7 +31,7 @@ import {
 import { initializeDb } from './lib/db'
 import { identity } from './lib/identity'
 import { logger } from './lib/logger'
-import { reconcileUrl } from './lib/mcp-manager'
+import { selfHealMcpLinks } from './lib/mcp-manager'
 import { metrics } from './lib/metrics'
 import { isPortInUseError } from './lib/port-binding'
 import { Sentry } from './lib/sentry'
@@ -57,7 +57,7 @@ export class Application {
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {
-      logger.error('CDP port is required (--cdp-port)')
+      logger.error('CDP port is required in the sidecar config')
       process.exit(EXIT_CODES.GENERAL_ERROR)
     }
 
@@ -84,7 +84,6 @@ export class Application {
         executionDir: this.config.executionDir,
         resourcesDir: this.config.resourcesDir,
         aiSdkDevtoolsEnabled: this.config.aiSdkDevtoolsEnabled,
-
         onShutdown: () => this.stop('shutdown-endpoint'),
       })
     } catch (error) {
@@ -107,29 +106,26 @@ export class Application {
       })
     }
 
-    // Reconcile every linked agent's BrowserOS MCP URL against the
-    // proxy URL external clients actually reach. The agent server's
-    // own `serverPort` is NOT that URL — in production the browser
-    // proxies `/mcp` from a separately-configured proxy port. We
-    // only reconcile when the launching process passes the public
-    // URL via `BROWSEROS_MCP_PUBLIC_URL`; otherwise we'd rewrite
-    // every agent config with the wrong port and break installs that
-    // were previously working. The UI's install flow records the
-    // correct URL per click; reconcile is the boot-time recovery
-    // path for port drift.
+    // Boot self-heal for the MCP integration. First drops BrowserOS
+    // from any agent no longer in the curated surface, then repairs
+    // every remaining agent's BrowserOS MCP URL against the proxy URL
+    // external clients actually reach. The agent server's own
+    // `serverPort` is NOT that URL: in production the browser proxies
+    // `/mcp` from a separately-configured proxy port. The URL repair
+    // only runs when the launching process passes the public URL via
+    // `BROWSEROS_MCP_PUBLIC_URL`; otherwise we'd rewrite every agent
+    // config with the wrong port. The non-curated cleanup needs no URL
+    // and always runs. The UI's install flow records the correct URL
+    // per click; this is the boot-time recovery path.
     const publicMcpUrl = process.env.BROWSEROS_MCP_PUBLIC_URL
-    if (publicMcpUrl) {
-      reconcileUrl({ currentUrl: publicMcpUrl }).catch((err) => {
-        logger.warn(
-          'MCP manager URL reconcile failed; agent configs may be stale',
-          {
-            error: err instanceof Error ? err.message : String(err),
-          },
-        )
+    selfHealMcpLinks({ currentUrl: publicMcpUrl }).catch((err) => {
+      logger.warn('MCP manager self-heal failed; agent configs may be stale', {
+        error: err instanceof Error ? err.message : String(err),
       })
-    } else {
+    })
+    if (!publicMcpUrl) {
       logger.debug(
-        'Skipping MCP manager URL reconcile — BROWSEROS_MCP_PUBLIC_URL not set',
+        'MCP manager URL reconcile skipped — BROWSEROS_MCP_PUBLIC_URL not set',
       )
     }
 
@@ -137,7 +133,7 @@ export class Application {
       `HTTP server listening on http://127.0.0.1:${this.config.serverPort}`,
     )
     logger.info(
-      `Health endpoint: http://127.0.0.1:${this.config.serverPort}/health`,
+      `Health endpoint: http://127.0.0.1:${this.config.serverPort}/system/health`,
     )
 
     this.logStartupSummary()
@@ -149,10 +145,7 @@ export class Application {
     logger.info('Shutting down server...', { reason })
     removeServerConfigSync()
 
-    // Immediate exit without graceful shutdown. Chromium may kill us on update/restart,
-    // and we need to free the port instantly so the HTTP port doesn't keep switching.
-    // Exit 0 only for managed shutdowns (POST /shutdown from Chromium).
-    // Signal kills exit non-zero so Chromium's OnProcessExited restarts us.
+    // Immediate exit keeps the port free; signal exits stay non-zero so Chromium restarts us.
     const code =
       reason === 'SIGTERM' || reason === 'SIGINT'
         ? EXIT_CODES.SIGNAL_KILL
@@ -205,8 +198,7 @@ export class Application {
       // produce zero analytics.
       logger.warn(
         'Metrics will skip events: no instance identity. ' +
-          'Set BROWSEROS_CLIENT_ID or BROWSEROS_INSTALL_ID (env) or ' +
-          'instance.client_id / instance.install_id (config) to opt in.',
+          'Set instance.client_id or instance.install_id in the sidecar config to opt in.',
       )
     }
 

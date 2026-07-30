@@ -27,7 +27,7 @@ Tool, browser, and integration tests may require a running BrowserOS/CDP target.
 
 - `src/index.ts` loads polyfills/config, creates `Application`, starts it, and maps startup failures to exit codes.
 - `src/main.ts` owns lifecycle: runtime setup, DB/identity/metrics init, CDP connection, browser wrapper, tool registry, HTTP startup, and shutdown.
-- `src/api/server.ts` composes Hono routes for `/health`, `/status`, `/chat`, `/mcp`, `/klavis`, `/agents`, `/screencast`, provider testing, prompt refinement, and shutdown.
+- `src/api/server.ts` composes Hono routes for `/health`, `/status`, `/chat`, `/mcp`, `/klavis`, `/agents`, provider testing, prompt refinement, and shutdown.
 
 ## Project shape
 
@@ -50,7 +50,7 @@ apps/server/
 - MCP tool registration flows through `src/tools/registry.ts` and the tool implementation folders. Keep tool names, labels, schemas, and responses in sync.
 - CDP-backed browser behavior lives under `src/browser/` and `src/browser/core/`; tools should use that layer instead of speaking raw CDP when a local abstraction exists.
 - Agent behavior lives under `src/agent/` and uses the AI SDK provider/tool loop. External MCP clients are per-session and built through `mcp-builder.ts`.
-- CDP is required at runtime: pass `--cdp-port` or set `BROWSEROS_CDP_PORT`.
+- CDP and server ports are required in the sidecar JSON passed through `--config`.
 - Tests live under `apps/server/tests/`; use the closest group runner before broad suites.
 
 ## Release gate

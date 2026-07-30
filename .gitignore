@@ -24,11 +24,13 @@
 nxtscape-cli-access.json
 gclient.json
 .env
+.env.production
 .grove/
 AGENTS.md
 **/resources/binaries/
 
 packages/browseros/build/tools/
+packages/browseros/build/extensions/
 
 # AI SDK DevTools traces
 .devtools/

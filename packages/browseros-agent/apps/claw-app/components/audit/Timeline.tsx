@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import {
   type ToolDispatchRow,
   taskScreenshotUrl,
+  useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
@@ -22,10 +23,17 @@ interface TimelineProps {
   startedAt: number
   endEvent: {
     createdAt: number
-    kind: 'closed' | 'errored'
+    kind: 'closed' | 'errored' | 'cancelled'
     reason: string | null
   } | null
-  onScreenshotClick: (dispatchId: number) => void
+  /**
+   * Whether to render the session-end row below the dispatch list.
+   * Default true keeps existing consumers unchanged. Per-tab views
+   * (see `TabView.tsx`) pass false because the session end is not
+   * scoped to any one tab; it lives on the Session tab only.
+   */
+  showSessionEnd?: boolean
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
@@ -33,7 +41,7 @@ const HIGH_RISK_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
 function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
   const ids = new Set<number>()
   for (const d of dispatches) {
-    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.id)
+    if (HIGH_RISK_TOOLS.has(d.toolName)) ids.add(d.dispatchId)
   }
   return ids
 }
@@ -42,8 +50,10 @@ export function Timeline({
   dispatches,
   startedAt,
   endEvent,
+  showSessionEnd = true,
   onScreenshotClick,
 }: TimelineProps) {
+  const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   // Initial state: HIGH RISK rows pre-expanded. Lazy init so the
   // dispatch list is only walked once per mount; future polling
   // updates do not reset the user's manual toggles.
@@ -59,16 +69,16 @@ export function Timeline({
     })
   }
   const expandAll = (): void =>
-    setExpanded(new Set(dispatches.map((d) => d.id)))
+    setExpanded(new Set(dispatches.map((d) => d.dispatchId)))
   const collapseAll = (): void => setExpanded(new Set())
   const allExpanded =
-    dispatches.length > 0 && dispatches.every((d) => expanded.has(d.id))
+    dispatches.length > 0 && dispatches.every((d) => expanded.has(d.dispatchId))
   const noneExpanded = expanded.size === 0
 
   return (
     <section className="rounded-2xl border border-border-2 bg-card p-4">
       <header className="flex items-center justify-between gap-3 pb-3">
-        <h2 className="font-semibold text-ink-1">Timeline</h2>
+        <h2 className="font-semibold text-ink">Timeline</h2>
         <div className="flex items-center gap-1.5">
           <Button
             type="button"
@@ -76,7 +86,7 @@ export function Timeline({
             size="sm"
             onClick={expandAll}
             disabled={allExpanded || dispatches.length === 0}
-            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink-1"
+            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink"
             data-testid="timeline-expand-all"
           >
             <ChevronsUpDown className="size-3.5" />
@@ -88,7 +98,7 @@ export function Timeline({
             size="sm"
             onClick={collapseAll}
             disabled={noneExpanded}
-            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink-1"
+            className="h-7 gap-1 px-2 text-[11.5px] text-ink-3 hover:text-ink"
             data-testid="timeline-collapse-all"
           >
             <ChevronsDownUp className="size-3.5" />
@@ -102,15 +112,18 @@ export function Timeline({
       <ol className="space-y-1.5">
         {dispatches.map((d) => (
           <TimelineRow
-            key={d.id}
+            key={d.dispatchId}
             dispatch={d}
             offsetMs={Math.max(0, d.createdAt - startedAt)}
-            expanded={expanded.has(d.id)}
-            onToggle={() => toggle(d.id)}
+            expanded={expanded.has(d.dispatchId)}
+            screenshotBaseUrl={screenshotBaseUrl}
+            onToggle={() => toggle(d.dispatchId)}
             onScreenshotClick={onScreenshotClick}
           />
         ))}
-        <SessionEndRow startedAt={startedAt} endEvent={endEvent} />
+        {showSessionEnd && (
+          <SessionEndRow startedAt={startedAt} endEvent={endEvent} />
+        )}
       </ol>
     </section>
   )
@@ -120,21 +133,24 @@ interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
   expanded: boolean
+  screenshotBaseUrl: string | null
   onToggle: () => void
-  onScreenshotClick: (dispatchId: number) => void
+  onScreenshotClick: (screenshotId: number) => void
 }
 
 function TimelineRow({
   dispatch,
   offsetMs,
   expanded,
+  screenshotBaseUrl,
   onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
   const highRisk = HIGH_RISK_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
-  const isScreenshot = dispatch.toolName === 'screenshot' && !isError
+  const screenshotId = dispatch.screenshotId
+  const isScreenshot = screenshotId !== undefined
   return (
     <li
       className={cn(
@@ -163,7 +179,7 @@ function TimelineRow({
           T+{formatOffset(offsetMs)}
         </span>
         <div className="flex min-w-0 items-center gap-2">
-          <span className="font-mono font-semibold text-[12.5px] text-ink-1">
+          <span className="font-mono font-semibold text-[12.5px] text-ink">
             {dispatch.toolName}
           </span>
           <span className="truncate text-[12.5px] text-ink-3">
@@ -195,22 +211,35 @@ function TimelineRow({
               </pre>
             </Block>
           )}
-          {isScreenshot && (
+          {isScreenshot && screenshotBaseUrl !== null && (
             <Block label="screenshot">
               <button
                 type="button"
-                onClick={() => onScreenshotClick(dispatch.id)}
+                onClick={() => onScreenshotClick(screenshotId)}
                 className="block w-64 overflow-hidden rounded-md border border-border-2"
               >
                 <AspectRatio ratio={16 / 10}>
                   <img
-                    src={taskScreenshotUrl(dispatch.id)}
+                    src={taskScreenshotUrl(
+                      dispatch.sessionId,
+                      screenshotId,
+                      screenshotBaseUrl,
+                    )}
                     alt={`Screenshot at T+${formatOffset(offsetMs)}`}
                     className="h-full w-full object-cover"
                     loading="lazy"
                   />
                 </AspectRatio>
               </button>
+            </Block>
+          )}
+          {isScreenshot && screenshotBaseUrl === null && (
+            <Block label="screenshot">
+              <div className="w-64 overflow-hidden rounded-md border border-border-2">
+                <AspectRatio ratio={16 / 10}>
+                  <div className="h-full w-full animate-pulse bg-card-tint" />
+                </AspectRatio>
+              </div>
             </Block>
           )}
           {dispatch.url && (
@@ -267,7 +296,7 @@ function Block({
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-wide transition-colors hover:bg-card-tint hover:text-ink-1"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10.5px] text-ink-3 uppercase tracking-wide transition-colors hover:bg-card-tint hover:text-ink"
             aria-label={`Copy ${label}`}
             data-testid={`timeline-block-copy-${label}`}
           >
@@ -309,7 +338,9 @@ function SessionEndRow({
         session{' '}
         {endEvent.kind === 'closed'
           ? 'closed'
-          : `errored (${endEvent.reason ?? 'unknown'})`}
+          : endEvent.kind === 'cancelled'
+            ? 'stopped'
+            : `errored (${endEvent.reason ?? 'unknown'})`}
       </span>
     </li>
   )
@@ -325,7 +356,7 @@ function formatOffset(ms: number): string {
   return `${mins}m${rem.toString().padStart(2, '0')}s`
 }
 
-function argsSummary(argsJson: string | null): string {
+function argsSummary(argsJson: string | null | undefined): string {
   if (!argsJson || argsJson === '{}') return ''
   if (argsJson.length <= 80) return argsJson
   return `${argsJson.slice(0, 80)}…`

@@ -6,12 +6,15 @@
  * Use setup.ts:ensureBrowserOS() for the full test environment.
  */
 import { type ChildProcess, spawn } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 
 const SERVER_ENTRYPOINT_PATH = resolve(
   dirname(import.meta.path),
   '../../src/index.ts',
 )
+const MONOREPO_ROOT = resolve(dirname(import.meta.path), '../../../..')
 
 export interface ServerConfig {
   cdpPort: number
@@ -22,6 +25,7 @@ export interface ServerConfig {
 export interface ServerState {
   process: ChildProcess
   config: ServerConfig
+  configDir: string
 }
 
 let serverState: ServerState | null = null
@@ -71,7 +75,7 @@ function formatStartupFailure(
 
 export async function isServerRunning(port: number): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/health`, {
+    const response = await fetch(`http://127.0.0.1:${port}/system/health`, {
       signal: AbortSignal.timeout(1000),
     })
     return response.ok
@@ -97,7 +101,7 @@ async function waitForHealth(
         port,
         stdoutBuffer,
         stderrBuffer,
-        'Server process exited before /health became ready.',
+        'Server process exited before /system/health became ready.',
       )
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -107,7 +111,7 @@ async function waitForHealth(
     port,
     stdoutBuffer,
     stderrBuffer,
-    'Timed out waiting for /health to become ready.',
+    'Timed out waiting for /system/health to become ready.',
   )
 }
 
@@ -132,17 +136,41 @@ export async function spawnServer(config: ServerConfig): Promise<ServerState> {
   }
 
   console.log(`Starting BrowserOS Server on port ${config.serverPort}...`)
+  const configDir = mkdtempSync(join(tmpdir(), 'browseros-server-config-'))
+  const configPath = join(configDir, 'sidecar.json')
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        ports: {
+          server: config.serverPort,
+          cdp: config.cdpPort,
+          proxy: config.serverPort,
+        },
+        directories: {
+          resources: join(MONOREPO_ROOT, 'resources'),
+          execution: configDir,
+        },
+        flags: {
+          allow_remote_in_mcp: false,
+        },
+        instance: {
+          client_id: '',
+          install_id: '',
+          browseros_version: '',
+          chromium_version: '',
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
   const stdoutBuffer: string[] = []
   const stderrBuffer: string[] = []
   const process = spawn(
     'bun',
-    [
-      SERVER_ENTRYPOINT_PATH,
-      '--cdp-port',
-      config.cdpPort.toString(),
-      '--server-port',
-      config.serverPort.toString(),
-    ],
+    [SERVER_ENTRYPOINT_PATH, '--config', configPath],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -166,10 +194,16 @@ export async function spawnServer(config: ServerConfig): Promise<ServerState> {
   })
 
   console.log('Waiting for server to be ready...')
-  await waitForHealth(process, config.serverPort, stdoutBuffer, stderrBuffer)
+  try {
+    await waitForHealth(process, config.serverPort, stdoutBuffer, stderrBuffer)
+  } catch (error) {
+    process.kill('SIGTERM')
+    rmSync(configDir, { recursive: true, force: true })
+    throw error
+  }
   console.log('Server is ready')
 
-  serverState = { process, config }
+  serverState = { process, config, configDir }
   return serverState
 }
 
@@ -194,5 +228,6 @@ export async function killServer(): Promise<void> {
   })
 
   console.log('Server stopped')
+  rmSync(serverState.configDir, { recursive: true, force: true })
   serverState = null
 }

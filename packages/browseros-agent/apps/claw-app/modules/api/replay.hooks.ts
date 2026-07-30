@@ -1,6 +1,17 @@
+/**
+ * @license
+ * Copyright 2025 BrowserOS
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Session-replay API surface for the claw-app cockpit.
+ * Metadata polling lets audit views discover newly available recordings without
+ * repeatedly downloading the session-keyed NDJSON event snapshot.
+ */
+
+import type { RecordingMetadata } from '@browseros/claw-api'
+import { ApiResponseError } from '@browseros/claw-api-client'
 import { createQuery } from 'react-query-kit'
-import type { RunStatus } from '@/lib/status'
-import type { RunHarness } from '@/modules/api/runs.hooks'
+import { apiClient } from './client'
 
 export type ReplayVerb =
   | 'navigate'
@@ -11,195 +22,176 @@ export type ReplayVerb =
   | 'submit'
   | 'done'
 
-export type ReplayKind = 'action' | 'approval' | 'block' | 'done'
+export type ReplayKind = 'action' | 'block' | 'done'
 
 export interface ReplayFrame {
-  /** Seconds into the session. */
+  /** Seconds into the session, at which this dispatch completed. */
   t: number
+  /**
+   * How long the tool ran, from the source dispatch row. `session-replay.ts`
+   * subtracts it from `t` to approximate when the action began, which is when
+   * the replay starts treating it as current. Absent on rows recorded before
+   * durations were persisted; negative and non-finite values fall back to the
+   * completion time.
+   */
+  durationMs?: number | null
   kind: ReplayKind
   verb: ReplayVerb
-  /** Short node label, e.g. "Create New Report". */
+  /** Short node label, e.g. the page title or a focused element. */
   node: string
-  /** Caption sentence rendered both in the viewport overlay and the timeline row. */
+  /** Caption sentence rendered in the viewport overlay + timeline row. */
   caption: string
-  /** Optional badge shown on the timeline row ("Allowed once", "Blocked"). */
+  /**
+   * Full URL captured on this dispatch's audit row, when the tool
+   * targeted a page. Populates the replay viewport's browser-chrome
+   * address bar so the operator can see the exact URL the agent
+   * was on at this instant. Null for tools that do not target a
+   * page (`run`, `windows`, `tab_groups`, `tabs new` before the
+   * result comes back).
+   */
+  url?: string | null
+  pageId?: number | null
+  /** Chrome tab that owned this dispatch, when known. */
+  tabId?: number | null
+  /** CDP target observed for this dispatch; may change across navigation. */
+  targetId?: string | null
+  /** Optional badge shown on the timeline row ("Blocked", "Cancelled"). */
   note?: string
+  /** Source dispatch id so the replay surface can deep-link. */
+  dispatchId?: number
 }
 
-export interface ReplayDetail {
-  id: string
-  agentLabel: string
-  /** One-line task description shown in the top bar. */
-  taskTitle: string
-  harness: RunHarness
-  /** Final run status, used to colour the header pill. */
-  status: RunStatus
-  /** Originating site host for the browser-chrome stub. */
-  site: string
-  /** When the run happened, e.g. "Jun 1, 2026". */
-  startedAt: string
-  /** Wall-clock duration as displayed in the stat strip. */
-  duration: string
-  tokens: string
-  steps: string
-  approvals: string
-  /** Total seconds the session covers. */
-  totalSeconds: number
-  frames: ReplayFrame[]
+export interface ReplayEvent {
+  /** MCP session attributed from persisted claim state, not recorder input. */
+  sessionId: string
+  /** Chrome document stream; a new value marks a navigation boundary. */
+  documentId: string
+  /** Best-effort CDP metadata observed when this document was recorded. */
+  targetId: string | null
+  /** Chrome tab id captured at ingest; distinct from a BrowserOS page id. */
+  tabId: number
+  type: number
+  data: unknown
+  /** rrweb event timestamp in Unix epoch milliseconds. */
+  ts: number
 }
 
-const CONCUR_REPLAY: ReplayDetail = {
-  id: 'run-concur-may',
-  agentLabel: 'Cowork . File expenses',
-  taskTitle: 'See my May invoices and file expenses on SAP Concur',
-  harness: 'Claude Code',
-  status: 'done',
-  site: 'app.concur.com',
-  startedAt: 'Jun 1, 2026',
-  duration: '0:57',
-  tokens: '4.3k',
-  steps: '9',
-  approvals: '1',
-  totalSeconds: 60,
-  frames: [
-    {
-      t: 0,
-      kind: 'action',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'Requesting permission to open concur.com',
-    },
-    {
-      t: 2,
-      kind: 'approval',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'You allowed the agent to open concur.com',
-      note: 'Allowed once',
-    },
-    {
-      t: 4,
-      kind: 'action',
-      verb: 'navigate',
-      node: 'concur.com',
-      caption: 'Navigating to concur.com',
-    },
-    {
-      t: 8,
-      kind: 'action',
-      verb: 'read',
-      node: 'Concur home',
-      caption: 'Session restored from vault, signed in as nikhil@example.com',
-    },
-    {
-      t: 13,
-      kind: 'action',
-      verb: 'click',
-      node: '"Create New Report"',
-      caption: 'Opened the new-report form',
-    },
-    {
-      t: 19,
-      kind: 'action',
-      verb: 'read',
-      node: 'May invoices',
-      caption: 'Matched 4 receipts from your invoices folder',
-    },
-    {
-      t: 25,
-      kind: 'action',
-      verb: 'type',
-      node: 'Report name',
-      caption: 'Typed "May 2026 . Engineering"',
-    },
-    {
-      t: 34,
-      kind: 'action',
-      verb: 'type',
-      node: '4 expense lines',
-      caption: 'Filled vendor, date, category and amount for 4 lines',
-    },
-    {
-      t: 42,
-      kind: 'action',
-      verb: 'attach',
-      node: '4 receipts',
-      caption: 'Attached PDF receipts, total $1,284.50',
-    },
-    {
-      t: 48,
-      kind: 'approval',
-      verb: 'submit',
-      node: '"Submit Report"',
-      caption: 'Approval requested: submit the report',
-      note: 'Needs OK',
-    },
-    {
-      t: 51,
-      kind: 'approval',
-      verb: 'submit',
-      node: '"Submit Report"',
-      caption: 'You allowed the submit once',
-      note: 'Allowed once',
-    },
-    {
-      t: 53,
-      kind: 'action',
-      verb: 'read',
-      node: 'Confirmation',
-      caption: 'Report submitted, #EXP-49217, routed to Dana R.',
-    },
-    {
-      t: 56,
-      kind: 'block',
-      verb: 'click',
-      node: '"Pay card balance"',
-      caption: 'Blocked: payments are non-interactive for agents',
-      note: 'Blocked',
-    },
-    {
-      t: 58,
-      kind: 'done',
-      verb: 'done',
-      node: '',
-      caption: 'Run complete, expense report filed',
-    },
-  ],
+export type ReplayMetadata = RecordingMetadata
+
+export interface UseReplayMetadataVariables {
+  sessionId: string
+}
+
+/** Cheap metadata probe behind the "View Replay" CTA and page picker. */
+export async function fetchReplayMetadata({
+  sessionId,
+}: UseReplayMetadataVariables): Promise<ReplayMetadata> {
+  return (await apiClient()).getRecording({ sessionId })
+}
+
+export const useReplayMetadata = createQuery<
+  ReplayMetadata,
+  UseReplayMetadataVariables
+>({
+  queryKey: ['replay', 'metadata'],
+  fetcher: fetchReplayMetadata,
+  refetchInterval: 10_000,
+})
+
+export interface UseReplayEventsVariables {
+  sessionId: string
+  /** Metadata revision used only to isolate client-side query snapshots. */
+  revision?: string
+}
+
+/** Changes only when replay metadata says the downloadable event set changed. */
+export function replayEventsRevision(
+  metadata: RecordingMetadata | undefined,
+): string | null {
+  if (!metadata) return null
+  return JSON.stringify([
+    metadata.sizeBytes,
+    metadata.lastEventAt ?? null,
+    metadata.complete,
+    metadata.tabs.map((tab) => [
+      tab.tabId,
+      tab.complete,
+      tab.segments.map((segment) => [
+        segment.documentId,
+        segment.lastEventAt,
+        segment.eventCount,
+        segment.hasGap,
+      ]),
+    ]),
+  ])
+}
+
+export interface ReplayEventsBundle {
+  events: ReplayEvent[]
+  tabIds: number[]
+  documentIds: string[]
+}
+
+function isReplayEvent(value: unknown): value is ReplayEvent {
+  if (!value || typeof value !== 'object') return false
+  const event = value as Partial<ReplayEvent>
+  return (
+    typeof event.sessionId === 'string' &&
+    typeof event.documentId === 'string' &&
+    (event.targetId === null || typeof event.targetId === 'string') &&
+    typeof event.tabId === 'number' &&
+    typeof event.ts === 'number' &&
+    typeof event.type === 'number'
+  )
 }
 
 /**
- * Per-run replay fixtures. Keys match the run ids surfaced from
- * `useRuns` so an Audit row click into `/governance/audit/:id/replay`
- * lands on real data for at least one run.
+ * Fetches and parses one session's tab-attributed, document-keyed NDJSON stream.
+ * Parsing stays here so malformed recorder lines remain isolated from the
+ * transport client and a missing recording still maps to an empty bundle.
  */
-const FIXTURES: Record<string, ReplayDetail> = {
-  'run-concur-may': CONCUR_REPLAY,
+export async function fetchReplayEvents({
+  sessionId,
+}: UseReplayEventsVariables): Promise<ReplayEventsBundle> {
+  let ndjson: string
+  try {
+    ndjson = await (await apiClient()).downloadRecordingEvents({ sessionId })
+  } catch (error) {
+    if (error instanceof ApiResponseError && error.response.status === 404) {
+      return { events: [], tabIds: [], documentIds: [] }
+    }
+    throw error
+  }
+
+  const events: ReplayEvent[] = []
+  const tabIds: number[] = []
+  const documentIds: string[] = []
+  const seenTabs = new Set<number>()
+  const seenDocuments = new Set<string>()
+  for (const line of ndjson.split('\n')) {
+    if (line.length === 0) continue
+    try {
+      const event: unknown = JSON.parse(line)
+      if (!isReplayEvent(event)) continue
+      events.push(event)
+      if (!seenTabs.has(event.tabId)) {
+        seenTabs.add(event.tabId)
+        tabIds.push(event.tabId)
+      }
+      if (!seenDocuments.has(event.documentId)) {
+        seenDocuments.add(event.documentId)
+        documentIds.push(event.documentId)
+      }
+    } catch {}
+  }
+  return { events, tabIds, documentIds }
 }
 
-const FALLBACK: ReplayDetail = {
-  id: 'unknown',
-  agentLabel: 'Unknown run',
-  taskTitle: 'No replay was recorded for this run.',
-  harness: 'Codex',
-  status: 'stopped',
-  site: 'about:blank',
-  startedAt: '',
-  duration: '0:00',
-  tokens: '0',
-  steps: '0',
-  approvals: '0',
-  totalSeconds: 0,
-  frames: [],
-}
-
-interface UseReplayVariables {
-  runId: string
-}
-
-export const useReplay = createQuery<ReplayDetail, UseReplayVariables>({
-  queryKey: ['replay'],
-  fetcher: ({ runId }) =>
-    new Promise((resolve) =>
-      setTimeout(() => resolve(FIXTURES[runId] ?? FALLBACK), 60),
-    ),
+export const useReplayEvents = createQuery<
+  ReplayEventsBundle,
+  UseReplayEventsVariables
+>({
+  queryKey: ['replay', 'events'],
+  fetcher: fetchReplayEvents,
+  staleTime: Number.POSITIVE_INFINITY,
 })

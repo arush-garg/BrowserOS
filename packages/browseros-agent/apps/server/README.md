@@ -19,7 +19,7 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 │                                                                      │
 │   /mcp ─────── MCP tool endpoints (53+ tools)                       │
 │   /chat ────── Agent streaming (AI SDK)                              │
-│   /health ─── Health check                                           │
+│   /system/health ─ Health check                                      │
 │                                                                      │
 │   ┌─────────────────────────────────────────────────────────────┐   │
 │   │  Agent Loop                                                  │   │
@@ -122,11 +122,11 @@ apps/server/
 ### Setup
 
 ```bash
-# Copy environment files
-cp .env.example .env.development
+# From this app directory, create the shared root development env file
+(cd ../.. && cp .env.development.example .env.development)
 
-# Start the server (with hot reload)
-bun run start
+# Start the server directly (dev:watch generates this config automatically)
+bun --env-file=../../.env.development src/index.ts --config ../../config.dev.json
 ```
 
 See the [agent monorepo README](../../README.md) for full environment variable reference and `dev:watch` setup.
@@ -153,21 +153,17 @@ bun scripts/build/server.ts --target=all --no-upload
 
 ## Release Flow
 
-Server releases use annotated component tags. First bump `packages/browseros-agent/apps/server/package.json` in a PR, merge that version commit to the default branch, then tag the merged commit:
+Server releases are GitHub Releases for annotated component tags. They do not build or upload server binaries; GitHub provides the source zip and tarball for the tag.
+
+Bump `packages/browseros-agent/apps/server/package.json` and the matching `bun.lock` entry in a PR, merge it, then tag the merged commit:
 
 ```bash
-git tag -a agent-server/v0.0.122 -m "agent-server v0.0.122"
-git push origin agent-server/v0.0.122
+git tag -a agent-server/v0.0.123 -m "BrowserOS Server - v0.0.123"
+git push origin agent-server/v0.0.123
 ```
 
-The release workflow validates that the tag version matches `apps/server/package.json`, that the tagged commit is reachable from the default branch, and that the version is newer than existing `browseros-server-v*` and `agent-server/v*` tags. Legacy `browseros-server-vX.Y.Z` tags remain historical; new GitHub Releases use `agent-server/vX.Y.Z`.
+The workflow validates the tag against the hardcoded package path. A tag push fails if the tagged commit's package version does not match the tag version. Manual dispatch can set the package version on the default branch, update the matching lockfile entry, create the annotated tag, and publish the GitHub Release.
 
-The workflow-call and nightly paths can still build/upload server artifacts without publishing a GitHub Release by setting `publish_github_release=false`; that preserves the existing `bump_server_version.py` flow for target-specific builds.
+## Sidecar Config
 
-## Ports
-
-| Port | Env Variable | Purpose |
-|------|-------------|---------|
-| 9100 | `BROWSEROS_SERVER_PORT` | HTTP server (MCP, chat, health) |
-| 9000 | `BROWSEROS_CDP_PORT` | Chromium CDP (server connects as client) |
-| 9300 | `BROWSEROS_EXTENSION_PORT` | Legacy BrowserOS launch arg kept for compatibility |
+`--config <path>` is the only server startup config input. The JSON sidecar carries `ports.server`, `ports.cdp`, `ports.proxy`, `directories.resources`, `directories.execution`, and optional `instance.*` metadata. Dev, dogfood, and Chromium-managed launches generate this file before starting the binary.

@@ -36,10 +36,6 @@ export class DbAgentStore implements AgentStore {
       const agent = toAgentDefinition(row)
       return agent ? [agent] : []
     })
-    logger.debug('Agent harness store listed agents', {
-      count: agents.length,
-      store: 'sqlite',
-    })
     return agents
   }
 

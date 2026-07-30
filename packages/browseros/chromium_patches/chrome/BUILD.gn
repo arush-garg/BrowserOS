@@ -1,16 +1,18 @@
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index cc98a1463c539..3901d69034a1e 100644
+index cc98a1463c539..5b3c5bfae4e0d 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -17,6 +17,7 @@ import("//build/config/win/manifest.gni")
+@@ -16,7 +16,9 @@ import("//build/config/win/console_app.gni")
+ import("//build/config/win/manifest.gni")
  import("//build/private_code_test/private_code_test.gni")
  import("//build/toolchain/toolchain.gni")
++import("//chrome/browser/browseros/buildflags.gni")
  import("//chrome/browser/buildflags.gni")
 +import("//chrome/browser/sparkle_buildflags.gni")
  import("//chrome/chrome_paks.gni")
  import("//chrome/common/features.gni")
  import("//chrome/process_version_rc_template.gni")
-@@ -376,6 +377,8 @@ if (!is_android && !is_mac) {
+@@ -376,6 +378,8 @@ if (!is_android && !is_mac) {
      }
  
      data_deps += [
@@ -19,7 +21,15 @@ index cc98a1463c539..3901d69034a1e 100644
        "//chrome/browser/resources/media/mei_preload:component",
        "//chrome/browser/web_applications/isolated_web_apps/key_distribution/preload:component",
        "//components/privacy_sandbox/privacy_sandbox_attestations/preload:component",
-@@ -527,6 +530,7 @@ if (is_win) {
+@@ -515,6 +519,7 @@ if (is_win) {
+       "CHROMIUM_BUNDLE_ID=$chrome_mac_bundle_id",
+       "CHROMIUM_SHORT_NAME=$chrome_product_short_name",
+       "CHROMIUM_CREATOR=$chrome_mac_creator_code",
++      "BROWSEROS_PRODUCT_DIR_NAME=$browseros_product_dir_name",
+     ]
+ 
+     sources = [ "app/chrome_exe_main_mac.cc" ]
+@@ -527,6 +532,7 @@ if (is_win) {
        ":chrome_versioned_bundle_data",
        "//base/allocator:early_zone_registration_apple",
        "//build:branding_buildflags",
@@ -27,7 +37,7 @@ index cc98a1463c539..3901d69034a1e 100644
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
      ]
-@@ -1198,6 +1202,9 @@ if (is_win) {
+@@ -1198,6 +1204,9 @@ if (is_win) {
        bundle_deps += [ ":preinstalled_apps" ]
      }
  
@@ -37,7 +47,7 @@ index cc98a1463c539..3901d69034a1e 100644
      if (!use_static_angle) {
        bundle_deps += [ ":angle_binaries" ]
      }
-@@ -1205,6 +1212,12 @@ if (is_win) {
+@@ -1205,6 +1214,12 @@ if (is_win) {
      bundle_deps +=
          [ "//third_party/search_engines_data:prepopulated_engines_bundle_data" ]
  
