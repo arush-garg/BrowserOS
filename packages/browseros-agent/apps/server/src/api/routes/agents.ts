@@ -41,6 +41,7 @@ import {
   TurnAlreadyActiveError,
   UnknownAgentError,
 } from '../services/agents/agent-harness-service'
+import { GoalEvalService } from '../services/goal-eval-service'
 import type { Env } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
 
@@ -280,6 +281,42 @@ export function createAgentRoutes(deps: AgentRouteDeps = {}) {
         )
         if (!agent) return c.json({ error: 'Unknown agent' }, 404)
         return c.json({ agent })
+      } catch (err) {
+        return handleAgentRouteError(c, err)
+      }
+    })
+    .post('/:agentId/goal/eval', async (c) => {
+      const parsed = await parseGoalEvalBody(c)
+      if ('error' in parsed) return c.json({ error: parsed.error }, 400)
+
+      try {
+        // Harness agents (ACP) have history we can pull for eval context.
+        // Model-backed providers (Anthropic, OpenAI, etc.) have no harness
+        // agent — skip history and evaluate on the goal alone.
+        const agentId = c.req.param('agentId')
+        const agent =
+          agentId !== '_'
+            ? await service.getAgent(agentId).catch(() => null)
+            : null
+
+        let recentHistory: Array<{ role: string; text: string }> = []
+        if (agent) {
+          const sessionId = parsed.sessionId ?? MAIN_AGENT_SESSION_ID
+          const history = await service.getHistory(agent.id, sessionId)
+          recentHistory = (history.items ?? []).slice(-15)
+        }
+
+        const evalService = new GoalEvalService()
+        const result = await evalService.evaluate(recentHistory, {
+          goal: parsed.goal,
+          provider: parsed.provider,
+          model: parsed.model,
+          apiKey: parsed.apiKey,
+          baseUrl: parsed.baseUrl,
+          resourceName: parsed.resourceName,
+        })
+
+        return c.json(result)
       } catch (err) {
         return handleAgentRouteError(c, err)
       }
@@ -802,6 +839,43 @@ function parseChatBodyRecord(
       readOptionalTrimmedString(record, 'cwd') ??
       readOptionalTrimmedString(record, 'userWorkingDir'),
   }
+}
+
+async function parseGoalEvalBody(c: Context<Env>): Promise<
+  | {
+      goal: string
+      sessionId?: string
+      provider: string
+      model: string
+      apiKey?: string
+      baseUrl?: string
+      resourceName?: string
+    }
+  | { error: string }
+> {
+  const body = await readJsonBody(c)
+  if ('error' in body) return body
+  const record = body.value
+
+  const goal = typeof record.goal === 'string' ? record.goal.trim() : ''
+  if (!goal) return { error: 'Goal is required' }
+
+  const provider =
+    typeof record.provider === 'string' ? record.provider.trim() : ''
+  if (!provider) return { error: 'Provider is required' }
+
+  const model = typeof record.model === 'string' ? record.model.trim() : ''
+  if (!model) return { error: 'Model is required' }
+
+  const apiKey = typeof record.apiKey === 'string' ? record.apiKey : undefined
+  const baseUrl =
+    typeof record.baseUrl === 'string' ? record.baseUrl : undefined
+  const resourceName =
+    typeof record.resourceName === 'string' ? record.resourceName : undefined
+  const sessionId =
+    typeof record.sessionId === 'string' ? record.sessionId : undefined
+
+  return { goal, sessionId, provider, model, apiKey, baseUrl, resourceName }
 }
 
 async function parseSidepanelAgentChatBody(

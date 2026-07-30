@@ -295,3 +295,12 @@ export const SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT =
 /** @public */
 export const SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT =
   'sidepanel.voice_mode.transcribe_failed'
+
+/** @public */
+export const GOAL_SET_EVENT = 'chat.goal.set'
+
+/** @public */
+export const GOAL_CANCELLED_EVENT = 'chat.goal.cancelled'
+
+/** @public */
+export const GOAL_CONTINUE_EVENT = 'chat.goal.continue'

@@ -297,3 +297,12 @@ export const SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
 
 /** @public */
 export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'
+
+/** @public */
+export const GOAL_SET_EVENT = 'chat.goal.set'
+
+/** @public */
+export const GOAL_CANCELLED_EVENT = 'chat.goal.cancelled'
+
+/** @public */
+export const GOAL_CONTINUE_EVENT = 'chat.goal.continue'

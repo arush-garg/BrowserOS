@@ -24,6 +24,7 @@ import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
+import { GoalBanner } from './GoalBanner'
 import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
@@ -147,6 +148,8 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           }}
         />
       )}
+
+      <GoalBanner />
 
       <div className="p-3">
         <div className="flex items-center gap-2">

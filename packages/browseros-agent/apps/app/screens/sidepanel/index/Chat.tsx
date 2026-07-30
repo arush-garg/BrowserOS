@@ -2,6 +2,8 @@ import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import {
+  GOAL_CONTINUE_EVENT,
+  GOAL_SET_EVENT,
   SIDEPANEL_AI_TRIGGERED_EVENT,
   SIDEPANEL_MODE_CHANGED_EVENT,
   SIDEPANEL_STOP_CLICKED_EVENT,
@@ -13,11 +15,14 @@ import {
   SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT,
   SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
+import { goalStorage } from '@/lib/goal/goal-storage'
+import { evaluateGoal, toGoalEvalProvider } from '@/lib/goal/goalEval'
 import { track } from '@/lib/metrics/track'
 import { useSteer } from '@/lib/steer/useSteer'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
+import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { useVoiceInput } from '@/modules/voice/voice.hooks'
 import {
   type ChatSessionLike,
@@ -60,6 +65,7 @@ export const Chat = () => {
   } = useChatSessionContext()
 
   const steer = useSteer({ conversationId })
+  const { selectedProvider: selectedLlmProvider } = useLlmProviders()
 
   interface SteerMessageItem {
     id: string
@@ -141,6 +147,54 @@ export const Chat = () => {
     previousChatStatus.current = status
   }, [status])
 
+  // Goal keep-going: when AI finishes and a goal is active, ask the server whether
+  // the goal is met. Continue only when evaluation says the goal is not yet met.
+  // Any failure (no server, bad response, network error) falls back to injecting
+  // a keep-going message so an active goal never silently stalls.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only trigger on status change
+  useEffect(() => {
+    const aiWasProcessing =
+      previousChatStatus.current === 'streaming' ||
+      previousChatStatus.current === 'submitted'
+    const aiJustFinished = aiWasProcessing && status === 'ready'
+    const aiErrored = aiWasProcessing && status === 'error'
+
+    if (!aiJustFinished && !aiErrored) return
+
+    goalStorage.getValue().then(async (goal) => {
+      if (!goal?.active) return
+      if (aiErrored) {
+        goalStorage.setValue({ ...goal, active: false })
+        return
+      }
+
+      const continueMessage = `Keep going with the goal: ${goal.goal}`
+      const provider = toGoalEvalProvider(
+        selectedLlmProvider,
+        selectedProvider?.agentId,
+      )
+      if (!provider) {
+        track(GOAL_CONTINUE_EVENT)
+        sendMessage({ text: continueMessage })
+        return
+      }
+
+      const result = await evaluateGoal({
+        goal: goal.goal,
+        sessionId: conversationId,
+        provider,
+      })
+
+      if (result.evaluated && result.goalMet) {
+        goalStorage.setValue({ ...goal, active: false })
+        return
+      }
+
+      track(GOAL_CONTINUE_EVENT)
+      sendMessage({ text: continueMessage })
+    })
+  }, [status])
+
   // Insert transcript into input when transcription completes
   // biome-ignore lint/correctness/useExhaustiveDependencies: only trigger on transcript/transcribing change
   useEffect(() => {
@@ -192,6 +246,22 @@ export const Chat = () => {
   const executeMessage = (customMessageText?: string) => {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
+
+    // Handle /goal slash command
+    if (messageText.startsWith('/goal ')) {
+      const goalText = messageText.slice(6).trim()
+      if (goalText) {
+        goalStorage.setValue({
+          goal: goalText,
+          active: true,
+          createdAt: Date.now(),
+        })
+        track(GOAL_SET_EVENT)
+      }
+      setInput('')
+      setAttachedTabs([])
+      return
+    }
 
     recordMessageSent()
 
