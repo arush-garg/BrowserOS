@@ -30,6 +30,10 @@
       "types": "./src/constants/urls.ts",
       "default": "./src/constants/urls.ts"
     },
+    "./constants/hermes": {
+      "types": "./src/constants/hermes.ts",
+      "default": "./src/constants/hermes.ts"
+    },
     "./constants/paths": {
       "types": "./src/constants/paths.ts",
       "default": "./src/constants/paths.ts"

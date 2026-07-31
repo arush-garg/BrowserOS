@@ -805,7 +805,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     disliked,
     onClickDislike,
     conversationId,
-    vmStatus,
     activeTabId: options?.activeTabId,
   }
 }
