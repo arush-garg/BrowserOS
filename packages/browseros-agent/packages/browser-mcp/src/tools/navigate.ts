@@ -9,6 +9,13 @@ export const navigate = defineTool({
     page: z.number().int().describe('Page id from `tabs`.'),
     action: z.enum(['url', 'back', 'forward', 'reload']).default('url'),
     url: z.string().optional().describe('Required when action is "url".'),
+    snapshot: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        "Include a fresh snapshot in the response (default true). Pass false when you will snapshot separately or don't need refs — saves significant context on navigation-heavy tasks.",
+      ),
   }),
   annotations: {
     title: 'Navigate page',
@@ -38,7 +45,9 @@ export const navigate = defineTool({
       refreshed?.url ?? ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
     response.text(`navigated (${args.action}) -> ${origin}`)
     response.data({ page: args.page, url: origin })
-    response.includeSnapshot(args.page)
+    if (args.snapshot !== false) {
+      response.includeSnapshot(args.page)
+    }
     return undefined
   },
 })

@@ -28,6 +28,11 @@ struct NavigateArgs {
     action: NavigateAction,
     /// Required when action is "url".
     url: Option<String>,
+    /// Include a fresh snapshot in the response (default true). Pass false when you will
+    /// snapshot separately or don't need refs — saves significant context on
+    /// navigation-heavy tasks.
+    #[serde(default = "super::default_true")]
+    snapshot: bool,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -83,7 +88,9 @@ fn handler<'a>(
         };
         response.text(format!("navigated ({action}) -> {origin}"));
         response.data(json!({ "page": args.page, "url": origin }));
-        response.include_snapshot(args.page);
+        if args.snapshot {
+            response.include_snapshot(args.page);
+        }
         Ok(None)
     })
 }

@@ -62,7 +62,6 @@ export const Chat = () => {
     isRestoringConversation,
     activeTabId,
     conversationId,
-    vmStatus,
     isIncognito,
     retryLastTurn,
   } = useChatSessionContext()
@@ -74,16 +73,26 @@ export const Chat = () => {
     id: string
     text: string
     status: 'pending' | 'injected'
+    /** Index into `messages` after which this steer should appear. */
+    afterMessageIndex: number
   }
   const [steerMessages, setSteerMessages] = useState<SteerMessageItem[]>([])
 
-  // When a steer is sent, optimistically add it to the chat frame as pending.
-  const handleSteerSent = useCallback((text: string) => {
-    setSteerMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), text, status: 'pending' as const },
-    ])
-  }, [])
+  // When a steer is sent, record its position so we can interleave it correctly.
+  const handleSteerSent = useCallback(
+    (text: string) => {
+      setSteerMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          text,
+          status: 'pending' as const,
+          afterMessageIndex: messages.length - 1,
+        },
+      ])
+    },
+    [messages.length],
+  )
 
   const {
     popupVisible,
@@ -137,7 +146,6 @@ export const Chat = () => {
 
   // Trigger JTBD popup when AI finishes responding
   const previousChatStatus = useRef(status)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only trigger on status change
   useEffect(() => {
     const aiWasProcessing =
       previousChatStatus.current === 'streaming' ||
@@ -154,7 +162,6 @@ export const Chat = () => {
   // the goal is met. Continue only when evaluation says the goal is not yet met.
   // Any failure (no server, bad response, network error) falls back to injecting
   // a keep-going message so an active goal never silently stalls.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only trigger on status change
   useEffect(() => {
     const aiWasProcessing =
       previousChatStatus.current === 'streaming' ||
@@ -199,7 +206,6 @@ export const Chat = () => {
   }, [status])
 
   // Insert transcript into input when transcription completes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: only trigger on transcript/transcribing change
   useEffect(() => {
     if (voice.transcript && !voice.isTranscribing) {
       setInput((prev) => {
@@ -302,7 +308,9 @@ export const Chat = () => {
     [stop, sendMessage, mode, attachedTabs, recordMessageSent],
   )
 
-  // When the agent starts streaming, mark pending steer messages as injected (solid).
+  // Lifecycle for steer bubbles:
+  // - pending → injected when the model starts streaming (steer was received)
+  // - clear injected bubbles once the turn completes (model already confirmed inline)
   const prevChatStatusRef = useRef(status)
   useEffect(() => {
     if (status === 'streaming' && prevChatStatusRef.current !== 'streaming') {
@@ -311,6 +319,12 @@ export const Chat = () => {
           m.status === 'pending' ? { ...m, status: 'injected' as const } : m,
         ),
       )
+    }
+    const aiWasBusy =
+      prevChatStatusRef.current === 'streaming' ||
+      prevChatStatusRef.current === 'submitted'
+    if (aiWasBusy && status === 'ready') {
+      setSteerMessages([])
     }
     prevChatStatusRef.current = status
   }, [status])

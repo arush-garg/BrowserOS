@@ -227,6 +227,22 @@ impl Input {
             .await
     }
 
+    pub async fn fill_backend_node(
+        &self,
+        backend_node_id: i64,
+        value: &str,
+        clear: bool,
+    ) -> Result<Option<Point>, CoreError> {
+        self.with_page_session_retry(|session| {
+            let value = value.to_string();
+            async move {
+                self.fill_node(&session, backend_node_id, &value, clear)
+                    .await
+            }
+        })
+        .await
+    }
+
     async fn fill_node(
         &self,
         session: &ProtocolSession,
@@ -261,6 +277,14 @@ impl Input {
         let resolved = self.observer.resolve_ref(ref_id).await?;
         scroll_into_view(&resolved.session, resolved.backend_node_id).await;
         focus_element(&resolved.session, resolved.backend_node_id).await
+    }
+
+    pub async fn focus_backend_node(&self, backend_node_id: i64) -> Result<(), CoreError> {
+        self.with_page_session_retry(|session| async move {
+            scroll_into_view(&session, backend_node_id).await;
+            focus_element(&session, backend_node_id).await
+        })
+        .await
     }
 
     pub async fn type_text(&self, text: &str) -> Result<(), CoreError> {
@@ -506,6 +530,59 @@ const SELECT_OPTION_FN: &str = "function(val){\
   }\
   return null;\
 }";
+
+impl Input {
+    /// Resolve a CSS selector against the current main frame DOM to a `backendNodeId` via
+    /// `DOM.getDocument` + `DOM.querySelector` + `DOM.describeNode`. Returns an error when the
+    /// selector matches no element or any CDP call fails. The root node is fetched with
+    /// `depth: -1` and `pierce: true` so shadow-DOM content is reachable.
+    pub async fn resolve_selector_to_backend_node(&self, selector: &str) -> Result<i64, CoreError> {
+        let session = self.page_session().await?;
+        let doc: Value = session
+            .send("DOM.getDocument", json!({ "depth": -1, "pierce": true }))
+            .await?;
+        let root_node_id = doc
+            .get("root")
+            .and_then(Value::as_object)
+            .and_then(|root| root.get("nodeId"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if root_node_id == 0 {
+            return Err(CoreError::Message(
+                "DOM.getDocument returned no root nodeId.".to_string(),
+            ));
+        }
+
+        let matched: Value = session
+            .send(
+                "DOM.querySelector",
+                json!({ "nodeId": root_node_id, "selector": selector }),
+            )
+            .await?;
+        let matched_node_id = matched.get("nodeId").and_then(Value::as_i64).unwrap_or(0);
+        if matched_node_id == 0 {
+            return Err(CoreError::Message(format!(
+                "selector {:?} matched no elements.",
+                selector
+            )));
+        }
+
+        let described: Value = session
+            .send("DOM.describeNode", json!({ "nodeId": matched_node_id }))
+            .await?;
+        let backend_node_id = described
+            .get("node")
+            .and_then(Value::as_object)
+            .and_then(|node| node.get("backendNodeId"))
+            .and_then(Value::as_i64);
+        backend_node_id.ok_or_else(|| {
+            CoreError::Message(format!(
+                "DOM.describeNode returned no backendNodeId for selector {:?}.",
+                selector
+            ))
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

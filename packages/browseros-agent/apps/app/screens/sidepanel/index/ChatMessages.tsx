@@ -30,6 +30,8 @@ export interface SteerMessageItem {
   id: string
   text: string
   status: 'pending' | 'injected'
+  /** Index into the messages array after which this steer should appear. */
+  afterMessageIndex: number
 }
 
 export interface ChatMessagesProps {
@@ -86,6 +88,11 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
             const likeAction = () => onClickLike(message.id)
             const dislikeAction = (comment?: string) =>
               onClickDislike(message.id, comment)
+
+            // Steers sent after this message but before the next one
+            const steersAfterThis = steerMessages?.filter(
+              (s) => s.afterMessageIndex === messageIndex,
+            )
 
             return (
               <Fragment key={message.id}>
@@ -158,28 +165,28 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
                     onClickDislike={dislikeAction}
                   />
                 ) : null}
+                {steersAfterThis?.map((msg) => (
+                  <Fragment key={msg.id}>
+                    <Message from="user">
+                      <MessageContent>
+                        <div
+                          className={cn(
+                            'flex items-start gap-2 rounded-lg px-3 py-2 text-sm',
+                            msg.status === 'pending'
+                              ? 'border-2 border-[var(--accent-orange)]/50 border-dashed bg-muted/30 text-muted-foreground italic'
+                              : 'border border-border/50 border-solid bg-muted/50',
+                          )}
+                        >
+                          <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" />
+                          <span>{msg.text}</span>
+                        </div>
+                      </MessageContent>
+                    </Message>
+                  </Fragment>
+                ))}
               </Fragment>
             )
           })}
-          {steerMessages?.map((msg) => (
-            <Fragment key={msg.id}>
-              <Message from="user">
-                <MessageContent>
-                  <div
-                    className={cn(
-                      'flex items-start gap-2 rounded-lg px-3 py-2 text-sm',
-                      msg.status === 'pending'
-                        ? 'border-2 border-[var(--accent-orange)]/50 border-dashed bg-muted/30 text-muted-foreground italic'
-                        : 'border border-border/50 border-solid bg-muted/50',
-                    )}
-                  >
-                    <Bot className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" />
-                    <span>{msg.text}</span>
-                  </div>
-                </MessageContent>
-              </Message>
-            </Fragment>
-          ))}
           {showJtbdPopup && (
             <JtbdPopup
               onTakeSurvey={onTakeSurvey}

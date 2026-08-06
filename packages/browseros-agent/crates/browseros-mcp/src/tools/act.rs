@@ -12,7 +12,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "\
-Act on the page using refs from the last snapshot. \
+Act on the page using refs from the last snapshot, or a live CSS selector \
+(`selector` param, click/hover/fill/focus only — resolved via DOM.querySelector \
+against the current DOM, bypassing stale snapshot refs). \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
@@ -99,6 +101,11 @@ struct ActArgs {
     kind: ActKind,
     /// Target element ref, e.g. "e12".
     r#ref: Option<String>,
+    /// CSS selector resolved at action time via DOM.querySelector — alternative to ref for stable
+    /// selectors. Resolves to the matched element's backendNodeId live, avoiding stale-ref issues
+    /// on dynamic pages. Supported with kinds: click, hover, fill, focus. Mutually exclusive with
+    /// ref.
+    selector: Option<String>,
     /// Text for kind=type.
     text: Option<String>,
     /// Value for kind=fill/select.
@@ -176,12 +183,20 @@ async fn run_kind(
 ) -> ToolExecResult<Option<ToolResult>> {
     match args.kind {
         ActKind::Click => {
-            let Some(ref_id) = args.r#ref.as_deref() else {
-                return Ok(Some(error_result("act click: ref is required.")));
-            };
-            input
-                .click(&Ref(ref_id.to_string()), click_options(args))
-                .await?;
+            if let Some(backend_node_id) = resolve_selector_target(args, "click", input).await? {
+                input
+                    .click_backend_node(backend_node_id, click_options(args))
+                    .await?;
+            } else {
+                let Some(ref_id) = args.r#ref.as_deref() else {
+                    return Ok(Some(error_result(
+                        "act click: ref or selector is required.",
+                    )));
+                };
+                input
+                    .click(&Ref(ref_id.to_string()), click_options(args))
+                    .await?;
+            }
         }
         ActKind::ClickAt => {
             let Some(point) = point_from_args(args, "click_at")? else {
@@ -210,6 +225,11 @@ async fn run_kind(
         }
         ActKind::Fill => {
             if let Some(fields) = &args.fields {
+                if args.selector.is_some() {
+                    return Ok(Some(error_result(
+                        "act fill: selector is not supported with fields[]; use one selector at a time or use ref.",
+                    )));
+                }
                 for field in fields {
                     input
                         .fill(
@@ -219,16 +239,31 @@ async fn run_kind(
                         )
                         .await?;
                 }
-            } else if let (Some(ref_id), Some(value)) =
-                (args.r#ref.as_deref(), args.value.as_deref())
+            } else if args.value.is_none() {
+                return Ok(Some(error_result(
+                    "act fill: provide fields[] or both ref/selector and value.",
+                )));
+            } else if let Some(backend_node_id) =
+                resolve_selector_target(args, "fill", input).await?
             {
                 input
-                    .fill(&Ref(ref_id.to_string()), value, args.clear.unwrap_or(false))
+                    .fill_backend_node(
+                        backend_node_id,
+                        args.value.as_deref().unwrap_or(""),
+                        args.clear.unwrap_or(false),
+                    )
                     .await?;
             } else {
-                return Ok(Some(error_result(
-                    "act fill: provide fields[] or both ref and value.",
-                )));
+                let Some(ref_id) = args.r#ref.as_deref() else {
+                    return Ok(Some(error_result("act fill: ref or selector is required.")));
+                };
+                input
+                    .fill(
+                        &Ref(ref_id.to_string()),
+                        args.value.as_deref().unwrap_or(""),
+                        args.clear.unwrap_or(false),
+                    )
+                    .await?;
             }
         }
         ActKind::Press => {
@@ -238,10 +273,16 @@ async fn run_kind(
             input.press(key).await?;
         }
         ActKind::Hover => {
-            let Some(ref_id) = args.r#ref.as_deref() else {
-                return Ok(Some(error_result("act hover: ref is required.")));
-            };
-            input.hover(&Ref(ref_id.to_string())).await?;
+            if let Some(backend_node_id) = resolve_selector_target(args, "hover", input).await? {
+                input.hover_backend_node(backend_node_id).await?;
+            } else {
+                let Some(ref_id) = args.r#ref.as_deref() else {
+                    return Ok(Some(error_result(
+                        "act hover: ref or selector is required.",
+                    )));
+                };
+                input.hover(&Ref(ref_id.to_string())).await?;
+            }
         }
         ActKind::HoverAt => {
             let Some(point) = point_from_args(args, "hover_at")? else {
@@ -250,10 +291,16 @@ async fn run_kind(
             input.hover_at(point.x, point.y).await?;
         }
         ActKind::Focus => {
-            let Some(ref_id) = args.r#ref.as_deref() else {
-                return Ok(Some(error_result("act focus: ref is required.")));
-            };
-            input.focus(&Ref(ref_id.to_string())).await?;
+            if let Some(backend_node_id) = resolve_selector_target(args, "focus", input).await? {
+                input.focus_backend_node(backend_node_id).await?;
+            } else {
+                let Some(ref_id) = args.r#ref.as_deref() else {
+                    return Ok(Some(error_result(
+                        "act focus: ref or selector is required.",
+                    )));
+                };
+                input.focus(&Ref(ref_id.to_string())).await?;
+            }
         }
         ActKind::Check => {
             let Some(ref_id) = args.r#ref.as_deref() else {
@@ -323,6 +370,28 @@ async fn run_kind(
         }
     }
     Ok(None)
+}
+
+/// If `selector` is provided, resolve it to a backendNodeId; otherwise return `None` so the
+/// caller falls through to the ref-based path. Errors (selector not found, both ref+selector,
+/// or CDP failures) propagate via `ToolError::Message`.
+async fn resolve_selector_target(
+    args: &ActArgs,
+    kind: &str,
+    input: &browseros_core::input::Input,
+) -> ToolExecResult<Option<i64>> {
+    let Some(selector) = args.selector.as_deref() else {
+        return Ok(None);
+    };
+    if args.r#ref.is_some() {
+        return Err(browseros_core::CoreError::Message(format!(
+            "act {kind}: provide either ref or selector, not both."
+        ))
+        .into());
+    }
+    Ok(Some(
+        input.resolve_selector_to_backend_node(selector).await?,
+    ))
 }
 
 fn click_options(args: &ActArgs) -> ClickOptions {

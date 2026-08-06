@@ -177,7 +177,25 @@ describe('evaluate tool', () => {
         error: expect.any(String),
       })
       expect(result.structuredContent).not.toHaveProperty('value')
-      expect(textOf(result)).toContain('could not be saved')
+      expect(textOf(result)).toContain(
+        'Failed to save full evaluate result to a BrowserOS output file:',
+      )
+    })
+  })
+
+  it('clamps requested timeout above MAX_TIMEOUT_MS and annotates result', async () => {
+    const result = await executeTool(
+      evaluate,
+      { page: 1, code: 'return 42', timeout: 60_000 },
+      { session: sessionWithEvaluateValue(42) },
+    )
+    const text = textOf(result)
+    expect(text).toContain(
+      'requested timeout 60000ms was clamped to 55000ms max',
+    )
+    expect(result.structuredContent).toMatchObject({
+      requestedTimeoutMs: 60000,
+      appliedTimeoutMs: 55000,
     })
   })
 })

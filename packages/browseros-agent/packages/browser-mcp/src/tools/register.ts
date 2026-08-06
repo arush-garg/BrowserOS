@@ -1,6 +1,6 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { ZodRawShape } from 'zod'
+import { type ZodObject, type ZodRawShape, z } from 'zod'
 import { executeTool } from './framework'
 import {
   type BrowserOutputFileAccess,
@@ -12,7 +12,7 @@ type RegisterFn = (
   name: string,
   config: {
     description: string
-    inputSchema?: ZodRawShape
+    inputSchema?: ZodRawShape | ZodObject<ZodRawShape>
     outputSchema?: ZodRawShape
     annotations?: Record<string, unknown>
   },
@@ -58,6 +58,21 @@ export interface BrowserToolExecutionEvent extends Record<string, unknown> {
   success: boolean
   source: string
   error_message?: string
+}
+
+/**
+ * Advertise a catchall-permissive input schema so agent runtimes that attach
+ * metadata arguments to tool calls (e.g. Hermes injects a `reason` field on
+ * every MCP call) do not reject the tool client-side. The SDK's
+ * zod-to-json-schema emits `additionalProperties: false` for plain object
+ * schemas, which breaks those clients before a request ever reaches the
+ * server. Runtime validation still runs against the strict `tool.input` in
+ * `executeTool`, so unknown keys are stripped, not honored.
+ */
+function permissiveInputSchema<S extends ZodObject<ZodRawShape>>(
+  input: S,
+): ZodObject<ZodRawShape> {
+  return input.catchall(z.unknown()) as ZodObject<ZodRawShape>
 }
 
 function summarizeBrowserToolArgs(
@@ -133,7 +148,7 @@ export function registerBrowserTools(
       tool.name,
       {
         description: tool.description,
-        inputSchema: tool.input.shape,
+        inputSchema: permissiveInputSchema(tool.input),
         ...(tool.output && { outputSchema: tool.output.shape }),
         ...(tool.annotations && {
           annotations: tool.annotations as Record<string, unknown>,

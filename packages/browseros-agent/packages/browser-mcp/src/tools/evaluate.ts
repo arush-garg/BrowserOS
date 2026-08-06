@@ -5,7 +5,8 @@ import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'
 
 const DEFAULT_TIMEOUT_MS = 30_000
-const MAX_TIMEOUT_MS = 30_000
+// CDP Runtime.evaluate enforces a hard 60_000ms wall; stay safely under it.
+const MAX_TIMEOUT_MS = 55_000
 
 const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Use this for page-state reads or small DOM scripts that are awkward with read/grep. Return a value to read it back.`
 
@@ -36,6 +37,15 @@ export const evaluate = defineTool({
       DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
     )
+    const requestedTimeout = args.timeout
+    const timeoutWasClamped =
+      requestedTimeout !== undefined &&
+      Number.isFinite(requestedTimeout) &&
+      requestedTimeout > MAX_TIMEOUT_MS
+    const requestedTimeoutMs =
+      timeoutWasClamped && requestedTimeout !== undefined
+        ? Math.round(requestedTimeout)
+        : undefined
     const result = await session.Runtime.evaluate({
       expression: wrapAsAsyncIife(args.code),
       returnByValue: true,
@@ -56,6 +66,10 @@ export const evaluate = defineTool({
     const value = result.result?.value ?? result.result?.description
     const text = value === undefined ? 'undefined' : safeStringify(value)
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
+    const clampNote =
+      requestedTimeoutMs !== undefined
+        ? `(note: requested timeout ${requestedTimeoutMs}ms was clamped to ${MAX_TIMEOUT_MS}ms max)`
+        : null
     if (text.length > TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS) {
       const excerpt = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
       const wrappedText = wrapUntrusted(text, origin)
@@ -66,39 +80,56 @@ export const evaluate = defineTool({
           extension: 'txt',
           content: wrappedText,
         })
-        return textResult(
-          [
-            wrapUntrusted(excerpt, origin),
-            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) saved to: ${path}`,
-          ].join('\n\n'),
-          {
-            page: args.page,
-            contentLength,
-            writtenToFile: true,
-            path,
-          },
-        )
+        const sections = [
+          `Full evaluate result saved to: ${path}`,
+          `(${contentLength} chars; truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)`,
+          clampNote,
+          `Excerpt:`,
+          wrapUntrusted(excerpt, origin),
+        ].filter((section): section is string => section !== null)
+        return textResult(sections.join('\n\n'), {
+          page: args.page,
+          contentLength,
+          writtenToFile: true,
+          path,
+          ...(requestedTimeoutMs !== undefined && {
+            requestedTimeoutMs,
+            appliedTimeoutMs: timeout,
+          }),
+        })
       } catch (error) {
         const saveError = error instanceof Error ? error.message : String(error)
-        return textResult(
-          [
-            wrapUntrusted(excerpt, origin),
-            `Evaluate result truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result (${text.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
-          ].join('\n\n'),
-          {
-            page: args.page,
-            contentLength,
-            writtenToFile: false,
-            outputWriteFailed: true,
-            error: saveError,
-          },
-        )
+        const sections = [
+          `Failed to save full evaluate result to a BrowserOS output file: ${saveError}`,
+          `(${contentLength} chars; truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)`,
+          clampNote,
+          `Excerpt:`,
+          wrapUntrusted(excerpt, origin),
+        ].filter((section): section is string => section !== null)
+        return textResult(sections.join('\n\n'), {
+          page: args.page,
+          contentLength,
+          writtenToFile: false,
+          outputWriteFailed: true,
+          error: saveError,
+          ...(requestedTimeoutMs !== undefined && {
+            requestedTimeoutMs,
+            appliedTimeoutMs: timeout,
+          }),
+        })
       }
     }
 
-    return textResult(wrapUntrusted(text, origin), {
+    const inlineSections = [wrapUntrusted(text, origin), clampNote].filter(
+      (section): section is string => section !== null,
+    )
+    return textResult(inlineSections.join('\n\n'), {
       page: args.page,
       value,
+      ...(requestedTimeoutMs !== undefined && {
+        requestedTimeoutMs,
+        appliedTimeoutMs: timeout,
+      }),
     })
   },
 })

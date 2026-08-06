@@ -14,7 +14,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-const MAX_TIMEOUT_MS: u64 = 30_000;
+// CDP Runtime.evaluate enforces a hard 60_000ms wall; stay safely under it.
+const MAX_TIMEOUT_MS: u64 = 55_000;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
@@ -71,6 +72,11 @@ fn handler<'a>(
         }
         let page = ctx.session.pages.get_session(PageId(args.page)).await?;
         let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+        let timeout_was_clamped = matches!(
+            args.timeout,
+            Some(value) if value.is_finite() && value > 0.0 && value.round() > MAX_TIMEOUT_MS as f64
+        );
+        let requested_timeout_ms = args.timeout.map(|value| value.round() as u64);
         let result: EvaluateResult = page
             .session
             .send(
@@ -109,47 +115,73 @@ fn handler<'a>(
             let excerpt = safe_prefix(&text, INLINE_PAGE_CONTENT_MAX_CHARS);
             let wrapped_text = wrap_untrusted(&text, &origin);
             let content_length = wrapped_text.len();
+            let inline_excerpt = wrap_untrusted(&excerpt, &origin);
+            let clamp_note = if timeout_was_clamped {
+                Some(format!(
+                    "(note: requested timeout {}ms was clamped to {MAX_TIMEOUT_MS}ms max)",
+                    requested_timeout_ms.unwrap_or(0)
+                ))
+            } else {
+                None
+            };
             match write_temp_tool_output_file(&ctx.output_files, "evaluate", "txt", &wrapped_text)
                 .await
             {
                 Ok(path) => {
-                    return Ok(Some(text_result(
-                        [
-                            wrap_untrusted(&excerpt, &origin),
-                            format!(
-                                "Evaluate result truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result ({} chars) saved to: {}",
-                                text.len(),
-                                path.display()
-                            ),
-                        ]
-                        .join("\n\n"),
-                        Some(json!({
-                            "page": args.page,
-                            "contentLength": content_length,
-                            "writtenToFile": true,
-                            "path": path.to_string_lossy()
-                        })),
-                    )));
+                    let mut structured = json!({
+                        "page": args.page,
+                        "contentLength": content_length,
+                        "writtenToFile": true,
+                        "path": path.to_string_lossy()
+                    });
+                    if let (Value::Object(object), Some(requested)) =
+                        (&mut structured, requested_timeout_ms)
+                    {
+                        object.insert("requestedTimeoutMs".to_string(), json!(requested));
+                        object.insert("appliedTimeoutMs".to_string(), json!(timeout));
+                    }
+                    let mut sections: Vec<String> = vec![
+                        format!("Full evaluate result saved to: {}", path.display()),
+                        format!(
+                            "({content_length} chars; truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)"
+                        ),
+                    ];
+                    if let Some(note) = clamp_note.as_ref() {
+                        sections.push(note.clone());
+                    }
+                    sections.push("Excerpt:".to_string());
+                    sections.push(inline_excerpt);
+                    return Ok(Some(text_result(sections.join("\n\n"), Some(structured))));
                 }
                 Err(err) => {
                     let save_error = err.to_string();
-                    return Ok(Some(text_result(
-                        [
-                            wrap_untrusted(&excerpt, &origin),
-                            format!(
-                                "Evaluate result truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result ({} chars) could not be saved to a BrowserOS output file: {save_error}",
-                                text.len()
-                            ),
-                        ]
-                        .join("\n\n"),
-                        Some(json!({
-                            "page": args.page,
-                            "contentLength": content_length,
-                            "writtenToFile": false,
-                            "outputWriteFailed": true,
-                            "error": save_error
-                        })),
-                    )));
+                    let mut structured = json!({
+                        "page": args.page,
+                        "contentLength": content_length,
+                        "writtenToFile": false,
+                        "outputWriteFailed": true,
+                        "error": save_error
+                    });
+                    if let (Value::Object(object), Some(requested)) =
+                        (&mut structured, requested_timeout_ms)
+                    {
+                        object.insert("requestedTimeoutMs".to_string(), json!(requested));
+                        object.insert("appliedTimeoutMs".to_string(), json!(timeout));
+                    }
+                    let mut sections: Vec<String> = vec![
+                        format!(
+                            "Failed to save full evaluate result to a BrowserOS output file: {save_error}"
+                        ),
+                        format!(
+                            "({content_length} chars; truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)"
+                        ),
+                    ];
+                    if let Some(note) = clamp_note.as_ref() {
+                        sections.push(note.clone());
+                    }
+                    sections.push("Excerpt:".to_string());
+                    sections.push(inline_excerpt);
+                    return Ok(Some(text_result(sections.join("\n\n"), Some(structured))));
                 }
             }
         }
@@ -157,10 +189,17 @@ fn handler<'a>(
         if let (Value::Object(object), Some(value)) = (&mut structured, value) {
             object.insert("value".to_string(), value);
         }
-        Ok(Some(text_result(
-            wrap_untrusted(&text, &origin),
-            Some(structured),
-        )))
+        if let (Value::Object(object), Some(requested)) = (&mut structured, requested_timeout_ms) {
+            object.insert("requestedTimeoutMs".to_string(), json!(requested));
+            object.insert("appliedTimeoutMs".to_string(), json!(timeout));
+        }
+        let mut sections: Vec<String> = vec![wrap_untrusted(&text, &origin)];
+        if let Some(requested) = requested_timeout_ms.filter(|_| timeout_was_clamped) {
+            sections.push(format!(
+                "(note: requested timeout {requested}ms was clamped to {MAX_TIMEOUT_MS}ms max)"
+            ));
+        }
+        Ok(Some(text_result(sections.join("\n\n"), Some(structured))))
     })
 }
 
