@@ -7,7 +7,7 @@ use crate::{
 use serde_json::{Value, json};
 
 const LARGE_SNAPSHOT_TOKEN_THRESHOLD: usize = 15_000;
-const MAX_INLINE_EXCERPT_TOKENS: usize = 5_000;
+const MAX_INLINE_EXCERPT_TOKENS: usize = 2_500; // Reduced to focus on more relevant context
 
 #[derive(Debug, Clone)]
 pub struct FormattedSnapshot {

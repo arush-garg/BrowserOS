@@ -28,6 +28,64 @@ interface ToolExecuteOptions {
 
 const BROWSER_TOOL_TIMEOUT_MS = 120_000
 
+/** Marker appended by browser MCP tools when the current page requires auth. */
+const LOGIN_HINT_MARKER = '[BrowserOS note] This page requires authentication'
+
+/**
+ * When a navigate/act result contains the login-hint marker, append a
+ * byok-shaped `login_required` nudge block so the sidepanel parser can
+ * surface the card. Only runs on the chat path where there is no
+ * TurnRegistry to emit user_action_required out-of-band.
+ */
+function maybeInjectLoginNudge(
+  result: BrowserToolResult,
+  toolName: string,
+): BrowserToolResult {
+  if (
+    toolName !== 'navigate' &&
+    toolName !== 'act' &&
+    !toolName.endsWith('/navigate') &&
+    !toolName.endsWith('/act')
+  )
+    return result
+
+  const textContent = result.content
+    .filter((c): c is ContentBlock & { type: 'text' } => c.type === 'text')
+    .map((c) => c.text)
+    .join('\n')
+
+  if (!textContent.includes(LOGIN_HINT_MARKER)) return result
+
+  // Extract URL from structuredContent (navigate sets it) or the text
+  // body (act does not).
+  let url = ''
+  const structured = result.structuredContent as
+    | (Record<string, unknown> & { url?: string })
+    | undefined
+  if (structured?.url) {
+    url = String(structured.url)
+  }
+  if (!url) {
+    const match = textContent.match(/->\s*(https?:\/\/\S+)/)
+    url = match?.[1] ?? ''
+  }
+
+  return {
+    ...result,
+    content: [
+      ...result.content,
+      {
+        type: 'text' as const,
+        text: JSON.stringify({
+          type: 'login_required',
+          url,
+          reason: 'Authentication required',
+        }),
+      },
+    ],
+  }
+}
+
 function summarizeBrowserToolParams(params: unknown): Record<string, unknown> {
   if (!params || typeof params !== 'object') {
     return { inputType: typeof params }
@@ -161,7 +219,15 @@ export function buildBrowserToolSet(
               errorSummary: summarizeBrowserToolError(result.content),
             })
           }
-          return { content: result.content, isError: result.isError ?? false }
+          // For the chat path there is no TurnRegistry to emit
+          // user_action_required out-of-band, so we fold the login hint
+          // into the tool result itself as a byok-shaped block that the
+          // sidepanel nudge parser already understands.
+          const injected = maybeInjectLoginNudge(result, def.name)
+          return {
+            content: injected.content,
+            isError: injected.isError ?? false,
+          }
         } catch (error) {
           logger.info('Browser chat tool threw', {
             ...logBase,

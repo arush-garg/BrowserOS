@@ -1199,3 +1199,114 @@ describe('new-tab origin', () => {
     expect(prompt).not.toContain('The active tab is the New Tab chat UI')
   })
 })
+
+// ---------------------------------------------------------------------------
+// 11. ACTIVE TAB CONTEXT
+//
+// Why: When the user opens the side panel, the extension sends the currently
+// active tab (URL, title, pageId) as part of the BrowserContext. The agent
+// should use this as implicit context so it knows what page the user is
+// looking at without needing to be told.
+//
+// Guard rules are critical:
+// - chrome://newtab → the chat UI itself, not a web page
+// - chrome-extension:// → internal BrowserOS pages
+// - about:blank → no content
+// - edge://, devtools://, view-source:// → same class of non-injectable pages
+// ---------------------------------------------------------------------------
+
+describe('active tab context', () => {
+  it('does not include active_tab section when activeTab is absent', () => {
+    const prompt = buildRegular()
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('includes active_tab section with url and title when activeTab is a real page', () => {
+    const prompt = buildRegular({
+      activeTab: {
+        id: 123,
+        url: 'https://example.com',
+        title: 'Example',
+        pageId: 123,
+      },
+    })
+    expect(prompt).toContain('<active_tab>')
+    expect(prompt).toContain('**URL:** https://example.com')
+    expect(prompt).toContain('**Title:** Example')
+    expect(prompt).toContain('**Page ID:** 123')
+  })
+
+  it('includes active_tab section without title when title is absent', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 456, url: 'https://github.com' },
+    })
+    expect(prompt).toContain('<active_tab>')
+    expect(prompt).toContain('**URL:** https://github.com')
+    expect(prompt).not.toContain('**Title:**')
+  })
+
+  it('does NOT include active_tab section for chrome://newtab', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 1, url: 'chrome://newtab/', title: 'New Tab' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for chrome-extension://', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 2, url: 'chrome-extension://abc/page.html' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for about:blank', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 3, url: 'about:blank', title: '' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for chrome: protocol URLs', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 4, url: 'chrome://settings/', title: 'Settings' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for edge: protocol URLs', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 5, url: 'edge://settings/', title: 'Settings' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for devtools: protocol URLs', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 6, url: 'devtools://devtools/bundled/inspector.html' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section for view-source: protocol URLs', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 7, url: 'view-source:https://example.com' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('does NOT include active_tab section when url is undefined', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 8, title: 'No URL' },
+    })
+    expect(prompt).not.toContain('<active_tab>')
+  })
+
+  it('includes guidance to use browser tools for fresh snapshot', () => {
+    const prompt = buildRegular({
+      activeTab: { id: 10, url: 'https://example.com' },
+    })
+    expect(prompt).toContain(
+      'Use the browser tools (`read`, `snapshot`, `grep`) to pull a fresh snapshot',
+    )
+  })
+})

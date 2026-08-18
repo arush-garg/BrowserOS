@@ -2,15 +2,21 @@ import type { ScreenshotCaptureOptions } from '@browseros/browser-core/core/scre
 import type { Viewport } from '@browseros/cdp-protocol/domains/page'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { z } from 'zod'
-import { defineTool } from './framework'
+import { defineTool, intArg, numberArg } from './framework'
 
 const DEFAULT_SCREENSHOT_FORMAT = 'jpeg'
 const DEFAULT_SCREENSHOT_QUALITY = 80
 const DEFAULT_SCREENSHOT_SIZE = { width: 1024, height: 768 } as const
 const screenshotFormat = z.enum(['jpeg', 'png', 'webp'])
 const screenshotSize = z.object({
-  width: z.number().int().positive().max(4096).default(1024),
-  height: z.number().int().positive().max(4096).default(768),
+  width: numberArg()
+    .refine((v) => v >= 0, 'width must be positive')
+    .refine((v) => v <= 4096, 'width must be <= 4096')
+    .default(1024),
+  height: numberArg()
+    .refine((v) => v >= 0, 'height must be positive')
+    .refine((v) => v <= 4096, 'height must be <= 4096')
+    .default(768),
 })
 
 type ScreenshotFormat = z.infer<typeof screenshotFormat>
@@ -51,9 +57,12 @@ export const screenshot = defineTool({
   description:
     'Capture a screenshot of the page, returned inline. Defaults to JPEG quality 80 around 1024x768; prefer snapshot for structure/actions.',
   input: z.object({
-    page: z.number().int(),
+    page: intArg(),
     format: screenshotFormat.default(DEFAULT_SCREENSHOT_FORMAT),
-    quality: z.number().int().min(0).max(100).optional(),
+    quality: numberArg()
+      .refine((v) => v >= 0, 'quality must be >= 0')
+      .refine((v) => v <= 100, 'quality must be <= 100')
+      .optional(),
     size: screenshotSize
       .optional()
       .describe('Max viewport capture size. Defaults to 1024x768.'),

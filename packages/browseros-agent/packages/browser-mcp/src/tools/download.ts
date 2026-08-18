@@ -4,7 +4,7 @@ import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { z } from 'zod'
 import { getToolOutputDir } from '../tool-output-dir'
-import { defineTool, textResult } from './framework'
+import { defineTool, intArg, textResult } from './framework'
 import { recordBrowserOutputFile } from './output-file'
 
 export const download = defineTool({
@@ -12,7 +12,7 @@ export const download = defineTool({
   description:
     'Click an element (by ref from the last snapshot) to trigger a file download, and save it to a BrowserOS output file. Returns the saved path and filename.',
   input: z.object({
-    page: z.number().int().describe('Page id from `tabs`.'),
+    page: intArg().describe('Page id from `tabs`.'),
     ref: z
       .string()
       .describe('Ref of the element that triggers the download, e.g. "e12".'),

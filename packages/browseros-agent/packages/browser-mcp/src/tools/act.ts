@@ -4,6 +4,8 @@ import { z } from 'zod'
 import {
   defineTool,
   errorResult,
+  intArg,
+  numberArg,
   type ToolResult,
   textResult,
 } from './framework'
@@ -17,7 +19,7 @@ export const act = defineTool({
   description:
     'Act on the page using refs from the last snapshot, or a live CSS selector (`selector` param, click/hover/fill/focus only - resolved via DOM.querySelector against the current DOM, bypassing stale snapshot refs). kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Reads back a diff of what changed - re-snapshot if you need fresh refs.',
   input: z.object({
-    page: z.number().int(),
+    page: intArg(),
     kind: z.enum([
       'click',
       'click_at',
@@ -53,19 +55,18 @@ export const act = defineTool({
       .optional()
       .describe('Key/combo for kind=press, e.g. "Enter", "Control+a".'),
     direction: z.enum(['up', 'down', 'left', 'right']).optional(),
-    amount: z
-      .number()
+    amount: numberArg()
       .optional()
       .describe('Scroll amount (wheel notches), default 3.'),
-    x: z.number().optional().describe('Viewport x coordinate for *_at kinds.'),
-    y: z.number().optional().describe('Viewport y coordinate for *_at kinds.'),
+    x: numberArg().optional().describe('Viewport x coordinate for *_at kinds.'),
+    y: numberArg().optional().describe('Viewport y coordinate for *_at kinds.'),
     targetRef: z.string().optional().describe('Target ref for kind=drag.'),
-    startX: z.number().optional().describe('Drag start x coordinate.'),
-    startY: z.number().optional().describe('Drag start y coordinate.'),
-    endX: z.number().optional().describe('Drag end x coordinate.'),
-    endY: z.number().optional().describe('Drag end y coordinate.'),
+    startX: numberArg().optional().describe('Drag start x coordinate.'),
+    startY: numberArg().optional().describe('Drag start y coordinate.'),
+    endX: numberArg().optional().describe('Drag end x coordinate.'),
+    endY: numberArg().optional().describe('Drag end y coordinate.'),
     button: z.enum(['left', 'middle', 'right']).optional(),
-    clickCount: z.number().int().optional(),
+    clickCount: intArg().optional(),
     clear: z.boolean().optional(),
   }),
   annotations: {

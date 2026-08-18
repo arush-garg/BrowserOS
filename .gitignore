@@ -38,3 +38,5 @@ packages/browseros/build/extensions/
 
 .github/agents/*
 .llm/
+
+dump/

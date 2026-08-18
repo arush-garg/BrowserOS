@@ -22,6 +22,7 @@ import { ChatMessageActions } from './ChatMessageActions'
 import { ConnectAppCard } from './ConnectAppCard'
 import { getMessageSegments } from './getMessageSegments'
 import { JtbdPopup } from './JtbdPopup'
+import { LoginRequiredCard } from './LoginRequiredCard'
 import { ScheduleSuggestionCard } from './ScheduleSuggestionCard'
 import { ToolBatch } from './ToolBatch'
 import { UserActionMessage } from './UserActionMessage'
@@ -136,6 +137,12 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
                             return segment.nudgeType ===
                               'schedule_suggestion' ? (
                               <ScheduleSuggestionCard
+                                key={segment.key}
+                                data={segment.data}
+                                isLastMessage={isLastMessage}
+                              />
+                            ) : segment.nudgeType === 'login_required' ? (
+                              <LoginRequiredCard
                                 key={segment.key}
                                 data={segment.data}
                                 isLastMessage={isLastMessage}

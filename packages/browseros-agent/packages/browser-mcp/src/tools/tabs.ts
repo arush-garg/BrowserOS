@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineTool, errorResult, textResult } from './framework'
+import { defineTool, errorResult, intArg, textResult } from './framework'
 
 export const tabs = defineTool({
   name: 'tabs',
@@ -15,7 +15,7 @@ export const tabs = defineTool({
       .boolean()
       .default(true)
       .describe('Open without stealing focus for action="new".'),
-    page: z.number().int().optional().describe('Page id for action="close".'),
+    page: intArg().optional().describe('Page id for action="close".'),
   }),
   annotations: {
     title: 'Manage tabs',

@@ -100,7 +100,7 @@ type AgentRouteService = {
 
 type AgentRouteDeps = {
   service?: AgentRouteService
-  browser?: Pick<Browser, 'resolveTabIds'>
+  browser?: Pick<Browser, 'resolveTabIds' | 'listPages' | 'newPage'>
   browserosServerPort?: number
   resourcesDir?: string
   /** Optional override; defaults to a fresh in-memory checker. */

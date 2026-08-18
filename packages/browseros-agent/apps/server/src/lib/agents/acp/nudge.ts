@@ -21,6 +21,8 @@
 export function isNudgeToolName(toolName: string): boolean {
   return (
     toolName === 'suggest_app_connection' ||
-    toolName.endsWith('/suggest_app_connection')
+    toolName.endsWith('/suggest_app_connection') ||
+    toolName === 'login_required' ||
+    toolName.endsWith('/login_required')
   )
 }

@@ -395,6 +395,7 @@ export class AiSdkAgent {
       declinedApps: config.resolvedConfig.declinedApps,
       origin: config.resolvedConfig.origin,
       generatedOutputReadAvailable: 'filesystem_read' in filesystemTools,
+      activeTab: config.browserContext?.activeTab,
     })
 
     // Configure compaction for context window management

@@ -4,6 +4,8 @@ import {
   clampTimeout,
   defineTool,
   errorResult,
+  intArg,
+  numberArg,
   textResult,
   throwIfAborted,
 } from './framework'
@@ -20,19 +22,18 @@ export const wait = defineTool({
   description:
     'Pause before continuing. Prefer acting directly and reading the diff; use wait only when there is no reliable UI signal yet. for="time" (default) pauses for value ms; "text" waits for a substring to appear; "selector" waits for a CSS selector to match. value is optional — for "time" it defaults to 2000ms, so calling wait with just a page pauses ~2s.',
   input: z.object({
-    page: z.number().int(),
+    page: intArg(),
     for: z
       .enum(['text', 'selector', 'time'])
       .default('time')
       .describe('What to wait for. Defaults to "time" (a fixed pause).'),
     value: z
-      .union([z.string(), z.number()])
+      .union([z.string(), numberArg()])
       .optional()
       .describe(
         'Optional. For for="time", ms to pause (default 2000). For "text"/"selector", the substring or CSS selector to wait for.',
       ),
-    timeout: z
-      .number()
+    timeout: numberArg()
       .optional()
       .describe('Max wait in ms before giving up (default 2000).'),
   }),

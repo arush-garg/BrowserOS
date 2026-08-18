@@ -3,6 +3,8 @@ import {
   CheckCircle2,
   CircleDashed,
   Clock,
+  ExternalLink,
+  FileText,
   Loader2,
   ShieldX,
   XCircle,
@@ -18,6 +20,9 @@ import type {
   ToolInvocationInfo,
   ToolInvocationState,
 } from './getMessageSegments'
+
+const URL_PATTERN = /https?:\/\/[^\s<>"')\],;]+/g
+const FILE_PATH_PATTERN = /(?:^|\s)(\/[\w./-]+)/g
 
 export interface ToolBatchProps {
   tools: ToolInvocationInfo[]
@@ -47,7 +52,10 @@ export const ToolBatch: FC<ToolBatchProps> = ({
   }, [isStreaming, isLastMessage, isLastBatch, hasUserInteracted])
 
   const completedCount = tools.filter((t) => isToolCompleted(t.state)).length
-  const triggerTitle = `${completedCount}/${tools.length} actions completed`
+  const inProgressCount = tools.filter((t) => isToolInProgress(t.state)).length
+  const triggerTitle = `${completedCount}/${tools.length} actions completed${
+    inProgressCount > 0 ? ` · ${inProgressCount} in progress` : ''
+  }`
 
   const onManualToggle = (newState: boolean) => {
     setHasUserInteracted(true)
@@ -63,7 +71,24 @@ export const ToolBatch: FC<ToolBatchProps> = ({
             <TaskItem className="flex items-center gap-2">
               <ToolStatusIcon state={tool.state} />
               <span className="flex-1">{formatToolName(tool.toolName)}</span>
+              {tool.state === 'input-available' &&
+                typeof tool.input?.description === 'string' &&
+                tool.input.description.length > 0 && (
+                  <span className="flex items-center gap-1 text-muted-foreground text-xs">
+                    <Loader2 className="h-3 w-3 animate-spin text-[var(--accent-orange)]" />
+                    {truncateDescription(tool.input.description)}
+                  </span>
+                )}
             </TaskItem>
+            {tool.state === 'output-available' &&
+              tool.output &&
+              formatToolLinks(tool.output).length > 0 && (
+                <div className="ml-7 flex flex-col gap-0.5">
+                  {formatToolLinks(tool.output).map((link) => (
+                    <ToolLink key={link.value} link={link} />
+                  ))}
+                </div>
+              )}
           </div>
         ))}
       </TaskContent>
@@ -78,6 +103,11 @@ const formatToolName = (name: string) => {
     ?.replace(/^./, (s) => s.toUpperCase())
 }
 
+const truncateDescription = (description: string): string => {
+  if (description.length <= 40) return description
+  return `${description.slice(0, 37)}...`
+}
+
 const isToolCompleted = (state: ToolInvocationState) =>
   state === 'result' || state === 'output-available'
 
@@ -90,6 +120,68 @@ const isToolDenied = (state: ToolInvocationState) => state === 'output-denied'
 
 const isToolWaitingForApproval = (state: ToolInvocationState) =>
   state === 'approval-requested'
+
+type ToolLink = { value: string; type: 'url' | 'path' }
+
+function extractTextFromOutput(output: unknown): string[] {
+  if (!output) return []
+  if (typeof output === 'string') return [output]
+  if (Array.isArray(output)) {
+    return output.flatMap(extractTextFromOutput)
+  }
+  if (typeof output === 'object') {
+    const obj = output as Record<string, unknown>
+    if (typeof obj.content === 'string') return [obj.content]
+    return extractTextFromOutput(obj.content)
+  }
+  return []
+}
+
+function formatToolLinks(output: unknown): ToolLink[] {
+  const texts = extractTextFromOutput(output)
+  const seen = new Set<string>()
+  const links: ToolLink[] = []
+
+  for (const text of texts) {
+    for (const match of text.matchAll(URL_PATTERN)) {
+      const url = match[0].replace(/[.,;)]+$/, '')
+      if (!seen.has(url)) {
+        seen.add(url)
+        links.push({ value: url, type: 'url' })
+      }
+    }
+    for (const match of text.matchAll(FILE_PATH_PATTERN)) {
+      const path = match[1].trim()
+      if (!seen.has(path) && path.includes('/')) {
+        seen.add(path)
+        links.push({ value: path, type: 'path' })
+      }
+    }
+  }
+
+  return links
+}
+
+const ToolLink: FC<{ link: ToolLink }> = ({ link }) => {
+  if (link.type === 'url') {
+    return (
+      <button
+        type="button"
+        onClick={() => chrome.tabs.create({ url: link.value })}
+        className="flex items-center gap-1 text-blue-500 text-xs hover:text-blue-600 hover:underline"
+      >
+        <ExternalLink className="h-3 w-3 shrink-0" />
+        <span className="max-w-[280px] truncate">{link.value}</span>
+      </button>
+    )
+  }
+  return (
+    <span className="flex items-center gap-1 text-muted-foreground text-xs">
+      <FileText className="h-3 w-3 shrink-0" />
+      <span className="max-w-[280px] truncate">{link.value}</span>
+    </span>
+  )
+}
 
 const ToolStatusIcon: FC<{ state: ToolInvocationState }> = ({ state }) => {
   if (isToolCompleted(state)) {

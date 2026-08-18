@@ -1,7 +1,7 @@
 import { buildContentMarkdownExpression } from '@browseros/browser-core/content-markdown'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import { z } from 'zod'
-import { defineTool, errorResult, textResult } from './framework'
+import { defineTool, errorResult, intArg, textResult } from './framework'
 import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'
 
@@ -22,7 +22,7 @@ export const read = defineTool({
   description:
     'Extract page content as markdown (default), plain text, or a list of links. For reading/scraping, not acting.',
   input: z.object({
-    page: z.number().int(),
+    page: intArg(),
     format: z.enum(['markdown', 'text', 'links']).default('markdown'),
     selector: z.string().optional().describe('Restrict to a CSS subtree.'),
     viewportOnly: z

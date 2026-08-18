@@ -1,12 +1,12 @@
 import { z } from 'zod'
-import { defineTool, errorResult } from './framework'
+import { defineTool, errorResult, intArg } from './framework'
 
 export const navigate = defineTool({
   name: 'navigate',
   description:
     'Navigate a page: load a url, or go back/forward/reload. Returns a fresh snapshot of the resulting page (navigation invalidates refs, so old [ref=eN] handles no longer apply).',
   input: z.object({
-    page: z.number().int().describe('Page id from `tabs`.'),
+    page: intArg().describe('Page id from `tabs`.'),
     action: z.enum(['url', 'back', 'forward', 'reload']).default('url'),
     url: z.string().optional().describe('Required when action is "url".'),
     snapshot: z

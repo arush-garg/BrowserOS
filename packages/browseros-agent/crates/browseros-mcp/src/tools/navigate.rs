@@ -10,6 +10,27 @@ Navigate a page: load a url, or go back/forward/reload. \
 Returns a fresh snapshot of the resulting page \
 (navigation invalidates refs, so old [ref=eN] handles no longer apply).";
 
+/// Returns a short human-readable hint when the destination URL looks like a
+/// login or OAuth page. Empty string when no hint is needed.
+fn login_page_hint(url: &str) -> &'static str {
+    let lower = url.to_lowercase();
+    if lower.contains("/login")
+        || lower.contains("/sign-in")
+        || lower.contains("/signin")
+        || lower.contains("/oauth")
+        || lower.contains("/authorize")
+        || lower.contains("/auth")
+        || lower.contains("/account/login")
+        || (lower.contains("login") && lower.contains("google")
+            || lower.contains("github")
+            || lower.contains("slack")
+            || lower.contains("linear"))
+    {
+        return "\n[BrowserOS note] This page requires authentication. STOP and wait for the user to log in manually, then send a follow-up message to continue.";
+    }
+    ""
+}
+
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum NavigateAction {
@@ -88,6 +109,12 @@ fn handler<'a>(
         };
         response.text(format!("navigated ({action}) -> {origin}"));
         response.data(json!({ "page": args.page, "url": origin }));
+        if let Some(url) = args.url.as_deref() {
+            let hint = login_page_hint(url);
+            if !hint.is_empty() {
+                response.text(hint);
+            }
+        }
         if args.snapshot {
             response.include_snapshot(args.page);
         }

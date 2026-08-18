@@ -70,6 +70,34 @@ export type AgentStreamEvent =
       appName: string
       reason: string
     }
+  | {
+      type: 'step_start'
+      description: string
+      id?: string
+    }
+  | {
+      type: 'step_end'
+      id?: string
+    }
+  | {
+      // Emitted when a browser tool (navigate/act) lands on a page
+      // that requires user authentication. Pauses the agent turn; the
+      // renderer surfaces a login card. The user resumes the turn by
+      // sending any message after they've manually logged in.
+      type: 'user_action_required'
+      toolCallId: string
+      kind: 'login_required'
+      url: string
+      title?: string
+      reason: string
+    }
+  | {
+      // Emitted when the user sends the follow-up message that resumes
+      // a turn previously paused on user_action_required. Lets the UI
+      // collapse the login card without re-prompting.
+      type: 'user_action_resumed'
+      toolCallId: string
+    }
 
 /**
  * Inline image attachment forwarded to the ACP `prompt` request as an

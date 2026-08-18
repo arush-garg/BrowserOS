@@ -6,7 +6,7 @@ import {
 import { wrapUntrusted } from './trust-boundary'
 
 const LARGE_SNAPSHOT_TOKEN_THRESHOLD = 15_000
-const MAX_INLINE_EXCERPT_TOKENS = 5_000
+const MAX_INLINE_EXCERPT_TOKENS = 2_500 // Reduced to focus on more relevant context
 
 export interface FormattedSnapshot {
   text: string

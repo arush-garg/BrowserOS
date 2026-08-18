@@ -144,11 +144,23 @@ function handleAcpEvent(
     case 'text_delta':
       enqueueTextDelta(event, controller, state)
       return
+    case 'step_start':
+      enqueueStepStart(event, controller)
+      return
+    case 'step_end':
+      enqueueStepEnd(event, controller)
+      return
     case 'tool_call':
       enqueueToolCall(event, controller, state)
       return
     case 'app_connection_request':
       enqueueAppConnectionRequest(event, controller, state)
+      return
+    case 'user_action_required':
+      enqueueUserActionRequired(event, controller, state)
+      return
+    case 'user_action_resumed':
+      enqueueUserActionResumed(event, controller, state)
       return
     case 'status':
       controller.enqueue({
@@ -168,7 +180,33 @@ function handleAcpEvent(
     case 'error':
       finishWithError(controller, state, event.message)
       return
+    default:
+      break
   }
+}
+
+function enqueueStepStart(
+  event: Extract<AgentStreamEvent, { type: 'step_start' }>,
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+): void {
+  controller.enqueue({
+    type: 'data-acp-step',
+    id: event.id,
+    data: { description: event.description, kind: 'start' },
+    transient: true,
+  })
+}
+
+function enqueueStepEnd(
+  event: Extract<AgentStreamEvent, { type: 'step_end' }>,
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+): void {
+  controller.enqueue({
+    type: 'data-acp-step',
+    id: event.id,
+    data: { kind: 'end' },
+    transient: true,
+  })
 }
 
 function enqueueTextDelta(
@@ -287,6 +325,58 @@ function enqueueAppConnectionRequest(
     },
     dynamic: true,
   })
+}
+
+/**
+ * Emit the byok-shaped tool-input + tool-output parts the sidepanel's
+ * existing nudge parser already understands. The wire shape matches
+ * the in-process byok tool sentinel verbatim so getMessageSegments
+ * and LoginRequiredCard work unchanged across both runtimes.
+ */
+function enqueueUserActionRequired(
+  event: Extract<AgentStreamEvent, { type: 'user_action_required' }>,
+  controller: ReadableStreamDefaultController<UIMessageChunk>,
+  _state: AcpUIMessageStreamState,
+): void {
+  const toolName = 'login_required'
+  controller.enqueue({
+    type: 'tool-input-available',
+    toolCallId: event.toolCallId,
+    toolName,
+    input: { url: event.url, title: event.title, reason: event.reason },
+    dynamic: true,
+  })
+  controller.enqueue({
+    type: 'tool-output-available',
+    toolCallId: event.toolCallId,
+    output: {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            type: 'login_required',
+            url: event.url,
+            title: event.title,
+            reason: event.reason,
+          }),
+        },
+      ],
+      isError: false,
+    },
+    dynamic: true,
+  })
+}
+
+function enqueueUserActionResumed(
+  event: Extract<AgentStreamEvent, { type: 'user_action_resumed' }>,
+  _controller: ReadableStreamDefaultController<UIMessageChunk>,
+  _state: AcpUIMessageStreamState,
+): void {
+  // No byok card to emit — just let the stream continue. The UI
+  // collapses the login card on the next message render cycle.
+  void event.toolCallId
+  void _controller
+  void _state
 }
 
 function finish(

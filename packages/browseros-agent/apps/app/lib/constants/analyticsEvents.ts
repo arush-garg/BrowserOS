@@ -261,6 +261,12 @@ export const BREADCRUMB_CONNECT_MANUAL_EVENT = 'breadcrumb.connect.manual'
 export const BREADCRUMB_CONNECT_COMPLETED_EVENT = 'breadcrumb.connect.completed'
 
 /** @public */
+export const BREADCRUMB_LOGIN_VIEWED_EVENT = 'breadcrumb.login.viewed'
+
+/** @public */
+export const BREADCRUMB_LOGIN_RESUMED_EVENT = 'breadcrumb.login.resumed'
+
+/** @public */
 export const BREADCRUMB_SCHEDULE_DISMISSED_EVENT =
   'breadcrumb.schedule.dismissed'
 

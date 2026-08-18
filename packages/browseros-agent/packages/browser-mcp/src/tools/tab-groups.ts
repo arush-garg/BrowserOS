@@ -1,6 +1,6 @@
 import type { TabGroup } from '@browseros/browser-core/tab-groups'
 import { z } from 'zod'
-import { defineTool, errorResult, textResult } from './framework'
+import { defineTool, errorResult, intArg, textResult } from './framework'
 
 const TAB_GROUP_COLORS = [
   'grey',
@@ -33,7 +33,7 @@ export const tab_groups = defineTool({
       .enum(['list', 'create', 'update', 'ungroup', 'close'])
       .default('list'),
     pages: z
-      .array(z.number().int())
+      .array(intArg())
       .optional()
       .describe('Page ids for action="create" or "ungroup".'),
     groupId: z

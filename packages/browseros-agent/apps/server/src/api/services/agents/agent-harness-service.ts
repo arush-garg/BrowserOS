@@ -41,6 +41,7 @@ export {
   type QueuedMessageAttachment,
 } from '../../../lib/agents/storage/message-queue'
 
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
   AgentHistoryPage,
@@ -50,6 +51,51 @@ import type {
 } from '../../../lib/agents/types'
 import { getBrowserosDir } from '../../../lib/browseros-dir'
 import { logger } from '../../../lib/logger'
+
+/** Marker appended by browser MCP tools when the current page requires auth. */
+const LOGIN_HINT_MARKER = '[BrowserOS note] This page requires authentication'
+
+/**
+ * Detect a login-hint marker in a completed tool_call event for
+ * navigate/act. When present, emit a user_action_required event so the
+ * renderer surfaces the login card instead of silently letting the LLM
+ * continue past the auth wall.
+ */
+function maybeEmitLoginRequired(
+  turnId: string,
+  event: AgentStreamEvent,
+  registry: TurnRegistry,
+): void {
+  if (event.type !== 'tool_call' || event.status !== 'completed') return
+  const toolName = event.title
+  if (
+    toolName !== 'navigate' &&
+    toolName !== 'act' &&
+    !toolName.endsWith('/navigate') &&
+    !toolName.endsWith('/act')
+  )
+    return
+  if (!event.text.includes(LOGIN_HINT_MARKER)) return
+
+  // Pull the URL out of the result text — navigate emits
+  // "navigated (url) -> <url>" and act emits tool data with a url
+  // field. Fall back to an empty string if we can't find one.
+  const urlMatch = event.text.match(/->\s*(https?:\/\/\S+)/)
+  const url = urlMatch?.[1] ?? ''
+  const titleMatch = event.text.match(/\n\[BrowserOS note\] (.+?)\. STOP/)
+  const reason = titleMatch?.[1] ?? 'Authentication required'
+
+  const pushed = registry.pushEvent(turnId, {
+    type: 'user_action_required',
+    toolCallId: randomUUID(),
+    kind: 'login_required',
+    url,
+    reason,
+  })
+  if (!pushed) {
+    logger.warn('login hint dropped (turn ended mid-call)', { turnId })
+  }
+}
 
 export type AgentLiveness = 'working' | 'idle' | 'asleep' | 'error'
 
@@ -767,6 +813,10 @@ export class AgentHarnessService {
           const { done, value } = await reader.read()
           if (done) break
           if (value.type === 'error') lastErrorMessage = value.message
+          // Out-of-band login card: detect the hint baked into the tool
+          // result text and emit a user_action_required event so the UI
+          // pauses the turn for manual authentication.
+          maybeEmitLoginRequired(turnId, value, this.turnRegistry)
           this.turnRegistry.pushEvent(turnId, value)
           this.emitTurnLifecycle(agent, { type: 'turn_event', event: value })
         }

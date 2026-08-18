@@ -1,5 +1,11 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
-import type { TypeOf, ZodObject, ZodRawShape } from 'zod'
+import {
+  type TypeOf,
+  type ZodObject,
+  type ZodRawShape,
+  type ZodTypeAny,
+  z,
+} from 'zod'
 import {
   type ContentItem,
   type ToolResult as ResponseToolResult,
@@ -145,6 +151,61 @@ function abortError(reason?: unknown): Error {
   )
   error.name = 'AbortError'
   return error
+}
+
+/**
+ * Model-generated tool calls routinely stringify numeric arguments
+ * (`"page": "7"`). Strict `z.number()` rejects those and the model then
+ * replays the identical call in a loop, so numeric fields are coerced at the
+ * schema boundary instead.
+ *
+ * Unlike `z.coerce.number()` this rewrites strings only: booleans, null, and
+ * arrays still fail validation rather than silently becoming 0 or 1. Blank and
+ * non-finite strings are passed through untouched so the inner schema reports
+ * the real type error.
+ */
+function fromNumericString(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (trimmed === '') return value
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) ? parsed : value
+}
+
+/** Wraps a numeric schema so numeric strings are accepted as numbers. */
+export function numeric<T extends ZodTypeAny>(schema: T) {
+  return z.preprocess(fromNumericString, schema)
+}
+
+/** Page ids, window ids, counts — a coercing `z.number().int()`. */
+export function intArg() {
+  return numeric(z.number().int())
+}
+
+/** Coordinates, scroll amounts, durations — a coercing `z.number()`. */
+export function numberArg() {
+  return numeric(z.number())
+}
+
+/**
+ * Reports fields the schema rewrote from a string to a number, so the model
+ * sees the correction instead of repeating the mistake on the next call.
+ */
+export function describeNumericCoercions(
+  rawArgs: unknown,
+  parsedArgs: Record<string, unknown>,
+): string[] {
+  if (typeof rawArgs !== 'object' || rawArgs === null) return []
+  const notes: string[] = []
+  for (const [key, before] of Object.entries(
+    rawArgs as Record<string, unknown>,
+  )) {
+    if (typeof before !== 'string') continue
+    const after = parsedArgs[key]
+    if (typeof after !== 'number') continue
+    notes.push(`note: ${key} was coerced from "${before}" to ${after}`)
+  }
+  return notes
 }
 
 /** Validate args, run the handler, and convert any failure into an instructive error result. */

@@ -89,7 +89,7 @@ describe('formatSnapshotResult', () => {
       expect(data).not.toHaveProperty('snapshot')
       expect(result.text).toContain(path)
       expect(result.text).toContain(
-        'Showing the first 5000 estimated tokens inline',
+        'Showing the first 2500 estimated tokens inline',
       )
       expect(result.text).toContain(firstMarker)
       expect(result.text).not.toContain(lastMarker)

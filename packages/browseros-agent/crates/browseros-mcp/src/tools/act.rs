@@ -11,6 +11,27 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// Returns a short human-readable hint when the current page looks like a
+/// login or OAuth page. Empty string when no hint is needed.
+fn login_page_hint(url: &str) -> &'static str {
+    let lower = url.to_lowercase();
+    if lower.contains("/login")
+        || lower.contains("/sign-in")
+        || lower.contains("/signin")
+        || lower.contains("/oauth")
+        || lower.contains("/authorize")
+        || lower.contains("/auth")
+        || lower.contains("/account/login")
+        || (lower.contains("login") && lower.contains("google")
+            || lower.contains("github")
+            || lower.contains("slack")
+            || lower.contains("linear"))
+    {
+        return "\n[BrowserOS note] This page requires authentication. STOP and wait for the user to log in manually, then send a follow-up message to continue.";
+    }
+    ""
+}
+
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot, or a live CSS selector \
 (`selector` param, click/hover/fill/focus only — resolved via DOM.querySelector \
@@ -170,6 +191,16 @@ fn handler<'a>(
         response.data(json!({ "kind": args.kind.as_str() }));
         response.include_diff(args.page, true);
         response.include_console_summary(args.page, console_start);
+        let hint = ctx
+            .session
+            .pages
+            .get_info(PageId(args.page))
+            .await
+            .map(|page_info| login_page_hint(&page_info.url))
+            .unwrap_or("");
+        if !hint.is_empty() {
+            response.text(hint);
+        }
         Ok(Some(text_result(
             format!("ok ({})", args.kind.as_str()),
             None,
