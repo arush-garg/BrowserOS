@@ -13,6 +13,10 @@ export const KLAVIS_PROXY_RETRY_BACKOFF_MS = [
 export const TIMEOUTS = {
   // Agent/Tool execution
   TOOL_CALL: 120_000,
+  /** Hard per-handler deadline inside executeTool.  Prevents a hung CDP call
+   * (crashed/frozen tab) from holding the HTTP connection—and the MCP caller's
+   * RPC lock—open for the caller's full timeout budget. */
+  TOOL_HANDLER_DEADLINE: 25_000,
   TOOL_POST_ACTION: 2_000,
   TAB_GROUP_OP: 10_000,
   TEST_PROVIDER: 15_000,

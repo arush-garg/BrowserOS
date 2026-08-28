@@ -13,6 +13,7 @@ export const HERMES_SUPPORTED_BROWSEROS_PROVIDER_TYPES = [
   'openai',
   'openai-compatible',
   'openrouter',
+  'hermes',
 ] as const
 
 export type HermesSupportedBrowserosProviderType =

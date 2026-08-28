@@ -9,6 +9,7 @@ import {
   errorResult,
   executeTool,
 } from '@browseros/browser-mcp/tools/framework'
+import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import { z } from 'zod'
 
 type RegisteredHandler = (args: Record<string, unknown>) => Promise<{
@@ -422,6 +423,43 @@ describe('browser tool framework post-actions', () => {
     expect(text).toContain('- heading "Arrived" [ref=e1]')
   })
 
+  it('returns an error and does not hang when the handler exceeds the deadline', async () => {
+    const hungTool = defineTool({
+      name: 'hung_tool',
+      description: 'Simulates a hung CDP call.',
+      input: z.object({}),
+      handler: async (_args, ctx) => {
+        // Waits until the deadline AbortSignal fires, simulating a hung CDP call
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener(
+            'abort',
+            () => reject(ctx.signal?.reason),
+            {
+              once: true,
+            },
+          )
+        })
+      },
+    })
+    const session = {
+      observe: () => ({ snapshot: async () => ({ text: '' }) }),
+      pages: { getTabId: () => undefined },
+    } as unknown as BrowserSession
+
+    // Override TOOL_HANDLER_DEADLINE to a short value so the test runs fast
+    const origDeadline = TIMEOUTS.TOOL_HANDLER_DEADLINE
+    ;(TIMEOUTS as Record<string, number>).TOOL_HANDLER_DEADLINE = 50
+
+    try {
+      const result = await executeTool(hungTool, {}, { session })
+      expect(result.isError).toBe(true)
+      expect(textOf(result)).toContain('timed out')
+      expect(textOf(result)).toContain('hung_tool')
+    } finally {
+      ;(TIMEOUTS as Record<string, number>).TOOL_HANDLER_DEADLINE = origDeadline
+    }
+  })
+
   it('does not snapshot navigate validation errors', async () => {
     const fake = createFakeServer()
     const calls: string[] = []
@@ -446,7 +484,10 @@ describe('browser tool framework post-actions', () => {
 
     expect(result?.isError).toBe(true)
     expect(result?.content).toEqual([
-      { type: 'text', text: 'navigate: url is required for action="url".' },
+      {
+        type: 'text',
+        text: 'navigate: provide either `url` or `macro`+`query` for action="url".',
+      },
     ])
     expect(calls).toEqual([])
   })

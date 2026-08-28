@@ -69,3 +69,14 @@ dbg_macro = "warn"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Keep target/debug lean: full DWARF for every dep was ballooning it to ~11 GB.
+# Line tables preserve file/line info in backtraces without the bulk.
+[profile.dev]
+debug = "line-tables-only"
+
+# cargo test / clippy --all-targets artifacts are throwaway: no debug info and
+# no incremental cache (they don't share incremental reuse with dev builds).
+[profile.test]
+debug = 0
+incremental = false

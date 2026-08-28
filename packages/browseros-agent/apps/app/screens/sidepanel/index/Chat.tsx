@@ -79,19 +79,22 @@ export const Chat = () => {
   const [steerMessages, setSteerMessages] = useState<SteerMessageItem[]>([])
 
   // When a steer is sent, record its position so we can interleave it correctly.
+  // If the agent is already working, the steer is "injected" inline — it doesn't
+  // need to wait for the next status transition to show as confirmed.
   const handleSteerSent = useCallback(
     (text: string) => {
+      const isAgentBusy = status === 'streaming' || status === 'submitted'
       setSteerMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           text,
-          status: 'pending' as const,
+          status: isAgentBusy ? ('injected' as const) : ('pending' as const),
           afterMessageIndex: messages.length - 1,
         },
       ])
     },
-    [messages.length],
+    [messages.length, status],
   )
 
   const {
@@ -310,7 +313,8 @@ export const Chat = () => {
 
   // Lifecycle for steer bubbles:
   // - pending → injected when the model starts streaming (steer was received)
-  // - clear injected bubbles once the turn completes (model already confirmed inline)
+  // - on busy → ready: ACP turns cannot drain mid-turn server-side, so any
+  //   still-queued steers are fetched and delivered as follow-up messages
   const prevChatStatusRef = useRef(status)
   useEffect(() => {
     if (status === 'streaming' && prevChatStatusRef.current !== 'streaming') {
@@ -324,10 +328,16 @@ export const Chat = () => {
       prevChatStatusRef.current === 'streaming' ||
       prevChatStatusRef.current === 'submitted'
     if (aiWasBusy && status === 'ready') {
-      setSteerMessages([])
+      // Deliver any steers the server never injected mid-turn (ACP turns
+      // run as a single step inside the spawned agent process). They come
+      // back here and go out as fresh messages.
+      void steer.drainSteers().then((undelivered) => {
+        for (const text of undelivered) handleInterruptAndSend(text)
+        setSteerMessages([])
+      })
     }
     prevChatStatusRef.current = status
-  }, [status])
+  }, [status, steer.drainSteers, handleInterruptAndSend])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

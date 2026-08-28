@@ -1,7 +1,12 @@
-import { AlertCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 
 const SURVEY_DIRECTIONS = [
   'competitor',
@@ -105,6 +110,17 @@ export const ChatError: FC<ChatErrorProps> = ({
     return 'Something went wrong'
   }
 
+  const details = useMemo(() => {
+    const parts: string[] = []
+    parts.push(`name: ${error.name}`)
+    parts.push(`message: ${error.message}`)
+    if (error.stack) parts.push(`stack:\n${error.stack}`)
+    if (providerType) parts.push(`provider: ${providerType}`)
+    return parts.join('\n\n')
+  }, [error, providerType])
+
+  const [detailsOpen, setDetailsOpen] = useState(false)
+
   return (
     <div className="mx-4 flex flex-col items-center justify-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
       <div className="flex items-center gap-2 text-muted-foreground">
@@ -112,6 +128,28 @@ export const ChatError: FC<ChatErrorProps> = ({
         <span className="font-medium text-sm">{getTitle()}</span>
       </div>
       <p className="text-center text-destructive text-xs">{text}</p>
+      <Collapsible
+        className="w-full"
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+      >
+        <CollapsibleTrigger
+          className="flex w-full items-center justify-center gap-1 text-muted-foreground text-xs underline hover:text-foreground"
+          aria-label="Show full error details"
+        >
+          {detailsOpen ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+          Show error details
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <pre className="mt-2 max-h-60 w-full overflow-auto whitespace-pre-wrap break-words rounded border border-destructive/20 bg-background/60 p-2 text-left text-foreground text-xs">
+            {details}
+          </pre>
+        </CollapsibleContent>
+      </Collapsible>
       {isConnectionError && url && (
         <a
           href={url}
@@ -140,7 +178,7 @@ export const ChatError: FC<ChatErrorProps> = ({
             rel="noopener noreferrer"
             className="underline hover:text-foreground"
           >
-            Learn more
+            Learn more about rate limits
           </a>
           {' or '}
           <a

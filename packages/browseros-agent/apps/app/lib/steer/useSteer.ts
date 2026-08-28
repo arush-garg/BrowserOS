@@ -10,12 +10,13 @@ export type SteerStatus =
   | 'sending'
   | 'queued_active_turn'
   | 'queued_next_turn'
+  | 'queued_end_of_turn'
   | 'error'
 
 interface EnqueueSteerResult {
   ok: true
   steerId: string
-  status: 'queued_active_turn' | 'queued_next_turn'
+  status: 'queued_active_turn' | 'queued_next_turn' | 'queued_end_of_turn'
 }
 interface EnqueueSteerError {
   ok: false
@@ -55,7 +56,7 @@ async function enqueueSteer(
   return {
     ok: true,
     steerId: json.steerId as string,
-    status: json.status as 'queued_active_turn' | 'queued_next_turn',
+    status: json.status as EnqueueSteerResult['status'],
   }
 }
 
@@ -76,11 +77,15 @@ export interface UseSteerReturn {
   error: string | null
   /**
    * Send a steer message. The status transitions through:
-   * sending → queued_active_turn | queued_next_turn | error
+   * sending → queued_active_turn | queued_next_turn |
+   * queued_end_of_turn | error
    */
   sendSteer: (text: string) => void
   /** Abort an in-flight request */
   abort: () => void
+  /** Fetch and clear any server-queued steers not yet delivered to the
+   *  agent (ACP turns cannot drain mid-turn). Returns their texts. */
+  drainSteers: () => Promise<string[]>
   /** The most recent text sent via sendSteer, for showing pending state */
   lastSentText: string
   /** Clear the pending text display without aborting the steer */
@@ -143,6 +148,23 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
     setLastSentText('')
   }, [])
 
+  const drainSteers = useCallback(async (): Promise<string[]> => {
+    let baseUrl: string
+    try {
+      baseUrl = await getAgentServerUrl()
+    } catch {
+      return []
+    }
+    try {
+      const res = await fetch(`${baseUrl}/chat/${conversationId}/steer`)
+      if (!res.ok) return []
+      const json = (await res.json()) as { steers?: string[] }
+      return json.steers ?? []
+    } catch {
+      return []
+    }
+  }, [conversationId])
+
   return useMemo(
     () => ({
       isExpanded,
@@ -152,6 +174,7 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
       error,
       sendSteer,
       abort,
+      drainSteers,
       lastSentText,
       clearPendingText,
     }),
@@ -163,6 +186,7 @@ export function useSteer({ conversationId }: UseSteerOptions): UseSteerReturn {
       error,
       sendSteer,
       abort,
+      drainSteers,
       lastSentText,
       clearPendingText,
     ],

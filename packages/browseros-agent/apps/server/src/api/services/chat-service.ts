@@ -58,7 +58,7 @@ export class ChatService {
     | {
         ok: true
         steerId: string
-        status: 'queued_active_turn' | 'queued_next_turn'
+        status: 'queued_active_turn' | 'queued_next_turn' | 'queued_end_of_turn'
       }
     | { ok: false; error: string } {
     if (!this.deps.steerQueue) {
@@ -66,10 +66,26 @@ export class ChatService {
     }
     const result = this.deps.steerQueue.enqueue(conversationId, text)
     if (!result.ok) return result
-    const status = this.activeTurnConversations.has(conversationId)
-      ? ('queued_active_turn' as const)
-      : ('queued_next_turn' as const)
+    const isActiveTurn = this.activeTurnConversations.has(conversationId)
+    const session = this.deps.sessionStore.get(conversationId)
+    // ACP turns run entirely inside the spawned agent process — a single
+    // AI SDK step with no server-side tool loop, so prepareStep never
+    // fires mid-turn to drain the queue. Report the honest delivery
+    // point instead of promising an injection that cannot happen.
+    const status =
+      !isActiveTurn || session?.agent.isAcp
+        ? ('queued_end_of_turn' as const)
+        : ('queued_active_turn' as const)
     return { ok: true, steerId: result.steerId, status }
+  }
+
+  /** Client-visible drain: returns queued steers as plain texts and empties
+   *  the queue. Used when a turn ends with steers still pending (ACP turns
+   *  cannot consume them mid-turn), so the client can surface them as
+   *  follow-up messages instead of leaving them stranded. */
+  drainSteers(conversationId: string): string[] {
+    if (!this.deps.steerQueue) return []
+    return this.deps.steerQueue.drain(conversationId).map((steer) => steer.text)
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: chat request orchestration; refactor tracked separately
@@ -369,6 +385,16 @@ export class ChatService {
       agent: session.agent.toolLoopAgent,
       uiMessages: promptUiMessages,
       abortSignal,
+      onError: (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.error('Agent stream error', {
+          conversationId: request.conversationId,
+          provider: llmConfig.provider,
+          error: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        })
+        return message.split('\n')[0] || message
+      },
       onFinish: async ({ messages }: { messages: UIMessage[] }) => {
         // The agent loop returns `messages` containing the prompt-
         // wrapped user text. Restore the raw form before persisting

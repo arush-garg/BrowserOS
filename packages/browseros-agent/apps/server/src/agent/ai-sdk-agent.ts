@@ -148,6 +148,11 @@ export class AiSdkAgent {
     return this._toolNames
   }
 
+  /** True when the backing provider is ACP (Claude Code, Codex, Hermes, custom). */
+  get isAcp(): boolean {
+    return this._modelClose != null
+  }
+
   static async create(config: AiSdkAgentConfig): Promise<AiSdkAgent> {
     const contextWindow =
       config.resolvedConfig.contextWindowSize ??
@@ -405,6 +410,15 @@ export class AiSdkAgent {
     const normalizationOptions = getMessageNormalizationOptions(
       config.resolvedConfig,
     )
+    // ModelMessage user content may be a string or an array of parts;
+    // only the text parts are meaningful for the steer merge.
+    const messageText = (content: ModelMessage['content']): string =>
+      typeof content === 'string'
+        ? content
+        : content
+            .map((part) => (part.type === 'text' ? part.text : ''))
+            .filter(Boolean)
+            .join('\n')
     const prepareStep = async (options: {
       messages: ModelMessage[]
       steps: ReadonlyArray<StepWithUsage>
@@ -420,14 +434,30 @@ export class AiSdkAgent {
           config.resolvedConfig.conversationId,
         )
         if (steers.length > 0) {
-          const steerText = steers.map((s) => s.text).join('\n\n---\n\n')
-          messages = [
-            ...messages,
-            {
-              role: 'user' as const,
-              content: `<STEER>\n${steerText}\n</STEER>`,
-            },
-          ]
+          const steerText = `<STEER>\n${steers
+            .map((s) => s.text)
+            .join('\n\n---\n\n')}\n</STEER>`
+          const lastMessage = messages[messages.length - 1]
+          // ACP turns send only the trailing user message to the spawned
+          // agent (acpx continuation mode reads prior turns from its own
+          // session record). Appending a separate <STEER> message would
+          // push the real user message off the wire, so merge into it.
+          // Model-backed providers get a standalone message so the steer
+          // lands after the latest tool output, not inside the prompt.
+          if (useMcpBoundaryOnly && lastMessage?.role === 'user') {
+            messages = [
+              ...messages.slice(0, -1),
+              {
+                role: 'user' as const,
+                content: `${messageText(lastMessage.content)}\n\n${steerText}`,
+              },
+            ]
+          } else {
+            messages = [
+              ...messages,
+              { role: 'user' as const, content: steerText },
+            ]
+          }
         }
       }
 

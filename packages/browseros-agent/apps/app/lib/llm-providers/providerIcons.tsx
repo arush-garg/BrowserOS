@@ -38,6 +38,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   'qwen-code': Qwen,
   codex: OpenAI,
   'claude-code': Anthropic,
+  hermes: null,
   'acp-custom': null,
 }
 

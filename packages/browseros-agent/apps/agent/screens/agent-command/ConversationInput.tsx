@@ -410,6 +410,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
     setAttachmentError(null)
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: effect must re-run when input changes to resize the textarea
   useLayoutEffect(() => {
     const element = textareaRef.current
     if (!element) return
@@ -422,7 +423,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
     element.style.overflowY =
       element.scrollHeight > maxHeight ? 'auto' : 'hidden'
     setIsExpandedDraft(nextHeight > collapsedHeight)
-  })
+  }, [input, isConversation])
 
   useEffect(() => {
     if (voice.transcript && !voice.isTranscribing) {

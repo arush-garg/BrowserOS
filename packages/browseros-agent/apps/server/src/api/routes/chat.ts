@@ -106,6 +106,15 @@ export function createChatRoutes(deps: ChatRouteDeps) {
         return c.json({ success: false, message: result.error }, 500)
       },
     )
+    .get(
+      '/:conversationId/steer',
+      zValidator('param', ConversationIdParamSchema),
+      async (c) => {
+        const { conversationId } = c.req.valid('param')
+        const steers = service.drainSteers(conversationId)
+        return c.json({ steers })
+      },
+    )
     .delete(
       '/:conversationId',
       zValidator('param', ConversationIdParamSchema),

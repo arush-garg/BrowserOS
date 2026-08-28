@@ -131,6 +131,15 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#lmstudio',
   }),
+  {
+    id: 'hermes',
+    name: 'Hermes',
+    defaultBaseUrl: 'http://localhost:20128/v1',
+    defaultModelId: 'auto/best-coding',
+    supportsImages: true,
+    contextWindow: 1000000,
+    setupGuideUrl: 'https://docs.browseros.com/features/hermes-provider',
+  },
   enrichTemplate('azure', {
     defaultModelId: '',
     apiKeyUrl:
@@ -153,6 +162,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'qwen-code', label: 'Qwen Code' },
   { value: 'codex', label: 'Codex' },
   { value: 'claude-code', label: 'Claude Code' },
+  { value: 'hermes', label: 'Hermes' },
   { value: 'moonshot', label: 'Moonshot AI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
@@ -187,6 +197,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   codex: '',
   'claude-code': '',
   'acp-custom': '',
+  hermes: 'http://localhost:20128/v1',
   moonshot: 'https://api.moonshot.ai/v1',
   anthropic: 'https://api.anthropic.com/v1',
   openai: 'https://api.openai.com/v1',

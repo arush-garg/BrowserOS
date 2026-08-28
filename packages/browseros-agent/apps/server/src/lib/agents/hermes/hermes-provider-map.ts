@@ -46,7 +46,7 @@ const HERMES_PROVIDER_MAP: Record<
     envVarName: 'ANTHROPIC_API_KEY',
     requiresBaseUrl: false,
   },
-  // Hermes (v2026.4.x) has no provider key named `"openai"`. Per the
+  // Hermes (v2026.4.x) has no provider key named `openai`. Per the
   // upstream docs, `provider: custom` + `base_url` is the canonical
   // shape for any OpenAI-compatible endpoint with an API key — Hermes
   // skips provider lookup and calls the URL directly. Used for both
@@ -66,6 +66,12 @@ const HERMES_PROVIDER_MAP: Record<
     hermesProvider: 'custom',
     envVarName: 'OPENAI_API_KEY',
     requiresBaseUrl: true,
+  },
+  hermes: {
+    hermesProvider: 'custom',
+    envVarName: 'OPENROUTER_API_KEY',
+    requiresBaseUrl: false,
+    defaultBaseUrl: 'http://localhost:20128/v1',
   },
 }
 

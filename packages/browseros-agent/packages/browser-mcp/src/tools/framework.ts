@@ -1,4 +1,5 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
+import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
 import {
   type TypeOf,
   type ZodObject,
@@ -11,6 +12,7 @@ import {
   type ToolResult as ResponseToolResult,
   ToolResponse,
 } from '../response'
+import { classifyBrowserError } from './browser-errors'
 
 export type ToolInputSchema = ZodObject<ZodRawShape>
 export type ToolOutputSchema = ZodObject<ZodRawShape>
@@ -223,19 +225,67 @@ export async function executeTool(
     return errorResult(`Invalid arguments for ${def.name}: ${detail}`)
   }
 
+  // Impose a hard deadline so a hung CDP call (crashed/frozen tab) cannot
+  // hold the HTTP connection—and the MCP caller's RPC lock—open for the
+  // caller's full timeout budget.  The AbortController is combined with the
+  // caller-supplied signal so either source can cancel the handler.
+  const deadlineAc = new AbortController()
+  const deadlineTimer = setTimeout(
+    () =>
+      deadlineAc.abort(
+        new Error(
+          `${def.name} timed out after ${TIMEOUTS.TOOL_HANDLER_DEADLINE}ms`,
+        ),
+      ),
+    TIMEOUTS.TOOL_HANDLER_DEADLINE,
+  )
+  const signals: AbortSignal[] = [deadlineAc.signal]
+  if (ctx.signal) signals.unshift(ctx.signal)
+  const effectiveSignal =
+    signals.length > 1 ? AbortSignal.any(signals) : signals[0]
+  const handlerCtx: ToolContext = { ...ctx, signal: effectiveSignal }
+
   const response = new ToolResponse()
   try {
     const result = await abortable(
-      def.handler(parsed.data as Record<string, unknown>, ctx, response),
-      ctx.signal,
+      def.handler(parsed.data as Record<string, unknown>, handlerCtx, response),
+      effectiveSignal,
     )
     if (result) response.appendResult(result)
-    throwIfAborted(ctx.signal)
+    throwIfAborted(effectiveSignal)
   } catch (err) {
-    if (ctx.signal?.aborted || isAbortError(err)) throw err
-    response.error(
-      `${def.name} failed: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    // Client-side abort (HTTP connection closed): re-throw so the MCP layer
+    // skips send() — there is nothing to respond to.  Distinguish from our
+    // own deadline by checking the *original* ctx.signal first.
+    if (
+      ctx.signal?.aborted ||
+      (isAbortError(err) && !deadlineAc.signal.aborted)
+    ) {
+      throw err
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    if (deadlineAc.signal.aborted) {
+      // Handler deadline fired: surface an actionable error immediately so
+      // the caller's RPC lock is freed without waiting for the full client
+      // timeout budget.
+      response.error(
+        `${def.name} timed out after ${TIMEOUTS.TOOL_HANDLER_DEADLINE}ms — ` +
+          'the browser may be unresponsive. Run snapshot to check page state.',
+      )
+    } else {
+      const classified = classifyBrowserError(err)
+      if (classified) {
+        const { code, recovery } = classified
+        response.error(
+          `${def.name} failed [${code}]: ${message}\nrecovery: ${recovery}`,
+        )
+        response.data({ error: message, code, recovery })
+      } else {
+        response.error(`${def.name} failed: ${message}`)
+      }
+    }
+  } finally {
+    clearTimeout(deadlineTimer)
   }
 
   throwIfAborted(ctx.signal)

@@ -40,3 +40,4 @@ packages/browseros/build/extensions/
 .llm/
 
 dump/
+graphify-out/

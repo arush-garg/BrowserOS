@@ -17,6 +17,7 @@ export type ProviderType =
   | 'codex'
   | 'claude-code'
   | 'acp-custom'
+  | 'hermes'
 
 /**
  * LLM Provider configuration
