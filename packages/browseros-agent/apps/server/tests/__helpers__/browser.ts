@@ -98,7 +98,6 @@ export async function spawnBrowser(
     [
       '--no-first-run',
       '--no-default-browser-check',
-      '--use-mock-keychain',
       '--show-component-extension-options',
       // Match the supported dev/test launch path and keep legacy BrowserOS
       // extensions from trying to talk to the removed controller bridge.

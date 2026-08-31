@@ -69,7 +69,6 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
   const args = [
     '--no-first-run',
     '--no-default-browser-check',
-    '--use-mock-keychain',
     '--show-component-extension-options',
     '--disable-browseros-extensions',
     '--browseros-dock-icon=dev',

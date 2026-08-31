@@ -43,7 +43,6 @@ function chromiumProfile(): string {
 }
 
 const chromiumArgs = [
-  '--use-mock-keychain',
   '--show-component-extension-options',
   '--disable-browseros-server',
   '--disable-browseros-extensions',

@@ -80,7 +80,6 @@ echo ""
 "$BROWSEROS_BINARY" \
   --no-first-run \
   --no-default-browser-check \
-  --use-mock-keychain \
   --show-component-extension-options \
   --disable-browseros-server \
   --disable-browseros-extensions \

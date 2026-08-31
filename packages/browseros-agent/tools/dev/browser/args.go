@@ -77,7 +77,6 @@ func buildArgs(cfg ArgsConfig, resolveBinary func(string) BinaryResolution) []st
 	}
 
 	args = append(args,
-		"--use-mock-keychain",
 		"--show-component-extension-options",
 		"--disable-browseros-server",
 		"--browseros-dock-icon=dev",
