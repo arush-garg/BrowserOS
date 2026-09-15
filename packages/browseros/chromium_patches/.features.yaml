@@ -384,6 +384,12 @@ features:
 
   # ── LAYER 5: FIXES ────────────────────────────────────────
 
+  prevent-tab-switch-detection:
+    description: "feat: prevent websites from detecting tab switches"
+    files:
+      - third_party/blink/renderer/core/dom/document.cc
+      - third_party/blink/renderer/core/page/focus_controller.cc
+
   chromium-ui-fixes:
     description: "fix: chromium ui and behavior fixes"
     files:

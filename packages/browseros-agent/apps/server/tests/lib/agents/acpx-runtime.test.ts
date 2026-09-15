@@ -1388,7 +1388,7 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(ensureSessionCalls).toBe(2)
     expect(events[0]).toMatchObject({
       type: 'status',
-      text: expect.stringContaining('retrying (1/3)'),
+      text: expect.stringContaining('(1/3)'),
     })
     const types = events.map((e) => e.type)
     expect(types).toContain('text_delta')
@@ -1456,6 +1456,52 @@ Use the BrowserOS MCP server for all browser tasks, including browsing the web, 
     expect(types).toContain('text_delta')
     expect(types).toContain('error')
     expect(types.filter((t) => t === 'error')).toHaveLength(1)
+  })
+
+  it('lets Hermes retry 503 admission failures so its provider fallback can run', async () => {
+    const calls: Array<{ method: string; input: unknown }> = []
+    let ensureSessionCalls = 0
+    const runtime = new AcpxRuntime({
+      cwd: '/tmp/browseros-acpx-runtime',
+      stateDir: '/tmp/browseros-acpx-state',
+      retryDelayMs: 0,
+      runtimeFactory: () => ({
+        ...createFakeAcpRuntime(calls),
+        async ensureSession(input) {
+          calls.push({ method: 'ensureSession', input })
+          ensureSessionCalls++
+          if (ensureSessionCalls <= 3) {
+            throw new Error(
+              'API call failed after 3 retries: HTTP 503: Chat admission capacity is temporarily unavailable. Retry shortly.',
+            )
+          }
+          return {
+            sessionKey: input.sessionKey,
+            backend: 'acpx' as const,
+            runtimeSessionName: 'encoded-runtime-state',
+            cwd: input.cwd,
+            acpxRecordId: 'record-1',
+          }
+        },
+      }),
+    })
+    const agent = makeAgent({ id: 'agent-1', adapter: 'hermes' })
+    const events = await collectStream(
+      await runtime.send({
+        agent,
+        sessionId: 'main',
+        sessionKey: agent.sessionKey,
+        message: 'hi',
+        permissionMode: 'approve-all',
+      }),
+    )
+
+    expect(ensureSessionCalls).toBe(4)
+    expect(events.filter((event) => event.type === 'status')).toHaveLength(3)
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'error' }),
+    )
+    expect(events.at(-1)).toMatchObject({ type: 'done' })
   })
 
   it('stops retrying after MAX_RETRIES attempts and emits an error', async () => {
@@ -1582,7 +1628,6 @@ it('reuses cached runtime instances across per-turn timeouts', async () => {
       .filter((call) => call.method === 'startTurn')
       .map((call) => (call.input as { timeoutMs?: number }).timeoutMs),
   ).toEqual([1_000, 2_000])
-})
 })
 
 function makeAgent(input: {

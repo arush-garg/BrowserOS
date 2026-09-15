@@ -82,7 +82,9 @@ describe('registerBrowserTools', () => {
     expect(Object.keys(tabsShape ?? {}).sort()).toEqual([
       'action',
       'background',
+      'field',
       'page',
+      'query',
       'url',
     ])
     const windowsShape = (

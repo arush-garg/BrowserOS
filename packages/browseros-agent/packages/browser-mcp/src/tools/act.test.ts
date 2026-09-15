@@ -71,6 +71,17 @@ function mockInput() {
 
 function mockSessionWithSelector(backendNodeId = 42) {
   const { input, calls } = mockInput()
+  let clickBackendNodeError = false
+  // Override clickBackendNode to simulate stale error on first call if needed
+  const originalClickBackendNode = input.clickBackendNode
+  input.clickBackendNode = async (...args: unknown[]) => {
+    if (!clickBackendNodeError) {
+      clickBackendNodeError = true
+      throw new Error('Element detached')
+    }
+    return originalClickBackendNode(...args)
+  }
+
   return {
     session: {
       input: () => input,
@@ -99,6 +110,8 @@ function mockSessionWithSelector(backendNodeId = 42) {
           beforeUrl: '',
           afterUrl: '',
         }),
+        // Snapshot is a no‑op for tests – just resolves
+        snapshot: async () => {},
       }),
     } as unknown as BrowserSession,
     calls,
@@ -221,5 +234,105 @@ describe('act selector resolution', () => {
     )
     expect(result.isError).toBe(true)
     expect(textOf(result)).toContain('matched no elements')
+  })
+})
+
+describe('act retry logic', () => {
+  it('retries selector-based click on stale refs error', async () => {
+    const { session, calls } = mockSessionWithSelector(42)
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'click', selector: '#my-button' },
+      { session },
+    )
+    // Should succeed on second attempt
+    expect(result.isError).toBeFalsy()
+    // First call throws error, second succeeds
+    const clickCalls = calls.filter((call) => call.kind === 'clickBackendNode')
+    expect(clickCalls).toHaveLength(1) // Only the successful retry is recorded in our mock
+  })
+
+  it('retries selector-based fill on navigation race error', async () => {
+    const { session } = mockSessionWithSelector(55)
+    // Mock to throw navigation race on first fill attempt
+    let fillAttempts = 0
+    const originalFillBackendNode = session.input(1).fillBackendNode
+    session.input(1).fillBackendNode = async (
+      backendNodeId: number,
+      value: string,
+      opts: { clear?: boolean } = {},
+    ) => {
+      fillAttempts++
+      if (fillAttempts === 1) {
+        throw new Error('Navigating frame was detached')
+      }
+      return originalFillBackendNode(backendNodeId, value, opts)
+    }
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'fill', selector: 'input[name=q]', value: 'test' },
+      { session },
+    )
+    expect(result.isError).toBeFalsy()
+    // Should have retried and succeeded
+    expect(fillAttempts).toBe(2)
+  })
+
+  it('returns clear error for ref-based actions after snapshot refresh', async () => {
+    const { session } = mockSessionWithSelector()
+    // Mock to always throw stale refs error for ref actions
+    session.input(1).click = async () => {
+      throw new Error('Element detached')
+    }
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'click', ref: 'e12' },
+      { session },
+    )
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('stale reference for ref "e12"')
+    expect(textOf(result)).toContain(
+      'please refresh the snapshot and retry with a fresh ref',
+    )
+  })
+
+  it('does not retry non-retryable errors', async () => {
+    const { session, calls } = mockSessionWithSelector(42)
+    // Mock to throw a non-retryable error on clickBackendNode (selector-based)
+    session.input(1).clickBackendNode = async () => {
+      throw new Error('Element not visible')
+    }
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'click', selector: '#my-button' },
+      { session },
+    )
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('Element not visible')
+    // Should not retry - only one attempt
+    const clickCalls = calls.filter((call) => call.kind === 'clickBackendNode')
+    expect(clickCalls).toHaveLength(0) // No successful calls
+  })
+
+  it('gives up after max attempts for selector actions', async () => {
+    const { session } = mockSessionWithSelector(42)
+    // Mock to always throw stale refs error
+    let attemptCount = 0
+    session.input(1).clickBackendNode = async () => {
+      attemptCount++
+      throw new Error('Element detached')
+    }
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'click', selector: '#my-button' },
+      { session },
+    )
+    expect(result.isError).toBe(true)
+    // Should have tried maxAttempts times (2)
+    expect(attemptCount).toBe(2)
   })
 })

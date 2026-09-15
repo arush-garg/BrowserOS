@@ -1,6 +1,7 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
 import { z } from 'zod'
+import { classifyBrowserError } from './browser-errors'
 import {
   defineTool,
   errorResult,
@@ -17,7 +18,7 @@ type InputApi = ReturnType<BrowserSession['input']>
 export const act = defineTool({
   name: 'act',
   description:
-    'Act on the page using refs from the last snapshot, or a live CSS selector (`selector` param, click/hover/fill/focus only - resolved via DOM.querySelector against the current DOM, bypassing stale snapshot refs). kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Reads back a diff of what changed - re-snapshot if you need fresh refs.',
+    'Act on the page using refs from the last snapshot, or a live CSS selector (`selector` param, click/hover/fill/focus only - resolved via DOM.querySelector against the current DOM, bypassing stale snapshot refs). kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Reads back a diff of what changed - re-snapshot if you need fresh refs. Automatically retries on stale element errors with a fresh snapshot.',
   input: z.object({
     page: intArg(),
     kind: z.enum([
@@ -81,12 +82,62 @@ export const act = defineTool({
       ? (await ctx.session.pages.getSession(args.page)).session
       : undefined
 
-    const err = await runKind(args, input, session)
-    if (err) return err
+    let attempt = 0
+    const maxAttempts = 2 // initial attempt + one retry (selector actions only)
 
-    response.data({ kind: args.kind })
-    response.includeDiff(args.page, { includeStructured: true })
-    return textResult(`ok (${args.kind})`)
+    while (true) {
+      try {
+        const err = await runKind(args, input, session)
+        if (err) return err
+
+        response.data({ kind: args.kind })
+        response.includeDiff(args.page, { includeStructured: true })
+        return textResult(`ok (${args.kind})`)
+      } catch (err) {
+        attempt++
+        // Determine if the error is retryable
+        const classified = classifyBrowserError(err)
+        const isRetryable =
+          classified &&
+          (classified.code === 'stale_refs' ||
+            classified.code === 'navigation_race')
+
+        // If not retryable or we've exhausted attempts for selector actions, re‑throw
+        if (!isRetryable) {
+          throw err
+        }
+
+        // If the action used a selector, it is safe to retry (idempotent)
+        if (args.selector) {
+          if (attempt >= maxAttempts) {
+            // Give up after max attempts
+            throw err
+          }
+          // Refresh snapshot and retry
+          try {
+            await getFreshSnapshot(args.page, ctx.session)
+          } catch (snapshotErr) {
+            console.warn('Failed to get fresh snapshot for retry:', snapshotErr)
+          }
+          continue // retry the loop
+        }
+
+        // For ref‑based actions, we cannot safely retry (might duplicate side‑effects).
+        // Refresh snapshot for context and return a clear error.
+        try {
+          await getFreshSnapshot(args.page, ctx.session)
+        } catch (snapshotErr) {
+          console.warn(
+            'Failed to get fresh snapshot after stale ref error:',
+            snapshotErr,
+          )
+        }
+        return errorResult(
+          `act: stale reference for ${args.ref ? `ref "${args.ref}"` : 'element'}; ` +
+            'please refresh the snapshot and retry with a fresh ref.',
+        )
+      }
+    }
   },
 })
 
@@ -492,4 +543,12 @@ async function resolveSelectorToBackendNodeId(
       ),
     }
   }
+}
+
+async function getFreshSnapshot(
+  page: number,
+  session: BrowserSession,
+): Promise<void> {
+  // Get a fresh snapshot to recover from stale refs or navigation race
+  await session.observe(page).snapshot()
 }

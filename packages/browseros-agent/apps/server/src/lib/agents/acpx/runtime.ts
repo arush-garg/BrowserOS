@@ -90,7 +90,7 @@ function retryDelay(attempt: number, baseMs: number): Promise<void> {
 
 function isTransientError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err)
-  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|connection reset|connection refused|network error|fetch failed/i.test(
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|connection reset|connection refused|network error|fetch failed|HTTP 503|service unavailable|admission capacity is temporarily unavailable/i.test(
     msg,
   )
 }
@@ -690,9 +690,9 @@ function createAcpxEventStream(
       !cancelled &&
       !hasOutputStarted &&
       attempt < MAX_RETRIES &&
-      isTransientError(err)
+      (input.agent.adapter === 'hermes' || isTransientError(err))
     ) {
-      logger.warn('Agent harness acpx transient error, retrying', {
+      logger.warn('Agent harness acpx retrying before adapter fallback', {
         agentId: input.agent.id,
         adapter: input.agent.adapter,
         sessionKey: prepared.runtimeSessionKey,
@@ -702,7 +702,10 @@ function createAcpxEventStream(
       })
       controller.enqueue({
         type: 'status',
-        text: `Connection error, retrying (${attempt + 1}/${MAX_RETRIES})…`,
+        text:
+          input.agent.adapter === 'hermes'
+            ? `Hermes provider unavailable, allowing its fallback chain (${attempt + 1}/${MAX_RETRIES})…`
+            : `Connection error, retrying (${attempt + 1}/${MAX_RETRIES})…`,
       })
       activeTurn = null
       await retryDelay(attempt, prepared.retryDelayMs)

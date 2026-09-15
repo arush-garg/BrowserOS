@@ -263,7 +263,7 @@ describe('browser tool structured contract', () => {
       }
 
       expect(actual).toEqual({
-        'tabs.list': ['pages'],
+        'tabs.list': ['matchableFields', 'pages'],
         'tabs.active': ['action', 'page'],
         'tabs.new': ['page'],
         'tabs.close': ['page'],
