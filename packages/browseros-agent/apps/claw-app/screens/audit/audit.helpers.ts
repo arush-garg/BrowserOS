@@ -21,9 +21,9 @@ const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: 'long',
 })
 
-/** `WEDNESDAY, 2 JULY` style label used as an audit-list day divider. */
+/** `Wednesday, July 2` style label used as an audit-list day band. */
 export function formatDayHeading(ts: number): string {
-  return DAY_HEADING_FORMATTER.format(new Date(ts)).toUpperCase()
+  return DAY_HEADING_FORMATTER.format(new Date(ts))
 }
 
 /** Local calendar-day equality (year + month + date), timezone-aware. */
@@ -104,10 +104,15 @@ export function abbreviateSequence(seq: string[], cap = 5): string {
 
 export interface AgentChip {
   slug: string
-  agentLabel: string
   count: number
 }
 
+/**
+ * Chips render the slug, not the session label. The label is whatever the client
+ * typed, so two sessions announcing "Claude Code" and "claude-code" group into one
+ * chip whose displayed name would otherwise depend on which arrived first. The slug
+ * is also what the tab strip shows, so both surfaces name the agent identically.
+ */
 export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
   const map = new Map<string, AgentChip>()
   for (const t of tasks) {
@@ -116,11 +121,7 @@ export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
       existing.count += 1
       continue
     }
-    map.set(t.slug, {
-      slug: t.slug,
-      agentLabel: t.label,
-      count: 1,
-    })
+    map.set(t.slug, { slug: t.slug, count: 1 })
   }
   return [...map.values()].sort((a, b) => b.count - a.count)
 }

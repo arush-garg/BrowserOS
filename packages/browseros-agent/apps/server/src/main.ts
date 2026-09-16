@@ -2,10 +2,6 @@
  * @license
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
- *
- * BrowserOS Server Application
- *
- * Manages server lifecycle: initialization, startup, and shutdown.
  */
 
 import fs from 'node:fs'
@@ -17,19 +13,16 @@ import { createHttpServer } from './api/server'
 import type { ServerConfig } from './config'
 import { INLINED_ENV } from './env'
 import {
-  configureClaudeRuntime,
-  configureCodexRuntime,
-  configureHermesHostRuntime,
-} from './lib/agents/runtime'
-import {
   cleanOldSessions,
   ensureBrowserosDir,
+  getBrowserosDir,
   getDbPath,
   removeServerConfigSync,
   writeServerConfig,
 } from './lib/browseros-dir'
 import { initializeDb } from './lib/db'
 import { identity } from './lib/identity'
+import { loadOrCreateInstallationId } from './lib/installation-id'
 import { logger } from './lib/logger'
 import { selfHealMcpLinks } from './lib/mcp-manager'
 import { metrics } from './lib/metrics'
@@ -51,9 +44,6 @@ export class Application {
       resourcesDir: path.resolve(this.config.resourcesDir),
     })
 
-    configureClaudeRuntime()
-    configureCodexRuntime()
-    configureHermesHostRuntime()
     await this.initCoreServices()
 
     if (!this.config.cdpPort) {
@@ -163,24 +153,30 @@ export class Application {
       resourcesDir: this.config.resourcesDir,
     })
 
+    let installationId: string | undefined
+    try {
+      installationId = await loadOrCreateInstallationId(getBrowserosDir())
+    } catch (error) {
+      // Preserve malformed state instead of silently rotating identity. The
+      // server remains usable with an ephemeral functional ID, while metrics
+      // and Sentry correlation stay disabled until the file is repaired.
+      logger.error('Installation identity unavailable', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
     identity.initialize({
-      installId: this.config.instanceInstallId,
-      statePath: path.join(
-        this.config.executionDir,
-        'identity',
-        'browseros-id.json',
-      ),
+      installId: installationId,
     })
 
     const browserosId = identity.getBrowserOSId()
     logger.info('BrowserOS ID initialized', {
       browserosId: browserosId.slice(0, 12),
-      fromConfig: !!this.config.instanceInstallId,
+      durable: !!installationId,
     })
 
     metrics.initialize({
-      client_id: this.config.instanceClientId,
-      install_id: this.config.instanceInstallId,
+      install_id: installationId,
       browseros_version: this.config.instanceBrowserosVersion,
       chromium_version: this.config.instanceChromiumVersion,
       server_version: VERSION,
@@ -188,17 +184,9 @@ export class Application {
 
     if (!metrics.isEnabled()) {
       logger.warn('Metrics disabled: missing POSTHOG_API_KEY')
-    } else if (
-      !this.config.instanceClientId &&
-      !this.config.instanceInstallId
-    ) {
-      // captureNow short-circuits when no identity is set, so emits
-      // will silently no-op until the deployment supplies one of these.
-      // Surface the cause so a misconfigured instance doesn't quietly
-      // produce zero analytics.
+    } else if (!installationId) {
       logger.warn(
-        'Metrics will skip events: no instance identity. ' +
-          'Set instance.client_id or instance.install_id in the sidecar config to opt in.',
+        'Metrics will skip events: installation identity unavailable.',
       )
     }
 
@@ -206,10 +194,13 @@ export class Application {
       logger.debug('Sentry disabled: missing SENTRY_DSN')
     }
 
-    Sentry.setUser({ id: browserosId })
+    if (installationId) {
+      Sentry.setUser({ id: installationId })
+    }
     Sentry.setContext('browseros', {
-      client_id: this.config.instanceClientId,
-      install_id: this.config.instanceInstallId,
+      install_id: installationId,
+      product: 'browseros',
+      surface: 'server',
       browseros_version: this.config.instanceBrowserosVersion,
       chromium_version: this.config.instanceChromiumVersion,
       server_version: VERSION,

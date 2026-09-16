@@ -1,36 +1,45 @@
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { z } from 'zod'
-import {
-  clampTimeout,
-  defineTool,
-  errorResult,
-  intArg,
-  numberArg,
-  textResult,
-} from './framework'
+import { z } from 'zod/v4'
+import { clampTimeout, defineTool, errorResult, textResult } from './framework'
 import { writeTempToolOutputFile } from './output-file'
 import { wrapUntrusted } from './trust-boundary'
 
 const DEFAULT_TIMEOUT_MS = 30_000
-// CDP Runtime.evaluate enforces a hard 60_000ms wall; stay safely under it.
-const MAX_TIMEOUT_MS = 55_000
+const MAX_TIMEOUT_MS = 30_000
 
-const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Use this for page-state reads or small DOM scripts that are awkward with read/grep. Return a value to read it back.`
+// Ceiling for the opt-in `maxChars`: a caller may pull up to this much of a large
+// result inline instead of having it spilled to a local file. The default inline
+// size stays small (INLINE_PAGE_CONTENT_MAX_CHARS) so ordinary results do not
+// flood the model's context.
+const MAX_INLINE_OVERRIDE_CHARS = 200_000
+
+const DESCRIPTION = `Evaluate JavaScript in a page context through CDP Runtime.evaluate. Use this for page-state reads or small DOM scripts that are awkward with read/grep. Return a value to read it back. \`timeout\` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise \`maxChars\` to receive more of the value inline.`
 
 export const evaluate = defineTool({
   name: 'evaluate',
   description: DESCRIPTION,
-  input: z.object({
-    page: intArg().describe('Page id from `tabs`.'),
-    code: z
-      .string()
-      .describe(
-        'Async-capable JS body evaluated inside the page. Use `return` to read a value.',
-      ),
-    timeout: numberArg()
-      .optional()
-      .describe('Max evaluation time in ms (default 30000).'),
-  }),
+  input: z
+    .object({
+      page: z.number().int().describe('Page id from `tabs`.'),
+      code: z
+        .string()
+        .describe(
+          'Async-capable JS body evaluated inside the page. Use `return` to read a value.',
+        ),
+      timeout: z
+        .number()
+        .optional()
+        .describe(
+          'Max evaluation time in ms. Hard cap: 30000 (larger values are clamped to it). For work longer than 30s, start it on the page and poll the result with short follow-up calls instead of one long evaluate.',
+        ),
+      maxChars: z
+        .number()
+        .optional()
+        .describe(
+          'Max size of the result kept inline, in characters (default 5000, max 200000). A larger result is truncated inline and its full text is written to a local file, whose path a remote MCP client cannot open; raise this to receive more of the value inline.',
+        ),
+    })
+    .strict(),
   annotations: {
     title: 'Run JavaScript in page',
     destructiveHint: true,
@@ -43,15 +52,6 @@ export const evaluate = defineTool({
       DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
     )
-    const requestedTimeout = args.timeout
-    const timeoutWasClamped =
-      requestedTimeout !== undefined &&
-      Number.isFinite(requestedTimeout) &&
-      requestedTimeout > MAX_TIMEOUT_MS
-    const requestedTimeoutMs =
-      timeoutWasClamped && requestedTimeout !== undefined
-        ? Math.round(requestedTimeout)
-        : undefined
     const result = await session.Runtime.evaluate({
       expression: wrapAsAsyncIife(args.code),
       returnByValue: true,
@@ -72,12 +72,9 @@ export const evaluate = defineTool({
     const value = result.result?.value ?? result.result?.description
     const text = value === undefined ? 'undefined' : safeStringify(value)
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
-    const clampNote =
-      requestedTimeoutMs !== undefined
-        ? `(note: requested timeout ${requestedTimeoutMs}ms was clamped to ${MAX_TIMEOUT_MS}ms max)`
-        : null
-    if (text.length > TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS) {
-      const excerpt = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
+    const inlineLimit = resolveInlineLimit(args.maxChars)
+    if (text.length > inlineLimit) {
+      const excerpt = text.slice(0, inlineLimit)
       const wrappedText = wrapUntrusted(text, origin)
       const contentLength = wrappedText.length
       try {
@@ -86,56 +83,39 @@ export const evaluate = defineTool({
           extension: 'txt',
           content: wrappedText,
         })
-        const sections = [
-          `Full evaluate result saved to: ${path}`,
-          `(${contentLength} chars; truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)`,
-          clampNote,
-          `Excerpt:`,
-          wrapUntrusted(excerpt, origin),
-        ].filter((section): section is string => section !== null)
-        return textResult(sections.join('\n\n'), {
-          page: args.page,
-          contentLength,
-          writtenToFile: true,
-          path,
-          ...(requestedTimeoutMs !== undefined && {
-            requestedTimeoutMs,
-            appliedTimeoutMs: timeout,
-          }),
-        })
+        return textResult(
+          [
+            wrapUntrusted(excerpt, origin),
+            `Evaluate result truncated at ${inlineLimit} chars. Full result (${text.length} chars) saved to: ${path}`,
+          ].join('\n\n'),
+          {
+            page: args.page,
+            contentLength,
+            writtenToFile: true,
+            path,
+          },
+        )
       } catch (error) {
         const saveError = error instanceof Error ? error.message : String(error)
-        const sections = [
-          `Failed to save full evaluate result to a BrowserOS output file: ${saveError}`,
-          `(${contentLength} chars; truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)`,
-          clampNote,
-          `Excerpt:`,
-          wrapUntrusted(excerpt, origin),
-        ].filter((section): section is string => section !== null)
-        return textResult(sections.join('\n\n'), {
-          page: args.page,
-          contentLength,
-          writtenToFile: false,
-          outputWriteFailed: true,
-          error: saveError,
-          ...(requestedTimeoutMs !== undefined && {
-            requestedTimeoutMs,
-            appliedTimeoutMs: timeout,
-          }),
-        })
+        return textResult(
+          [
+            wrapUntrusted(excerpt, origin),
+            `Evaluate result truncated at ${inlineLimit} chars. Full result (${text.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+          ].join('\n\n'),
+          {
+            page: args.page,
+            contentLength,
+            writtenToFile: false,
+            outputWriteFailed: true,
+            error: saveError,
+          },
+        )
       }
     }
 
-    const inlineSections = [wrapUntrusted(text, origin), clampNote].filter(
-      (section): section is string => section !== null,
-    )
-    return textResult(inlineSections.join('\n\n'), {
+    return textResult(wrapUntrusted(text, origin), {
       page: args.page,
       value,
-      ...(requestedTimeoutMs !== undefined && {
-        requestedTimeoutMs,
-        appliedTimeoutMs: timeout,
-      }),
     })
   },
 })
@@ -151,4 +131,15 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+/**
+ * Resolves the inline size budget: the caller's `maxChars` capped at
+ * `MAX_INLINE_OVERRIDE_CHARS`, or the small default when unset. A result larger
+ * than this is truncated inline and its full text spilled to a file. Measured in
+ * the same units as `String.length` (UTF-16 code units) to match the inline limit.
+ */
+export function resolveInlineLimit(maxChars: number | undefined): number {
+  if (maxChars === undefined) return TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS
+  return Math.min(Math.max(0, Math.floor(maxChars)), MAX_INLINE_OVERRIDE_CHARS)
 }

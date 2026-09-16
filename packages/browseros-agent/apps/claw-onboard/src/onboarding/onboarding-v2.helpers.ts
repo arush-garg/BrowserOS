@@ -72,8 +72,8 @@ export const DEFAULT_BROWSEROS_IMPORT_SOURCE_ID =
 const IMPORT_ITEM_LABELS: Record<string, string> = {
   history: 'History',
   bookmarks: 'Bookmarks',
-  cookies: 'Cookies',
-  passwords: 'Passwords',
+  cookies: 'Signed-in sessions (cookies)',
+  passwords: 'Saved passwords',
   searchEngines: 'Search engines',
   autofill: 'Autofill',
   extensions: 'Extensions',
@@ -97,61 +97,32 @@ export function importItemListLabel(items: readonly string[]): string {
   return items.map(importItemLabel).join(', ')
 }
 
-export function selectableItemsForSource(
-  source: BrowserOSImportSource,
-): BrowserOSImportItem[] {
-  return [
-    ...(source.recommendedItems.length
-      ? source.recommendedItems
-      : source.supportedItems),
-  ]
-}
-
-/**
- * The only items that let an agent act inside your accounts. Everything else
- * Chromium offers is human-browser furniture — no MCP tool exposes history,
- * bookmarks, search engines, autofill or extensions to an agent, so copying
- * them buys nothing and makes the ask look bigger than it is.
- */
-export const AGENT_LOGIN_ITEMS: readonly BrowserOSImportItem[] = [
-  'cookies',
-  'passwords',
+export const OPTIONAL_IMPORT_ITEMS: readonly BrowserOSImportItem[] = [
+  'searchEngines',
+  'extensions',
 ]
 
-function isLoginItem(item: BrowserOSImportItem): boolean {
-  return AGENT_LOGIN_ITEMS.includes(item)
+function isOptionalImportItem(item: BrowserOSImportItem): boolean {
+  return OPTIONAL_IMPORT_ITEMS.includes(item)
 }
 
-export function loginItemsForSource(
-  source: BrowserOSImportSource,
-): BrowserOSImportItem[] {
-  return source.supportedItems.filter(isLoginItem)
-}
-
-/**
- * Default checked set for a profile: logins only. Falls back to Chromium's own
- * recommendation when a profile carries no logins at all, so a history-only
- * profile still offers something to copy instead of a dead Import button.
- */
 export function defaultImportItemsForSource(
   source: BrowserOSImportSource,
 ): BrowserOSImportItem[] {
-  const loginItems = loginItemsForSource(source)
-  return loginItems.length > 0 ? loginItems : selectableItemsForSource(source)
+  return source.supportedItems.filter((item) => !isOptionalImportItem(item))
 }
 
 export interface ImportSelectionSplit {
-  loginItems: BrowserOSImportItem[]
-  extraItems: BrowserOSImportItem[]
+  defaultItems: BrowserOSImportItem[]
+  optionalItems: BrowserOSImportItem[]
 }
 
-/** Splits a selection into logins and the optional browsing-setup extras. */
 export function splitImportSelection(
   items: readonly BrowserOSImportItem[],
 ): ImportSelectionSplit {
   return {
-    loginItems: items.filter(isLoginItem),
-    extraItems: items.filter((item) => !isLoginItem(item)),
+    defaultItems: items.filter((item) => !isOptionalImportItem(item)),
+    optionalItems: items.filter(isOptionalImportItem),
   }
 }
 
@@ -227,3 +198,26 @@ export const STARTER_PROMPTS: readonly string[] = [
   'Search for the cheapest morning flight from SFO to NYC next Friday and show me the top three.',
   'Open the pull requests assigned to me on GitHub and summarize each.',
 ]
+
+/** The native API omits platform; use browser platform hints, never source IDs. */
+export function isMacOS(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const client = navigator as Navigator & {
+    userAgentData?: { platform?: string }
+  }
+  const platform = client.userAgentData?.platform || client.platform
+  return /^(macOS|MacIntel|MacPPC|Mac68K)$/i.test(platform)
+}
+
+/** Match the Chrome-specific explanation only to supported encrypted data. */
+export function needsMacKeychainPermission(
+  isMac: boolean,
+  source: BrowserOSImportSource | undefined,
+  selectedItems: readonly BrowserOSImportItem[],
+): boolean {
+  if (!isMac || !source || !/^(Google )?Chrome$/i.test(source.browserName))
+    return false
+  return sanitizeImportSelection(source, selectedItems).some(
+    (item) => item === 'cookies' || item === 'passwords',
+  )
+}

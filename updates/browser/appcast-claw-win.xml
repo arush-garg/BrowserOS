@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>BrowserOS neo Windows Updates</title>
+    <link>https://cdn.browseros.com/appcast-claw-win.xml</link>
+    <description>Most recent changes with links to updates.</description>
+    <language>en</language>
+
+    <item>
+      <title>BrowserOS neo - 0.50.5</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>10000.0.50.5.0</sparkle:version>
+      <sparkle:shortVersionString>0.50.5</sparkle:shortVersionString>
+      <pubDate>Tue, 15 Sep 2026 21:03:00 +0000</pubDate>
+      <link>https://www.browseros.com/</link>
+      <enclosure
+        url="http://cdn.browseros.com/releases/browserclaw/0.50.5/win/BrowserOS_neo_v0.50.5_x64_installer.exe"
+        sparkle:os="windows"
+        sparkle:edSignature="17RZtlR3th/8bEAIrhK6DnbxsvL6xkT1qXr9zfHBgWNi/8oftLYAHGp8kATe4BmMv0yKmWEQKOFggEnIS3opCw=="
+        length="132284984"
+        type="application/octet-stream" />
+    </item>
+
+  </channel>
+</rss>

@@ -1,3 +1,4 @@
+import { registerDiagnostics } from '@browseros/diagnostics/extension'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -10,6 +11,7 @@ import { createRecordingsRelay } from '@/modules/recorder'
 
 /** Supplies Chrome's trusted tab/document identity to the durable recorder relay. */
 export default defineBackground(() => {
+  registerDiagnostics('browseros-neo', resolveBrowserOSServerBaseUrl)
   const relay = createRecordingsRelay({
     resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
   })
@@ -21,8 +23,17 @@ export default defineBackground(() => {
         .catch(() => {})
     } catch {}
   }
+  const requestStop = (tabId: number) => {
+    // The tab's session has ended; stop recording it through the cleanup grace.
+    try {
+      void chrome.tabs
+        .sendMessage(tabId, { type: 'recorder-stop' })
+        .catch(() => {})
+    } catch {}
+  }
 
   relay.onTabRecoveredAfterLoss(requestResnapshot)
+  relay.onTabRecordingRetired(requestStop)
   void relay.start().catch((error) => {
     console.warn('[browseros-claw replay] durable outbox startup failed', error)
   })

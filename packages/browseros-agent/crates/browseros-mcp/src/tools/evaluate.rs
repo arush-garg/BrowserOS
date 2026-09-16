@@ -14,22 +14,46 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
-// CDP Runtime.evaluate enforces a hard 60_000ms wall; stay safely under it.
-const MAX_TIMEOUT_MS: u64 = 55_000;
+const MAX_TIMEOUT_MS: u64 = 30_000;
+
+/// Hard ceiling for the opt-in `maxChars`: a caller may pull up to this much of a
+/// large result inline instead of having it spilled to a local file. The default
+/// inline size stays small (`INLINE_PAGE_CONTENT_MAX_CHARS`) so ordinary results
+/// do not flood the model's context.
+const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
+Prefer `run` for multi-step work; reach for evaluate only as a fallback for a one-off page-context read or script. \
 Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
-Return a value to read it back.";
+Provide `code` (an async body; use `return` to read a value) or `func` (a function \
+expression like `() => {...}` that gets invoked). Return a value to read it back. \
+`timeout` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. \
+A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct EvaluateArgs {
     /// Page id from `tabs`.
     page: u32,
     /// Async-capable JS body evaluated inside the page. Use `return` to read a value.
-    code: String,
-    /// Max evaluation time in ms (default 30000).
+    #[serde(default)]
+    code: Option<String>,
+    /// A function expression to invoke, e.g. `() => {...}` or `async () => {...}`.
+    /// An alternative to `code` for callers that pass a function.
+    #[serde(default)]
+    func: Option<String>,
+    /// Max evaluation time in ms. Hard cap: 30000 (larger values are clamped to
+    /// it). For work longer than 30s, start it on the page and poll the result
+    /// with short follow-up calls instead of one long evaluate.
     timeout: Option<f64>,
+    /// Max size of the result kept inline, measured in UTF-8 bytes to match the
+    /// server's inline limit (default 5000, max 200000); a multibyte character
+    /// counts as more than one byte. A result larger than this is truncated
+    /// inline and its full text is written to a local file, whose path a remote
+    /// MCP client cannot open; raise this to receive more of the value inline.
+    #[serde(default)]
+    max_chars: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,22 +91,24 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: EvaluateArgs = parse_args(raw)?;
+        let Some(expression) = resolve_expression(args.code.as_deref(), args.func.as_deref())
+        else {
+            return Ok(Some(error_result(
+                "evaluate: provide `code` (an async body) or `func` (a function to invoke)"
+                    .to_string(),
+            )));
+        };
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
         let page = ctx.session.pages.get_session(PageId(args.page)).await?;
         let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-        let timeout_was_clamped = matches!(
-            args.timeout,
-            Some(value) if value.is_finite() && value > 0.0 && value.round() > MAX_TIMEOUT_MS as f64
-        );
-        let requested_timeout_ms = args.timeout.map(|value| value.round() as u64);
         let result: EvaluateResult = page
             .session
             .send(
                 "Runtime.evaluate",
                 json!({
-                    "expression": wrap_as_async_iife(&args.code),
+                    "expression": expression,
                     "returnByValue": true,
                     "awaitPromise": true,
                     "timeout": timeout,
@@ -111,77 +137,52 @@ fn handler<'a>(
             .await
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
-        if text.len() > INLINE_PAGE_CONTENT_MAX_CHARS {
-            let excerpt = safe_prefix(&text, INLINE_PAGE_CONTENT_MAX_CHARS);
+        let inline_limit = resolve_inline_limit(args.max_chars);
+        if text.len() > inline_limit {
+            let excerpt = safe_prefix(&text, inline_limit);
             let wrapped_text = wrap_untrusted(&text, &origin);
             let content_length = wrapped_text.len();
-            let inline_excerpt = wrap_untrusted(&excerpt, &origin);
-            let clamp_note = if timeout_was_clamped {
-                Some(format!(
-                    "(note: requested timeout {}ms was clamped to {MAX_TIMEOUT_MS}ms max)",
-                    requested_timeout_ms.unwrap_or(0)
-                ))
-            } else {
-                None
-            };
             match write_temp_tool_output_file(&ctx.output_files, "evaluate", "txt", &wrapped_text)
                 .await
             {
                 Ok(path) => {
-                    let mut structured = json!({
-                        "page": args.page,
-                        "contentLength": content_length,
-                        "writtenToFile": true,
-                        "path": path.to_string_lossy()
-                    });
-                    if let (Value::Object(object), Some(requested)) =
-                        (&mut structured, requested_timeout_ms)
-                    {
-                        object.insert("requestedTimeoutMs".to_string(), json!(requested));
-                        object.insert("appliedTimeoutMs".to_string(), json!(timeout));
-                    }
-                    let mut sections: Vec<String> = vec![
-                        format!("Full evaluate result saved to: {}", path.display()),
-                        format!(
-                            "({content_length} chars; truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)"
-                        ),
-                    ];
-                    if let Some(note) = clamp_note.as_ref() {
-                        sections.push(note.clone());
-                    }
-                    sections.push("Excerpt:".to_string());
-                    sections.push(inline_excerpt);
-                    return Ok(Some(text_result(sections.join("\n\n"), Some(structured))));
+                    return Ok(Some(text_result(
+                        [
+                            wrap_untrusted(&excerpt, &origin),
+                            format!(
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) saved to: {}",
+                                text.len(),
+                                path.display()
+                            ),
+                        ]
+                        .join("\n\n"),
+                        Some(json!({
+                            "page": args.page,
+                            "contentLength": content_length,
+                            "writtenToFile": true,
+                            "path": path.to_string_lossy()
+                        })),
+                    )));
                 }
                 Err(err) => {
                     let save_error = err.to_string();
-                    let mut structured = json!({
-                        "page": args.page,
-                        "contentLength": content_length,
-                        "writtenToFile": false,
-                        "outputWriteFailed": true,
-                        "error": save_error
-                    });
-                    if let (Value::Object(object), Some(requested)) =
-                        (&mut structured, requested_timeout_ms)
-                    {
-                        object.insert("requestedTimeoutMs".to_string(), json!(requested));
-                        object.insert("appliedTimeoutMs".to_string(), json!(timeout));
-                    }
-                    let mut sections: Vec<String> = vec![
-                        format!(
-                            "Failed to save full evaluate result to a BrowserOS output file: {save_error}"
-                        ),
-                        format!(
-                            "({content_length} chars; truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars inline)"
-                        ),
-                    ];
-                    if let Some(note) = clamp_note.as_ref() {
-                        sections.push(note.clone());
-                    }
-                    sections.push("Excerpt:".to_string());
-                    sections.push(inline_excerpt);
-                    return Ok(Some(text_result(sections.join("\n\n"), Some(structured))));
+                    return Ok(Some(text_result(
+                        [
+                            wrap_untrusted(&excerpt, &origin),
+                            format!(
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) could not be saved to a BrowserOS output file: {save_error}",
+                                text.len()
+                            ),
+                        ]
+                        .join("\n\n"),
+                        Some(json!({
+                            "page": args.page,
+                            "contentLength": content_length,
+                            "writtenToFile": false,
+                            "outputWriteFailed": true,
+                            "error": save_error
+                        })),
+                    )));
                 }
             }
         }
@@ -189,22 +190,30 @@ fn handler<'a>(
         if let (Value::Object(object), Some(value)) = (&mut structured, value) {
             object.insert("value".to_string(), value);
         }
-        if let (Value::Object(object), Some(requested)) = (&mut structured, requested_timeout_ms) {
-            object.insert("requestedTimeoutMs".to_string(), json!(requested));
-            object.insert("appliedTimeoutMs".to_string(), json!(timeout));
-        }
-        let mut sections: Vec<String> = vec![wrap_untrusted(&text, &origin)];
-        if let Some(requested) = requested_timeout_ms.filter(|_| timeout_was_clamped) {
-            sections.push(format!(
-                "(note: requested timeout {requested}ms was clamped to {MAX_TIMEOUT_MS}ms max)"
-            ));
-        }
-        Ok(Some(text_result(sections.join("\n\n"), Some(structured))))
+        Ok(Some(text_result(
+            wrap_untrusted(&text, &origin),
+            Some(structured),
+        )))
     })
+}
+
+/// Builds the JS expression to evaluate from either arg form: `code` is an async
+/// body, `func` is a function expression to invoke. `code` wins if both are given;
+/// `None` when neither is provided.
+fn resolve_expression(code: Option<&str>, func: Option<&str>) -> Option<String> {
+    match (code, func) {
+        (Some(code), _) => Some(wrap_as_async_iife(code)),
+        (None, Some(func)) => Some(wrap_as_invoked_fn(func)),
+        (None, None) => None,
+    }
 }
 
 fn wrap_as_async_iife(code: &str) -> String {
     format!("(async () => {{\n{code}\n}})()")
+}
+
+fn wrap_as_invoked_fn(func: &str) -> String {
+    format!("(async () => {{ return await ({func})(); }})()")
 }
 
 fn safe_stringify(value: &Value) -> String {
@@ -230,4 +239,49 @@ fn safe_prefix(text: &str, max_chars: usize) -> String {
         end = end.saturating_sub(1);
     }
     text[..end].to_string()
+}
+
+/// Resolves the inline size budget for a result: the caller's `maxChars` capped
+/// at `MAX_INLINE_OVERRIDE_CHARS`, or the small default when unset. A result
+/// larger than this is truncated inline and its full text spilled to a file.
+fn resolve_inline_limit(max_chars: Option<u64>) -> usize {
+    match max_chars {
+        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_CHARS),
+        None => INLINE_PAGE_CONTENT_MAX_CHARS,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_expression_handles_code_func_and_neither() {
+        // A body is wrapped in an async IIFE.
+        let code = resolve_expression(Some("return 1;"), None).unwrap_or_default();
+        assert!(code.contains("return 1;"));
+        assert!(code.starts_with("(async () =>"));
+        // A function is invoked, so its return value flows back.
+        let func = resolve_expression(None, Some("() => 2")).unwrap_or_default();
+        assert!(func.contains("await (() => 2)()"));
+        // Code wins if both are provided.
+        let both = resolve_expression(Some("return 3;"), Some("() => 4")).unwrap_or_default();
+        assert!(both.contains("return 3;"));
+        assert!(!both.contains("() => 4"));
+        // Neither is an error at the call site.
+        assert!(resolve_expression(None, None).is_none());
+    }
+
+    #[test]
+    fn resolve_inline_limit_defaults_and_clamps() {
+        // No override falls back to the small default.
+        assert_eq!(resolve_inline_limit(None), INLINE_PAGE_CONTENT_MAX_CHARS);
+        // A caller can raise it, up to the hard ceiling.
+        assert_eq!(resolve_inline_limit(Some(50_000)), 50_000);
+        // Anything above the ceiling is clamped.
+        assert_eq!(
+            resolve_inline_limit(Some(10_000_000)),
+            MAX_INLINE_OVERRIDE_CHARS
+        );
+    }
 }

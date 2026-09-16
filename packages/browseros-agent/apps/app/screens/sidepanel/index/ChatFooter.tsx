@@ -1,38 +1,24 @@
-import { Bot, ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
+import { ChevronDown, Folder, Layers, PlugZap } from 'lucide-react'
 import type { FC, FormEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
-import type { Provider } from '@/components/chat/chatComponentTypes'
 import { AppSelector } from '@/components/elements/AppSelector'
 import { WorkspaceSelector } from '@/components/elements/workspace-selector'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
-import type { ProviderType } from '@/lib/llm-providers/types'
-import { Feature } from '@/lib/browseros/capabilities'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import {
   type SelectedTextData,
   selectedTextStorage,
 } from '@/lib/selected-text/selectedTextStorage'
-import type { UseSteerReturn } from '@/lib/steer/useSteer'
 import { cn } from '@/lib/utils'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
-import type { VoiceInputState } from '@/modules/voice/voice.hooks'
-import type { VoiceLoopApi } from '@/modules/voice/voice-types'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
 import { ChatAttachedTabs } from './ChatAttachedTabs'
 import { ChatInput, type ChatInputHandle } from './ChatInput'
 import { ChatModeToggle } from './ChatModeToggle'
 import { ChatSelectedText } from './ChatSelectedText'
-import { GoalBanner } from './GoalBanner'
-import { VoiceModeArea } from './VoiceModeArea'
 
 export interface ChatFooterProps {
-  providers: Provider[]
-  selectedProvider: Provider
-  onSelectProvider: (provider: Provider) => void
   mode: ChatMode
   onModeChange: (mode: ChatMode) => void
   input: string
@@ -44,21 +30,9 @@ export interface ChatFooterProps {
   attachedTabs: chrome.tabs.Tab[]
   onToggleTab: (tab: chrome.tabs.Tab) => void
   onRemoveTab: (tabId?: number) => void
-  voice?: VoiceInputState
-  activeTabId?: number | null
-  steer?: UseSteerReturn
-  voiceLoop?: VoiceLoopApi
-  onOpenVoiceMode?: () => void
-  /** Called when a steer is sent via the input. */
-  onSteerSent?: (text: string) => void
-  /** Called when user picks "Interrupt and Send". */
-  onInterruptAndSend?: (text: string) => void
 }
 
 export const ChatFooter: FC<ChatFooterProps> = ({
-  providers,
-  selectedProvider,
-  onSelectProvider,
   mode,
   onModeChange,
   input,
@@ -70,23 +44,27 @@ export const ChatFooter: FC<ChatFooterProps> = ({
   attachedTabs,
   onToggleTab,
   onRemoveTab,
-  voice,
-  activeTabId,
-  steer,
-  voiceLoop,
-  onOpenVoiceMode,
-  onSteerSent,
-  onInterruptAndSend,
 }) => {
   const { selectedFolder } = useWorkspace()
   const { servers: mcpServers } = useMcpServers()
   const { data: userMCPIntegrations } = useGetUserMCPIntegrations()
-  const { supports } = useCapabilities()
-  const supportsVoiceInput = supports(Feature.VOICE_INPUT_SUPPORT)
   const chatInputRef = useRef<ChatInputHandle>(null)
   const [selectionMap, setSelectionMap] = useState<
     Record<string, SelectedTextData>
   >({})
+  const [activeTabId, setActiveTabId] = useState<number | undefined>()
+
+  // Track active tab for tab-scoped selection display
+  useEffect(() => {
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then((tabs) => setActiveTabId(tabs[0]?.id))
+    const listener = (activeInfo: { tabId: number }) => {
+      setActiveTabId(activeInfo.tabId)
+    }
+    chrome.tabs.onActivated.addListener(listener)
+    return () => chrome.tabs.onActivated.removeListener(listener)
+  }, [])
 
   // Watch selected text storage (per-tab map)
   useEffect(() => {
@@ -121,14 +99,6 @@ export const ChatFooter: FC<ChatFooterProps> = ({
     return () => window.removeEventListener('focus', focusInput)
   }, [])
 
-  // Clear pending steer text when chat starts streaming (steer was injected)
-  const clearPendingText = steer?.clearPendingText
-  useEffect(() => {
-    if (status === 'streaming') {
-      clearPendingText?.()
-    }
-  }, [status, clearPendingText])
-
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
     return userMCPIntegrations?.integrations?.find(
@@ -153,39 +123,8 @@ export const ChatFooter: FC<ChatFooterProps> = ({
         />
       )}
 
-      <GoalBanner />
-
       <div className="p-3">
         <div className="flex items-center gap-2">
-          <ChatProviderSelector
-            providers={providers}
-            selectedProvider={selectedProvider}
-            onSelectProvider={onSelectProvider}
-          >
-            <button
-              type="button"
-              className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
-              title="Change AI Provider"
-            >
-              {selectedProvider.kind === 'acp' ? (
-                <Bot className="h-4 w-4" />
-              ) : selectedProvider.type === 'browseros' ? (
-                <BrowserOSIcon size={16} />
-              ) : (
-                <ProviderIcon
-                  type={selectedProvider.type as ProviderType}
-                  size={16}
-                />
-              )}
-              <span className="font-medium text-sm">
-                {selectedProvider.name}
-              </span>
-              <ChevronDown className="h-3 w-3" />
-            </button>
-          </ChatProviderSelector>
-
-          <div className="h-4 w-px bg-border/50" />
-
           <ChatModeToggle mode={mode} onModeChange={onModeChange} />
 
           <div className="h-4 w-px bg-border/50" />
@@ -271,30 +210,19 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           </div>
         </div>
 
-        {supportsVoiceInput && voice?.error && (
-          <div className="mt-1 text-destructive text-xs">{voice.error}</div>
-        )}
-
-        <VoiceModeArea voiceLoop={supportsVoiceInput ? voiceLoop : undefined}>
-          <ChatInput
-            input={input}
-            status={status}
-            mode={mode}
-            sendDisabled={sendDisabled}
-            onInputChange={onInputChange}
-            onSubmit={onSubmit}
-            onStop={onStop}
-            selectedTabs={attachedTabs}
-            onToggleTab={onToggleTab}
-            onTabMentionOpenChange={setIsTabMentionOpen}
-            voice={supportsVoiceInput ? voice : undefined}
-            steer={steer}
-            onSteerSent={onSteerSent}
-            onInterruptAndSend={onInterruptAndSend}
-            onOpenVoiceMode={supportsVoiceInput ? onOpenVoiceMode : undefined}
-            ref={chatInputRef}
-          />
-        </VoiceModeArea>
+        <ChatInput
+          input={input}
+          status={status}
+          mode={mode}
+          sendDisabled={sendDisabled}
+          onInputChange={onInputChange}
+          onSubmit={onSubmit}
+          onStop={onStop}
+          selectedTabs={attachedTabs}
+          onToggleTab={onToggleTab}
+          onTabMentionOpenChange={setIsTabMentionOpen}
+          ref={chatInputRef}
+        />
       </div>
     </footer>
   )

@@ -1,274 +1,143 @@
 # Nightly macOS CI
 
-Signed macOS nightlies are two self-hosted arm64 workflows:
+The two manual entry workflows complete and publish one product each:
 
-| Workflow | Product | Schedule | Version policy | Rolling prerelease |
-| --- | --- | --- | --- | --- |
-| `.github/workflows/nightly-browseros.yml` | BrowserOS | `0 4 * * *` | Scheduled runs bump `offset+build`, commit through the bot PR flow, and merge with `[skip ci]`. | `nightly-browseros` |
-| `.github/workflows/nightly-browserclaw.yml` | BrowserClaw | `30 6 * * *` | Always builds the current version on the selected ref; it does not commit version files. | `nightly-browserclaw` |
-
-Both workflows share the `macos-build` concurrency group, so only one signed
-macOS build runs on the Mac Mini at a time. The old
-`.github/workflows/nightly-macos-build.yml` workflow has been retired.
-
-## What They Build
-
-Both nightlies build tip-of-tree resources from the persistent checkout and use
-the signed nightly profile:
-
-```bash
-uv run browseros build --profile nightly-macos --product <product> --arch arm64 \
-  --chromium-src "$CHROMIUM_SRC"
-```
-
-The profile is `packages/browseros/bos_build/profiles/nightly-macos.yaml`:
-
-```yaml
-preset: release
-download: false
-bundle_local_extensions: true
-```
-
-Release-preset defaults still apply for clean, provisioning, signing, package,
-Sparkle signing, and upload. Set `upload_to_r2=false` in a manual dispatch to
-add `--no-upload` and keep the build artifact-only.
-
-## Local Resource Staging
-
-The nightly profile disables R2 resource downloads because nightly builds are
-intended to test the current integration from the checked-out source tree.
-
-BrowserOS stages only the resources used by BrowserOS:
-
-```bash
-bun scripts/build/server.ts --target=darwin-arm64 --ci
-bun scripts/build/claw-onboard.ts --ci
-```
-
-The workflow extracts those artifact zips through
-`bos_build.steps.storage.download.extract_artifact_zip` into:
-
-```text
-packages/browseros/resources/binaries/browseros_server/darwin-arm64
-packages/browseros/resources/binaries/browseros_claw_onboard
-```
-
-BrowserClaw stages the shared BrowserOS server bundle, the product-independent
-onboarding bundle, and the Rust Claw server bundle:
-
-```bash
-packages/browseros-agent/scripts/build/claw-server-rust-local.sh \
-  --target darwin-arm64 \
-  --agent-root packages/browseros-agent \
-  --browseros-root packages/browseros
-```
-
-The helper builds the Rust server natively with Cargo and stages
-`resources/binaries/browseros_claw_server_rust/darwin-arm64` with the runtime
-binary name `browseros-claw-server`. The normal resources step then copies this
-root into Chromium.
-
-## Bundled Extensions
-
-`bundle_local_extensions: true` makes the `bundled_extensions` step build
-in-repo required extensions from the checkout while external required
-extensions still come from the CDN manifest. The build system loads
-`packages/browseros/.env` on import, so the runner-local PEM values such as
-`BROWSEROS_AGENT_V2_KEY` and `BROWSERCLAW_KEY` do not need to be exported in the
-workflow.
-
-Chrome must be installed on the Mac Mini because CRX packing resolves a Chrome
-binary locally.
-
-## Release macOS Workflow
-
-`release-macos.yml` uses the same private Mac Mini, signing keychain, local
-`packages/browseros/.env`, and Chromium checkout. Unlike nightlies, releases do
-not build tip-of-tree server bundles. They run the normal release preset and let
-`download_resources` fetch the published R2 bundles:
-
-```bash
-uv run browseros build --preset release --product <product> --arch <arch> \
-  --chromium-src "$CHROMIUM_SRC"
-```
-
-For BrowserClaw, `download_resources` fetches the active Rust Claw server bundle
-from `claw-server-rust/prod-resources/latest/`. The copy step normalizes legacy
-Rust resource zips that still contain `browseros-claw-server-rs` into the
-runtime filename `browseros-claw-server`.
-
-Release runs default to rebuilding the current version files without bumping
-them:
-
-```text
-bump=none
-commit_version=false
-upload_to_r2=true
-products=browseros
-arch=arm64
-```
-
-Use `products=browserclaw` to build only BrowserClaw, or `products=all` to
-build BrowserOS first and BrowserClaw second in the same job. The workflow also
-accepts `arch=universal`; universal and two-product runs use a longer timeout
-because they run multiple Chromium build/package passes sequentially.
-
-## One-Time Runner Setup
-
-Register the Mac Mini as a repo-scoped self-hosted runner with the custom
-`browseros-builder` label:
-
-```bash
-mkdir -p ~/actions-runner
-cd ~/actions-runner
-
-./config.sh --url https://github.com/<owner>/<repo> --token <REGISTRATION_TOKEN> \
-  --labels browseros-builder --name mac-mini-builder --work _work
-```
-
-The workflows target:
-
-```yaml
-runs-on: [self-hosted, macOS, ARM64, browseros-builder]
-```
-
-Run the service in the logged-in GUI user session, not as a boot-time daemon.
-Codesign and `xcrun notarytool` need access to the user's login keychain;
-daemon or SSH-only sessions commonly fail with `User interaction not allowed`.
-
-```bash
-./svc.sh install
-./svc.sh start
-```
-
-If the runner is launched by `launchd`, inject the build toolchain into the
-runner PATH and restart the service:
-
-```bash
-printf '%s\n' "$HOME/code/depot_tools:/opt/homebrew/bin:/usr/local/bin:$PATH" \
-  > ~/actions-runner/.path
-./svc.sh stop
-./svc.sh start
-```
-
-Keep the runner current enough to run the action majors used by the workflows.
-
-## Machine Prerequisites
-
-The Mac Mini must already have:
-
-- Build repo clone, for example `/Users/<user>/code/browseros-release`
-- Chromium checkout, for example `/Users/<user>/code/chromium-release/src`
-- `uv`, `gh`, `bun`, depot_tools, Xcode Command Line Tools, and signing/notarization tooling
-- Homebrew Cargo available on PATH only when manually flipping BrowserClaw
-  nightlies to the Rust server
-- Chrome installed for local CRX packing
-- `packages/browseros/.env` with signing, notarization, R2, Slack, and extension PEM values
-- `MACOS_KEYCHAIN_PASSWORD` in `.env` so the build can unlock the keychain
-
-Do not copy signing, notarization, R2, Slack, or extension PEM secrets into
-GitHub Actions for the self-hosted macOS nightlies. The workflows reuse the
-machine-local `.env`.
-
-## Repository Variables
-
-Add these in GitHub repo settings under Actions variables:
-
-| Variable | Example | Notes |
+| Workflow | Display name | Rolling prerelease |
 | --- | --- | --- |
-| `BROWSEROS_REPO_PATH` | `/Users/<user>/code/browseros-release` | Persistent build repo clone. Use an absolute path. |
-| `BROWSEROS_CHROMIUM_SRC` | `/Users/<user>/code/chromium-release/src` | Chromium `src` checkout. Use an absolute path. |
-| `BROWSEROS_NIGHTLY_REF` | `main` | Optional; falls back to the repo default branch. |
+| `.github/workflows/nightly-macos-browseros.yml` | Nightly: BrowserOS (macOS arm64) | `nightly-browseros` |
+| `.github/workflows/nightly-macos-browserclaw.yml` | Nightly: BrowserOS neo (macOS arm64) | `nightly-browserclaw` |
 
-## Version Policy
+Dispatch either entry from `main`; neither has a schedule or release-shape inputs.
 
-Only the BrowserOS nightly calls `bos_build/scripts/bump_version.py` with a
-mutable bump mode.
-
-- BrowserOS schedule: 04:00 UTC, `offset+build`, commit and push enabled, R2 upload enabled
-- BrowserOS manual default: `offset+build`, commit disabled, R2 upload enabled
-- BrowserOS manual hotfix option: choose `offset+patch`
-- BrowserOS manual dry run option: choose `none`
-- BrowserClaw schedule and manual runs: `none`; no version commit machinery
-
-04:00 UTC is 9 PM US Pacific during daylight saving time. 06:30 UTC is 11:30 PM
-US Pacific during daylight saving time. GitHub cron schedules are UTC-only and
-do not track daylight saving changes.
-
-`BROWSEROS_BUILD_OFFSET` is the internal Chromium-build monotonic counter.
-`BROWSEROS_BUILD` advances the public nightly semantic version. `BROWSEROS_PATCH`
-is reserved for manual hotfix-style builds because setting both build and patch
-nonzero produces a four-part version.
-
-BrowserOS nightly version commits use:
-
-```text
-chore(release): build v<VERSION> [skip ci]
+```bash
+gh workflow run nightly-macos-browseros.yml --ref main
+gh workflow run nightly-macos-browserclaw.yml --ref main
 ```
 
-Version commits are pushed to a `bot/nightly-macos-version-*` branch and opened
-as pull requests against the target branch. The workflow tries an immediate
-squash merge, then auto-merge, and leaves the PR open if GitHub will not merge it
-yet. The persistent clone must already have credentials that can push bot
-branches. The workflow's `GITHUB_TOKEN` has `contents: write` and
-`pull-requests: write` for the build job so it can create and merge those PRs.
+`.github/workflows/reusable-build-macos-nightly.yml` is named
+**Reusable: Build macOS nightly** and accepts only `workflow_call`. It retains the
+existing signed arm64 build, provisioning profiles, published resources, deferred
+R2 upload, and unconditional Chromium-workspace and signing-keychain cleanup.
 
-## Manual Branch Build
+## Product transaction
 
-Open Actions, choose the product workflow, click `Run workflow`, select the
-branch in GitHub's native branch picker, then set inputs:
-
-- BrowserOS: `bump`, `commit_version`, and `upload_to_r2`
-- BrowserClaw: `upload_to_r2`
-
-The DMG is always uploaded as a run artifact when packaging succeeds. Successful
-builds also refresh the product's rolling prerelease tag.
-
-## Artifacts
-
-The builds write:
+Each entry freezes one source SHA, reserves a browser version and its own server
+and extension versions, then prepares those two exact components. BrowserOS pins
+`server`, `agent`, and the existing `app-onboard` version. BrowserOS neo pins
+`claw-server-rust`, `browserclaw`, and the existing `claw-onboard` version.
+Onboarding bundles continue to release independently.
 
 ```text
-packages/browseros/releases/<version>/BrowserOS_v<version>_arm64.dmg
-packages/browseros/releases/<version>/BrowserClaw_v<version>_arm64.dmg
+manual dispatch from main
+  -> reserve one product transaction on a draft PR
+  -> prepare and verify its server and extension
+  -> build one signed macOS arm64 browser
+  -> finalize its server and extension; assemble its server appcast
+  -> acquire release-feed-snapshots
+  -> compose current-main snapshots and render its extension pin
+  -> reconcile the product gate and merge state
+  -> conditionally create or verify its immutable DMG and receipt
+  -> publish current committed feeds and reconcile its rolling prerelease
 ```
 
-The workflows upload matching DMGs with 14-day retention and refresh:
+A sibling build or finalizer is never a dependency. Component callers pass
+`state_owner: suite` and disable standalone feed publication, leaving the product
+transaction as the owner of its tracked state.
 
-```text
-nightly-browseros
-nightly-browserclaw
+The retry identity is `nightly-<product>-<source-sha>` and the reservation branch
+is `bot/release-nightly-<product>-<12-source-chars>`. Different products therefore
+have different records even when dispatched at the same source commit. The
+transaction PR is created as a draft. Open, closed, and merged canonical suite
+records continue to reserve their versions; closing a failed PR does not free a
+version already used by immutable uploads.
+
+| Identity | Meaning |
+| --- | --- |
+| Source SHA | Frozen `main` commit used for artifact provenance and component builds |
+| Reservation SHA | Immutable source child containing the exact version overlay used by the browser build |
+| State SHA | Product PR head combining the reservation and current-main state with approved snapshots |
+| Merge SHA | Squash commit proving the product state became durable on `main` |
+
+Builders always check out the Reservation SHA. The state and merge commits are
+never build inputs. After branch deletion, `refs/pull/<PR_NUMBER>/head` keeps the
+validated reservation reachable for recovery. Shared browser version and build
+offset allocation remains monotonic across both products and saved family records.
+
+## Shared feeds and publication recovery
+
+One `release-feed-snapshots` job holds the lock from current-main resolution
+through state merge and publication. It writes only its server alpha appcast and
+the three shared extension snapshots. Rendering pins only the selected extension;
+unpinned entries carry their newer live or committed versions through
+`--baseline-root`. This preserves a sibling whose snapshot merge succeeded but
+whose R2 upload failed. Standalone extension publishers use the same boundary.
+
+Final state composition keeps the checkout HEAD at Source SHA, restores the
+selected snapshots from current main, and passes that main SHA as
+`--state-base-sha`. Backend reconciliation preserves unrelated and sibling state
+while retaining the original reservation and selected component pins.
+
+Publication first verifies that the transaction is merged and its Merge SHA is
+an ancestor of current main. It conditionally creates the product's immutable
+DMG and receipt before exposing any mutable feeds. Identical bytes and transaction
+bindings are accepted on retry; conflicts fail without overwrite. The publisher
+restores current committed feed files, so recovery cannot overwrite a later
+sibling snapshot with files from the old transaction merge.
+
+Use **Re-run failed jobs** on the original run for post-build or post-merge
+failures. An already-merged publication skips rendering and state reconciliation,
+reuses the original signed Actions artifact, and publishes current committed
+feeds. A new full run cannot restart an already-merged transaction. Signed
+artifacts are retained for 14 days; recovery needs those exact bytes.
+
+Live feeds retain downgrade guards; nightlies never pass `--allow-downgrade`.
+Rolling publication is source- and checksum-aware: a newer product release is a
+superseded/no-op, an exact partial draft resumes, and conflicting source/version
+or asset identities fail. A release record and its live tag must resolve to the
+same source before cleanup or replacement is allowed.
+
+## Cutover and saved family runs
+
+The old `.github/workflows/nightly.yml` dispatch entry and
+`nightly-macos-product.yml` helper are removed from current main. Historical runs
+retain their saved workflow definitions, including that helper. Both new entries
+retain the historical top-level `release-suite` concurrency group with
+`cancel-in-progress: false` and `queue: max`. This conservatively serializes whole
+nightly runs during cutover: an active or rerun family transaction cannot overlap
+a product transaction, while each new graph can succeed independently.
+
+Legacy records without a product field remain family records with identity
+`nightly-<source-sha>`. Inspect or recover those with the legacy CLI by omitting
+`--product`, or rerun failed jobs on the original family run. Their draft PRs,
+closed records, and pre-PR reservation branches remain allocation history. No
+automatic cancellation, closure, or migration of those records occurs.
+
+Historical standalone extension-feed runs saved before this change do not have
+the shared publication lock; finish those runs before starting new nightlies.
+Rewriting `main` history remains unsupported because reservation provenance must
+remain auditable.
+
+## Mac runner and resources
+
+The reusable worker requires `[self-hosted, macOS, ARM64, browseros-builder]` and
+shares `macos-build` with full releases. Component allocation retains
+`release-component-allocation`; both locks retain pending jobs with `queue: max`.
+
+The profile keeps `resource_mode: published` and executes:
+
+```bash
+uv run browseros build --profile nightly-macos --product <browseros-or-browserclaw> \
+  --arch arm64 --resource-mode published --chromium-src "$CHROMIUM_SRC"
 ```
 
-Both GitHub releases are rolling prereleases created with `--latest=false`.
+Set `BROWSEROS_REPO_PATH` to the persistent BrowserOS checkout and
+`BROWSEROS_CHROMIUM_SRC` to the warm CI-owned Chromium clone base. The runner must
+run in the logged-in GUI user's session with Xcode, depot_tools, `uv`, `gh`,
+signing/notarization credentials, and enough disk for disposable workspaces.
+The Chromium helper repairs the CI base and creates a run-specific APFS workspace;
+both workspace and signing-keychain cleanup run under `if: always()`.
 
-## Slack
-
-When `SLACK_WEBHOOK_URL` is present in `.env`, the build posts one terse phase
-narrative for each run. The first message announces the product, version,
-OS/arch, and planned phases. Each later phase transition posts one humanized
-duration message. The terminal message is always sent synchronously: success
-includes R2 artifact links when upload ran, failure names the failing step and
-error, and interrupt names the interrupted step. With no webhook configured,
-Slack notification is a silent no-op.
-
-The workflows only add a CI-level failure ping for failures that happen before
-or around the build invocation, such as missing runner variables or sync errors.
-
-## Troubleshooting
-
-`User interaction not allowed`: run the runner as the logged-in GUI user and
-confirm `MACOS_KEYCHAIN_PASSWORD` is present in `packages/browseros/.env`.
-
-`uv`, `gclient`, `gn`, `autoninja`, `bun`, `cargo`, or `chrome` not found:
-update `~/actions-runner/.path` and restart the runner service.
-
-Artifact-only manual run: set `upload_to_r2=false` to package the DMG without
-publishing it to R2.
-
-No BrowserOS version commit: check `commit_version`, the selected bump mode,
-the persistent clone's branch push credentials, and any open
-`bot/nightly-macos-version-*` PR.
-
-Long runtime: the release pipeline resets the Chromium tree and wipes
-`out/Default_*`, so multi-hour runs are expected.
+The optional `PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` and
+`PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` secrets remain product-specific.
+Missing profiles leave normal signing available without platform passkeys;
+configured invalid profiles fail before the long build.

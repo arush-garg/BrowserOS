@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000..b04a6ef039a6b
+index 0000000000000000000000000000000000000000..893ade589e58d07c85848b790079481c2452b9e7
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,125 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -57,6 +57,16 @@ index 0000000000000..b04a6ef039a6b
 +inline constexpr char kNtpFocusContent[] = "browseros.ntp_focus_content";
 +
 +inline constexpr char kOnboardingCompleted[] = "browseros.onboarding_completed";
++
++// Boolean: Automation-driven tabs never pull the user's attention. A tab counts
++// as automation-driven while a DevTools client is attached to it, which is
++// every tab the claw-server (or any CDP client) acts on. With the pref on such
++// a tab cannot switch the user's active tab or raise the window, and tabs or
++// popups its pages open land in the background. Gates live in
++// Browser::ActivateContents, Browser::AddNewContents and the DevTools
++// BrowserHandler. Default: true for BrowserClaw, false for BrowserOS.
++inline constexpr char kAutomationNeverStealsFocus[] =
++    "browseros.automation_never_steals_focus";
 +
 +}  // namespace prefs
 +
@@ -116,6 +126,10 @@ void MigrateProviderPrefsIfNeeded();
 +
 +// Check if NTP content should receive focus instead of the omnibox.
 +bool IsNtpFocusContentEnabled(PrefService* pref_service);
++
++// Check if automation-driven tabs must never steal focus. Callers decide per
++// tab by combining this with content::DevToolsAgentHost::IsDebuggerAttached().
++bool AutomationNeverStealsFocus(PrefService* pref_service);
 +
 +// Get the visibility pref key for an action, or nullptr if none exists.
 +const char* GetVisibilityPrefForAction(actions::ActionId id);

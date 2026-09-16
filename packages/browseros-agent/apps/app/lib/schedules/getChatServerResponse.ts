@@ -1,34 +1,12 @@
+import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
-import {
-  createDefaultBrowserOSProvider,
-  defaultProviderIdStorage,
-  providersStorage,
-} from '@/lib/llm-providers/storage'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import {
-  findCloudChatProviderById,
-  resolveCloudChatProvider,
-} from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
-
-const CHAT_CONNECT_TIMEOUT_MS = 30000
-const CHAT_MAX_ATTEMPTS = 3
-const CHAT_RETRY_BASE_DELAY_MS = 500
-
-class StreamEndedUnexpectedlyError extends Error {
-  constructor() {
-    super(
-      'Stream ended unexpectedly without completion. The task may have been interrupted.',
-    )
-    this.name = 'StreamEndedUnexpectedlyError'
-  }
-}
 
 export interface ActiveTab {
   id?: number
@@ -85,30 +63,15 @@ interface StreamParseState {
   receivedFinish: boolean
 }
 
-const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
-  const providers = await providersStorage.getValue()
-  if (!providers?.length) return null
-
-  const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveCloudChatProvider(providers, defaultProviderId)
-}
-
-const resolveProvider = async (
-  providerId?: string,
-): Promise<LlmProviderConfig> => {
-  if (providerId) {
-    const providers = await providersStorage.getValue()
-    const match = findCloudChatProviderById(providers ?? [], providerId)
-    if (match) return match
-  }
-  return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
-}
-
 export async function getChatServerResponse(
   request: ChatServerRequest,
 ): Promise<ChatServerResponse> {
   const agentServerUrl = await getAgentServerUrl()
-  const provider = await resolveProvider(request.providerId)
+  // No provider lookup here any more. The server holds the list and the
+  // selection, so a job names an id or names nothing and the server resolves
+  // it. That also removes the guard this path needed when it did the lookup
+  // itself: an unreachable list could not be told apart from an empty one, so
+  // a job risked running on the built-in provider with the wrong credentials.
   const conversationId = request.conversationId ?? crypto.randomUUID()
   const personalization = await personalizationStorage.getValue()
 
@@ -122,131 +85,61 @@ export async function getChatServerResponse(
     // biome-ignore lint/style/noNonNullAssertion: filter guarantees url exists
     .map((s) => ({ name: s.displayName, url: s.config!.url }))
 
-  const body = JSON.stringify({
-    messages: [{ role: 'user', content: request.message }],
-    ...buildChatRequestBody({
-      message: request.message,
-      conversationId,
-      provider,
-      mode: request.mode ?? 'agent',
-      browserContext:
-        request.activeTab ||
-        request.windowId ||
-        enabledMcpServers.length ||
-        customMcpServers.length
-          ? {
-              windowId: request.windowId,
-              activeTab: request.activeTab,
-              enabledMcpServers:
-                enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
-              customMcpServers:
-                customMcpServers.length > 0 ? customMcpServers : undefined,
-            }
-          : undefined,
-      userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-      supportsImages: provider.supportsImages,
-      isScheduledTask: true,
+  const response = await fetch(`${agentServerUrl}/chat`, {
+    method: 'POST',
+    signal: request.signal,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: request.message }],
+      ...buildChatRequestBody({
+        providerId: request.providerId,
+        message: request.message,
+        conversationId,
+        mode: request.mode ?? 'agent',
+        browserContext:
+          request.activeTab ||
+          request.windowId ||
+          enabledMcpServers.length ||
+          customMcpServers.length
+            ? {
+                windowId: request.windowId,
+                activeTab: request.activeTab,
+                enabledMcpServers:
+                  enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
+                customMcpServers:
+                  customMcpServers.length > 0 ? customMcpServers : undefined,
+              }
+            : undefined,
+        userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
+        isScheduledTask: true,
+      }),
     }),
   })
 
-  const result = await fetchChatWithRetry({
-    agentServerUrl,
-    body,
-    signal: request.signal,
-  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    const reason = body ? chatErrorMessage(body) : ''
+    throw new Error(
+      reason ||
+        `Chat request failed: ${response.status} ${response.statusText}`,
+    )
+  }
+
+  const parsed = await parseUIMessageStream(response)
+
+  if (parsed.error) {
+    throw new Error(parsed.error)
+  }
 
   return {
-    text: result.fullText,
+    text: parsed.fullText,
     conversationId,
-    finalResult: result.finalResult,
-    executionLog: result.executionLog,
-    toolCalls: result.toolCalls,
+    finalResult: parsed.finalResult,
+    executionLog: parsed.executionLog,
+    toolCalls: parsed.toolCalls,
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError'
-}
-
-async function fetchChatWithRetry({
-  agentServerUrl,
-  body,
-  signal,
-}: {
-  agentServerUrl: string
-  body: string
-  signal?: AbortSignal
-}): Promise<ParsedStreamResult> {
-  let lastError: Error | null = null
-
-  for (let attempt = 1; attempt <= CHAT_MAX_ATTEMPTS; attempt++) {
-    if (signal?.aborted) {
-      throw new Error('Chat request was aborted')
-    }
-
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => {
-      controller.abort()
-    }, CHAT_CONNECT_TIMEOUT_MS)
-
-    try {
-      const response = await fetch(`${agentServerUrl}/chat`, {
-        method: 'POST',
-        signal: signal
-          ? AbortSignal.any([signal, controller.signal])
-          : controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body,
-      })
-
-      if (!response.ok) {
-        throw new Error(
-          `Chat request failed: ${response.status} ${response.statusText}`,
-        )
-      }
-
-      const parsed = await parseUIMessageStream(response)
-
-      if (parsed.error) {
-        throw new Error(parsed.error)
-      }
-
-      return parsed
-    } catch (error) {
-      if (isAbortError(error) && signal?.aborted) {
-        throw new Error('Chat request was aborted')
-      }
-
-      const nextError =
-        error instanceof Error ? error : new Error(String(error))
-      lastError = nextError
-
-      const retryable =
-        isAbortError(nextError) ||
-        nextError instanceof StreamEndedUnexpectedlyError ||
-        /network|failed to fetch|timed out|stream ended unexpectedly/i.test(
-          nextError.message,
-        )
-
-      if (!retryable || attempt === CHAT_MAX_ATTEMPTS) {
-        throw nextError
-      }
-
-      await sleep(CHAT_RETRY_BASE_DELAY_MS * attempt)
-    } finally {
-      clearTimeout(timeoutId)
-    }
-  }
-
-  throw lastError ?? new Error('Failed to fetch chat response')
 }
 
 function processEvent(event: UIMessageEvent, state: StreamParseState): void {
@@ -277,10 +170,12 @@ function processEvent(event: UIMessageEvent, state: StreamParseState): void {
   } else if (event.type === 'tool-output-error') {
     const existingCall = state.toolCallsMap.get(event.toolCallId)
     if (existingCall) {
-      existingCall.error = event.errorText
+      // Run history renders these strings verbatim, so unwrap the envelope the
+      // server serializes into errorText.
+      existingCall.error = chatErrorMessage(event.errorText)
     }
   } else if (event.type === 'error') {
-    state.error = event.errorText
+    state.error = chatErrorMessage(event.errorText)
   } else if (event.type === 'finish') {
     state.receivedFinish = true
   }
@@ -310,9 +205,7 @@ async function parseUIMessageStream(
       try {
         const parsedEvent = JSON.parse(event.data) as UIMessageEvent
         processEvent(parsedEvent, state)
-      } catch {
-        // Ignore invalid JSON events
-      }
+      } catch {}
     },
   })
 
@@ -330,7 +223,8 @@ async function parseUIMessageStream(
     }
 
     if (!state.receivedFinish && !state.error) {
-      state.error = new StreamEndedUnexpectedlyError().message
+      state.error =
+        'Stream ended unexpectedly without completion. The task may have been interrupted.'
     }
 
     const finalResult = state.currentStepText.trim()

@@ -142,7 +142,7 @@ describe('flush()', () => {
   test('closes any open tool-input block', () => {
     const t = newTranslator()
     feed(t, [tool({ toolCallId: 't1', title: 'greet', text: 'a' })])
-    expect(t.flush()).toEqual([{ type: 'tool-input-end', id: 'id-1' }])
+    expect(t.flush()).toEqual([{ type: 'tool-input-end', id: 't1' }])
   })
 })
 
@@ -158,8 +158,8 @@ describe('tool_call — pending and in_progress', () => {
       }),
     ])
     expect(parts).toEqual([
-      { type: 'tool-input-start', id: 'id-1', toolName: 'greet' },
-      { type: 'tool-input-delta', id: 'id-1', delta: '{"x":1}' },
+      { type: 'tool-input-start', id: 't1', toolName: 'greet' },
+      { type: 'tool-input-delta', id: 't1', delta: '{"x":1}' },
     ])
   })
 
@@ -169,7 +169,7 @@ describe('tool_call — pending and in_progress', () => {
     const start = parts.find((p) => p.type === 'tool-input-start')
     expect(start).toEqual({
       type: 'tool-input-start',
-      id: 'id-1',
+      id: 't1',
       toolName: 'tool',
     })
   })
@@ -282,6 +282,13 @@ describe('tool_call — completed and failed', () => {
       'tool-call',
       'tool-result',
     ])
+    expect(
+      parts.flatMap((part) => {
+        if ('id' in part) return [part.id]
+        if ('toolCallId' in part) return [part.toolCallId]
+        return []
+      }),
+    ).toEqual(['t1', 't1', 't1', 't1', 't1'])
 
     const call = parts.find((p) => p.type === 'tool-call')
     expect(call).toMatchObject({
@@ -355,7 +362,7 @@ describe('tool_call — completed and failed', () => {
 })
 
 describe('status — usage_update', () => {
-  test('captures used and size for a later finish() call', () => {
+  test('reports size as the context window, separately from token usage', () => {
     const t = newTranslator()
     const parts = feed(t, [
       status({ tag: 'usage_update', used: 100, size: 4096 }),
@@ -370,7 +377,10 @@ describe('status — usage_update', () => {
         inputTokens: undefined,
         outputTokens: undefined,
         totalTokens: 100,
-        cachedInputTokens: 4096,
+        cachedInputTokens: undefined,
+      },
+      providerMetadata: {
+        acpx: { contextWindow: 4096 },
       },
     })
   })
@@ -451,9 +461,6 @@ describe('status — plan', () => {
       text(' more thinking', 'thought'),
     ])
     const types = parts.map((p) => p.type)
-    // the thought block stays open across the plan: reasoning-start
-    // for the thought (id-1), thought delta, then a SEPARATE reasoning
-    // triplet for the plan (id-2), then more thought-deltas on id-1.
     expect(types).toEqual([
       'reasoning-start',
       'reasoning-delta',

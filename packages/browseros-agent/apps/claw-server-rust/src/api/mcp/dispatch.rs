@@ -1,6 +1,6 @@
 use crate::{
     AppState,
-    api::mcp::{effects, guards, observers},
+    api::mcp::{effects, guards, helper_runtime, observers},
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
@@ -22,7 +22,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -200,8 +200,16 @@ const EFFECTS: &[NamedToolEffect] = &[
         name: "session-naming",
         run: effects::session_naming::apply,
     },
+    NamedToolEffect {
+        name: "helper-discovery",
+        run: helper_runtime::discovery,
+    },
 ];
 
+// The distiller (auto-capture of a successful run into a candidate helper) is
+// intentionally not wired. Self-healing keeps its agent-driven surface
+// (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
+// auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
 const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
     name: "audit",
     run: observers::audit::apply,
@@ -238,7 +246,7 @@ async fn dispatch_tool_call_with(
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
         return Err(McpError::invalid_request(
-            "BrowserClaw session is no longer live",
+            "BrowserOS neo session is no longer live",
             None,
         ));
     }
@@ -309,15 +317,19 @@ async fn dispatch_tool_call_with(
     } else {
         (false, false)
     };
+    let has_output_schema = call.tool().output_schema.is_some();
     if teardown_before_finish && operator_stop_requested {
         let cancellation = operator_cancellation_result();
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
-        return Ok(wire_result(cancellation));
+        // The operator-cancellation envelope is a dispatch-layer error, not the tool's
+        // promised output, so it must stay content-only even for schema-bearing tools;
+        // forwarding its structured content would violate the tool's output_schema.
+        return Ok(wire_result(cancellation, false));
     }
     call.dispatch_cancel.cancel();
     call.cancel.cancel();
-    result.map(wire_result)
+    result.map(|result| wire_result(result, has_output_schema))
 }
 
 async fn run_guards(call: &ToolCall, guards: &[ToolGuard]) -> Option<ToolResult> {
@@ -389,6 +401,34 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     }
     let result = match &call.browser_session {
         Some(browser_session) => {
+            // Script tools drive primitives straight against the shared browser
+            // session, bypassing the guards and audit effect the pipeline runs
+            // per tool. Inject a hook so each primitive is ownership-checked and
+            // recorded as a child of this script's dispatch.
+            let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
+            let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
+                if is_script && call.identity.is_some() {
+                    Some(
+                        Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
+                            call.clone(),
+                        )) as Arc<dyn browseros_mcp::InnerCallHook>,
+                    )
+                } else {
+                    None
+                };
+            // Hot-load the helpers the agent's owned-tab hosts make relevant, so
+            // the script can call them by name. Cheap-gated when no helpers exist.
+            let preloaded_helpers = match &call.identity {
+                Some(identity) if is_script => {
+                    crate::api::mcp::helper_runtime::preload_helpers(
+                        &call.state,
+                        &identity.ownership_key,
+                        browser_session,
+                    )
+                    .await
+                }
+                _ => Vec::new(),
+            };
             let ctx = ToolCtx::new(BrowserToolOptions {
                 session: browser_session.clone(),
                 defaults: BrowserToolDefaults {
@@ -397,6 +437,8 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 },
                 cancel: call.cancel.clone(),
                 output_files: call.output_files.clone(),
+                inner_call_hook,
+                preloaded_helpers,
             });
             match execute_tool(call.tool(), call.raw_args.clone(), &ctx).await {
                 Ok(result) => result,
@@ -407,7 +449,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             }
         }
         None => ToolResult::error(
-            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserClaw and check the cockpit connection status; do not fall back to another browser tool.",
+            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool.",
         ),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
@@ -439,14 +481,23 @@ pub(super) fn operator_cancellation_result() -> ToolResult {
     }
 }
 
-fn wire_result(result: ToolResult) -> CallToolResult {
+fn wire_result(result: ToolResult, has_output_schema: bool) -> CallToolResult {
     // Ordered effects retain structured content internally; the default BrowserClaw
-    // wire envelope deliberately exposes content blocks only.
-    if result.is_error {
+    // wire envelope exposes content blocks only. The exception is a tool that
+    // advertises an output_schema (e.g. `run`): a spec-compliant client rejects the
+    // call unless the promised structured content is actually delivered, so keep it.
+    let structured = if has_output_schema {
+        result.structured_content
+    } else {
+        None
+    };
+    let mut call_result = if result.is_error {
         CallToolResult::error(result.content)
     } else {
         CallToolResult::success(result.content)
-    }
+    };
+    call_result.structured_content = structured;
+    call_result
 }
 
 #[must_use]
@@ -858,7 +909,7 @@ mod tests {
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
-        let wire = wire_result(final_result.clone());
+        let wire = wire_result(final_result.clone(), false);
         assert_eq!(wire.content.len(), 2);
         assert_eq!(wire.structured_content, None);
 
@@ -965,7 +1016,7 @@ mod tests {
         };
         assert_eq!(
             error.message.as_ref(),
-            "BrowserClaw session is no longer live"
+            "BrowserOS neo session is no longer live"
         );
         assert!(
             call.state
@@ -1065,6 +1116,7 @@ mod tests {
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
+                "helper-discovery",
             ]
         );
         assert_eq!(
@@ -1077,14 +1129,36 @@ mod tests {
     }
 
     #[test]
-    fn wire_result_strips_structured_content_and_metadata() {
-        let result = wire_result(ToolResult::text(
-            "ok",
-            Some(json!({ "page": 7, "secret": true })),
-        ));
-        assert_eq!(result.is_error, Some(false));
-        assert_eq!(result.structured_content, None);
-        assert_eq!(result.meta, None);
+    fn wire_result_strips_structured_content_unless_the_tool_has_an_output_schema() {
+        // No output_schema: content-only envelope, structured content dropped.
+        let stripped = wire_result(
+            ToolResult::text("ok", Some(json!({ "page": 7, "secret": true }))),
+            false,
+        );
+        assert_eq!(stripped.is_error, Some(false));
+        assert_eq!(stripped.structured_content, None);
+        assert_eq!(stripped.meta, None);
+
+        // With output_schema (e.g. `run`): the promised structured content is delivered
+        // so spec-compliant clients accept the result.
+        let kept = wire_result(
+            ToolResult::text("ok", Some(json!({ "ok": true, "logs": [] }))),
+            true,
+        );
+        assert_eq!(
+            kept.structured_content,
+            Some(json!({ "ok": true, "logs": [] }))
+        );
+    }
+
+    #[test]
+    fn wire_result_drops_operator_cancellation_structured_content_for_schema_bearing_tools() {
+        // A schema-bearing tool (e.g. `run`) cancelled mid-teardown must not forward the
+        // cancellation envelope's structured content: it does not match the tool's
+        // output_schema and a spec-compliant client would reject the whole result.
+        let wire = wire_result(operator_cancellation_result(), false);
+        assert_eq!(wire.is_error, Some(true));
+        assert_eq!(wire.structured_content, None);
     }
 
     #[tokio::test]

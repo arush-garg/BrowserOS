@@ -7,7 +7,6 @@ import { describe, expect, it, mock } from 'bun:test'
 import { Hono } from 'hono'
 import { KlavisService } from '../../../src/api/services/klavis'
 import type { Env } from '../../../src/api/types'
-import { TurnRegistry } from '../../../src/lib/agents/turns/active-turn-registry'
 
 mock.module('../../../src/lib/mcp-manager', () => ({
   humaniseInstallError: (err: unknown) => ({
@@ -45,9 +44,14 @@ function createTestApp(
     klavis: new KlavisService({ browserosId: null }),
     onShutdown,
     tokenManager: null,
-    turnRegistry: new TurnRegistry(),
   })
 }
+
+const localServer = {
+  server: {
+    requestIP: () => ({ address: '127.0.0.1' }),
+  },
+} as never
 
 describe('createApiRoutes', () => {
   it('mounts the canonical system health route', async () => {
@@ -120,6 +124,22 @@ describe('createApiRoutes', () => {
     await expect(response.json()).resolves.toEqual({ agents: [] })
   })
 
+  it('serves the tool catalogue for the settings UI', async () => {
+    const response = await createTestApp().request('/mcp-manager/tools')
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      tools: { name: string; description: string }[]
+    }
+    const names = body.tools.map((tool) => tool.name)
+    expect(names).toContain('navigate')
+    expect(names).toContain('run')
+    for (const tool of body.tools) {
+      expect(typeof tool.name).toBe('string')
+      expect(typeof tool.description).toBe('string')
+    }
+  })
+
   it('keeps injected agent routes behind app-origin auth', async () => {
     const agentRoutes = new Hono<Env>().post('/guard-check', (c) =>
       c.json({ ok: true }),
@@ -131,13 +151,144 @@ describe('createApiRoutes', () => {
     })
     expect(blocked.status).toBe(403)
 
-    const allowed = await app.request('/agents/guard-check', {
-      method: 'POST',
-      headers: {
-        Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+    const allowed = await app.request(
+      '/agents/guard-check',
+      {
+        method: 'POST',
+        headers: {
+          Host: 'localhost',
+          Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+        },
       },
-    })
+      localServer,
+    )
     expect(allowed.status).toBe(200)
     await expect(allowed.json()).resolves.toEqual({ ok: true })
+  })
+
+  it('requires a trusted local app request before ACP chat dispatch', async () => {
+    const body = JSON.stringify({
+      target: {
+        type: 'claude',
+        agentId: '00000000-0000-4000-8000-000000000001',
+      },
+      conversationId: '00000000-0000-4000-8000-000000000002',
+      message: 'run a command',
+    })
+    const app = createTestApp()
+
+    const originless = await app.request('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    expect(originless.status).toBe(403)
+
+    const remote = await app.request(
+      '/chat',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+        },
+        body,
+      },
+      {
+        server: { requestIP: () => ({ address: '192.168.1.20' }) },
+      } as never,
+    )
+    expect(remote.status).toBe(403)
+  })
+
+  it('requires a trusted local app request before probing host agents', async () => {
+    const response = await createTestApp().request('/acpx/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'claude' }),
+    })
+
+    expect(response.status).toBe(403)
+  })
+
+  // These rows hold provider API keys in the clear. The blanket
+  // requireTrustedOrigin only rejects a request that carries a disallowed
+  // Origin, so a request with none passes it and the prefix guard is the only
+  // thing standing between another local process and the credentials.
+  it('keeps provider credentials behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/providers')).status).toBe(403)
+    expect(
+      (
+        await app.request('/providers', {}, {
+          server: { requestIP: () => ({ address: '192.168.1.20' }) },
+        } as never)
+      ).status,
+    ).toBe(403)
+  })
+
+  // /test-provider reuses a saved provider credential server-side and
+  // /refine-prompt drives an outbound LLM call, so both must sit behind the same
+  // app-origin auth as /providers, not just the blanket Origin check that a
+  // request carrying no Origin slips past.
+  it('keeps provider test and refine-prompt behind app-origin auth', async () => {
+    const app = createTestApp()
+    const body = JSON.stringify({ provider: 'openai-compatible', model: 'x' })
+
+    for (const path of ['/test-provider', '/refine-prompt']) {
+      const originless = await app.request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
+      expect(originless.status).toBe(403)
+
+      const remote = await app.request(
+        path,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+          },
+          body,
+        },
+        {
+          server: { requestIP: () => ({ address: '192.168.1.20' }) },
+        } as never,
+      )
+      expect(remote.status).toBe(403)
+    }
+  })
+
+  it('keeps scheduled job runs behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/scheduled-job-runs')).status).toBe(403)
+    expect(
+      (
+        await app.request('/scheduled-job-runs/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runs: [] }),
+        })
+      ).status,
+    ).toBe(403)
+  })
+
+  it('keeps scheduled jobs behind app-origin auth', async () => {
+    const app = createTestApp()
+
+    expect((await app.request('/scheduled-jobs')).status).toBe(403)
+    expect(
+      (
+        await app.request('/scheduled-jobs/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobs: [] }),
+        })
+      ).status,
+    ).toBe(403)
   })
 })

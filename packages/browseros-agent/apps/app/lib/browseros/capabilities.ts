@@ -2,7 +2,6 @@ import { env } from '../env'
 import { BrowserOSAdapter } from './adapter'
 
 const SERVER_VERSION_PREF = 'browseros.server.version'
-export const CAPABILITIES_READ_TIMEOUT_MS = 1500
 
 type FeatureConfig = {
   minBrowserOSVersion?: string
@@ -13,58 +12,31 @@ type FeatureConfig = {
   requiresDevelopmentFlag?: boolean
 }
 
-/**
- * Features gated by BrowserOS version or explicit environment flags.
- * Add new features here with corresponding config in FEATURE_CONFIG.
- *
- * Note: In development mode, all features are enabled regardless of version
- * or alpha flag. Development-only gates resolve false outside development.
- * @public
- */
+// Voice input was removed because its bundled VAD/ONNX assets made startup
+// unpacking too slow. Its UI, recording code, dependencies, and assets were
+// removed together.
 export enum Feature {
-  // Unfinished UI surfaces behind an explicit alpha opt-in
   ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
-  VOICE_INPUT_SUPPORT = 'VOICE_INPUT_SUPPORT',
-  // Inline chat in the new tab page
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
-  // Vertical tabs preference and customization
+  NEWTAB_CHAT_HISTORY_SUPPORT = 'NEWTAB_CHAT_HISTORY_SUPPORT',
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
-  // ChatGPT Pro OAuth LLM provider
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
-  // GitHub Copilot OAuth LLM provider
   GITHUB_COPILOT_SUPPORT = 'GITHUB_COPILOT_SUPPORT',
-  // Qwen Code OAuth LLM provider
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
-  // Credit-based usage tracking
   CREDITS_SUPPORT = 'CREDITS_SUPPORT',
-  // Claude Code / Codex agent-harness adapters in the unified picker + settings
   AGENT_HARNESS_SUPPORT = 'AGENT_HARNESS_SUPPORT',
-  // Hermes agent runtime support
-  HERMES_AGENT_SUPPORT = 'HERMES_AGENT_SUPPORT',
 }
 
-/**
- * Version requirements for each feature.
- * - minBrowserOSVersion: feature enabled when BrowserOS >= this version
- * - maxBrowserOSVersion: feature enabled when BrowserOS < this version (for deprecation)
- * - minServerVersion: feature enabled when server >= this version
- * - maxServerVersion: feature enabled when server < this version (for deprecation)
- *
- * TypeScript enforces that every Feature has a config entry.
- * In development mode, all features are enabled regardless of version or
- * alpha flag.
- */
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
-  [Feature.VOICE_INPUT_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
+  [Feature.NEWTAB_CHAT_HISTORY_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
   [Feature.AGENT_HARNESS_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
-  [Feature.HERMES_AGENT_SUPPORT]: {},
 }
 
 function hasVersionConstraints(config: FeatureConfig): boolean {
@@ -95,19 +67,6 @@ function compareVersions(a: number[], b: number[]): number {
   return 0
 }
 
-async function readWithTimeout<T>(
-  operation: Promise<T>,
-  timeoutMs: number,
-  fallbackValue: T,
-): Promise<T> {
-  return await Promise.race([
-    operation,
-    new Promise<T>((resolve) => {
-      setTimeout(() => resolve(fallbackValue), timeoutMs)
-    }),
-  ])
-}
-
 function checkVersionConstraints(
   version: number[] | null,
   minVersionStr?: string,
@@ -127,7 +86,6 @@ function checkVersionConstraints(
   return true
 }
 
-/** Resolves static environment gates before version checks. */
 export function resolveStaticFeatureSupport({
   isDevelopment,
   alphaFeaturesEnabled,
@@ -151,7 +109,6 @@ export function resolveStaticFeatureSupport({
   return null
 }
 
-/** Applies static gates, falling through when version gates still need evaluation. */
 export function resolveFeatureStaticSupport({
   feature,
   isDevelopment,
@@ -196,27 +153,19 @@ async function doInitialize(): Promise<CapabilitiesState> {
     serverVersion: null,
   }
 
-  const [browserOSVersion, serverVersion] = await Promise.all([
-    readWithTimeout(
-      adapter
-        .getBrowserosVersion()
-        .then((version) => (version ? parseVersion(version) : null))
-        .catch(() => null),
-      CAPABILITIES_READ_TIMEOUT_MS,
-      null,
-    ),
-    readWithTimeout(
-      adapter
-        .getPref(SERVER_VERSION_PREF)
-        .then((pref) => (pref?.value ? parseVersion(pref.value) : null))
-        .catch(() => null),
-      CAPABILITIES_READ_TIMEOUT_MS,
-      null,
-    ),
-  ])
+  try {
+    const versionStr = await adapter.getBrowserosVersion()
+    if (versionStr) {
+      state.browserOSVersion = parseVersion(versionStr)
+    }
+  } catch {}
 
-  state.browserOSVersion = browserOSVersion
-  state.serverVersion = serverVersion
+  try {
+    const pref = await adapter.getPref(SERVER_VERSION_PREF)
+    if (pref?.value) {
+      state.serverVersion = parseVersion(pref.value)
+    }
+  } catch {}
 
   return state
 }
@@ -228,8 +177,6 @@ function ensureInitialized(): Promise<CapabilitiesState> {
   return initPromise
 }
 
-// Exported for unit tests: resolves a feature's version gate directly,
-// bypassing the dev-mode/static short-circuit in `supports`.
 export function checkFeatureSupport(
   state: CapabilitiesState,
   feature: Feature,
@@ -266,20 +213,11 @@ export function checkFeatureSupport(
   return true
 }
 
-/**
- * Version-gated feature capabilities.
- * All methods auto-initialize and are safe to call at any time.
- * @public
- */
 export const Capabilities = {
   getStaticSupport(feature: Feature): boolean | null {
     return getStaticFeatureSupport(feature)
   },
 
-  /**
-   * Check if a feature is supported.
-   * In development mode, all features are enabled.
-   */
   async supports(feature: Feature): Promise<boolean> {
     const staticSupport = getStaticFeatureSupport(feature)
     if (staticSupport !== null) return staticSupport
@@ -299,21 +237,13 @@ export const Capabilities = {
     return state.serverVersion.join('.')
   },
 
-  /**
-   * Pre-initialize capabilities. Optional - methods auto-initialize if needed.
-   * Useful for warming up before first use.
-   */
   async initialize(): Promise<void> {
     await ensureInitialized()
   },
 
-  /**
-   * Reset state for testing purposes.
-   */
   reset(): void {
     initPromise = null
   },
 }
 
-// Pre-initialize when module is imported
 ensureInitialized()

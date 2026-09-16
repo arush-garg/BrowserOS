@@ -7,7 +7,7 @@ use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server_rust::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
     services::sessions::Session,
@@ -175,7 +175,6 @@ struct McpSseStream {
 }
 
 impl McpSseStream {
-    /// Opens the session's standalone SSE channel for server-initiated MCP requests.
     async fn open(router: &Router, session_id: &str) -> anyhow::Result<Self> {
         let request = Request::builder()
             .method("GET")
@@ -372,12 +371,36 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    let listed: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools not array"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
     assert_eq!(
-        body["result"]["tools"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tools not array"))?
-            .len(),
-        17
+        listed,
+        vec![
+            "tabs",
+            "tab_groups",
+            "history",
+            "navigate",
+            "snapshot",
+            "diff",
+            "act",
+            "download",
+            "upload",
+            "read",
+            "grep",
+            "screenshot",
+            "pdf",
+            "wait",
+            "windows",
+            "evaluate",
+            "run",
+            "name_session",
+            "save_skill",
+            "mark_skill_run",
+        ]
     );
 
     let blocked = json!({
@@ -458,19 +481,57 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    // SEP-2549 ttlMs/cacheScope are 2026-07-28-only; a legacy (2025-06-18) peer must
+    // not receive them (they are emitted only when the negotiated revision is 2026-07-28).
+    assert!(
+        body["result"]["ttlMs"].is_null(),
+        "ttlMs leaked to legacy peer"
+    );
+    assert!(
+        body["result"]["cacheScope"].is_null(),
+        "cacheScope leaked to legacy peer"
+    );
     let tool = body["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "name_session"))
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <agentName>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
         json!({
             "type": "object",
-            "properties": { "name": { "type": "string", "maxLength": 64 } },
+            "properties": {
+                "name": { "type": "string", "maxLength": 64 },
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "shopping",
+                        "research",
+                        "email-and-messaging",
+                        "form-filling",
+                        "data-extraction",
+                        "testing-and-qa",
+                        "dev-tools",
+                        "social-media",
+                        "finance-and-admin",
+                        "internal-tools",
+                        "other"
+                    ],
+                    "description": "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list."
+                },
+                "summary": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers."
+                },
+                "session": {
+                    "type": "string",
+                    "description": "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session."
+                }
+            },
             "required": ["name"]
         })
     );
@@ -630,7 +691,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
     let tip = format!(
-        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
+        "Tip: this session is \"claude-code/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
     );
     for id in 3..=7 {
         let (status, _headers, body) = request_json_with_headers(
@@ -1031,6 +1092,96 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn historical_sessions_reconcile_stored_live_status() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let disconnected = test_session(
+        SessionId::new("disconnected-session"),
+        "disconnected-agent",
+        "codex",
+    );
+    let connected = test_session(
+        SessionId::new("connected-session"),
+        "connected-agent",
+        "codex",
+    );
+    record_session_with_dispatch(&app, &disconnected).await?;
+    record_session_with_dispatch(&app, &connected).await?;
+    app.state
+        .sessions
+        .insert_for_testing(connected.clone())
+        .await;
+
+    for session in [&disconnected, &connected] {
+        assert_eq!(
+            app.state
+                .audit_log
+                .get_task_summary(session.id().as_str())
+                .await?
+                .map(|summary| summary.status),
+            Some(TaskStatus::Live)
+        );
+    }
+
+    let (status, body) = request_json(&app.router, "GET", "/api/v1/sessions", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("sessions not array"))?;
+    for (session_id, expected_status) in [
+        (disconnected.id().as_str(), "done"),
+        (connected.id().as_str(), "live"),
+    ] {
+        let summary = items
+            .iter()
+            .find(|item| item["sessionId"] == session_id)
+            .ok_or_else(|| anyhow::anyhow!("missing session {session_id}"))?;
+        assert_eq!(summary["status"], expected_status);
+
+        let (status, detail) = request_json(
+            &app.router,
+            "GET",
+            &format!("/api/v1/sessions/{session_id}"),
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["session"]["status"], expected_status);
+    }
+
+    let (status, first_done_page) = request_json(
+        &app.router,
+        "GET",
+        "/api/v1/sessions?status=done&limit=1",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first_done_page["items"], json!([]));
+    let next_cursor = first_done_page["nextCursor"]
+        .as_i64()
+        .ok_or_else(|| anyhow::anyhow!("filtered page dropped its cursor"))?;
+
+    let (status, done) = request_json(
+        &app.router,
+        "GET",
+        &format!("/api/v1/sessions?status=done&limit=1&cursor={next_cursor}"),
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        done["items"].as_array().map(|items| {
+            items
+                .iter()
+                .map(|item| item["sessionId"].as_str())
+                .collect::<Vec<_>>()
+        }),
+        Some(vec![Some(disconnected.id().as_str())])
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-exact", 1).await;
@@ -1215,6 +1366,21 @@ async fn live_projection_filters_external_close() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"][0]["live"]["browserTabs"], json!([]));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn recording_live_stream_rejects_an_unknown_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    assert_eq!(
+        request_status(
+            &app.router,
+            "GET",
+            "/api/v1/sessions/does-not-exist/recording/live",
+        )
+        .await?,
+        StatusCode::NOT_FOUND,
+    );
     Ok(())
 }
 
@@ -1448,6 +1614,8 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
             result_meta: result_meta(false, false, &json!({}), 0),
             duration_ms: 1,
             dispatch_id: DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 0,
             token_estimator_version: 1,
@@ -1470,11 +1638,11 @@ async fn initialize_mcp(app: &TestApp) -> anyhow::Result<String> {
     let (status, headers, body) =
         request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
     assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
-    assert_eq!(body["result"]["serverInfo"]["name"], "browserclaw");
-    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserClaw");
+    assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
+    assert_eq!(body["result"]["serverInfo"]["title"], "BrowserOS neo");
     assert!(
         body["result"]["instructions"].as_str().is_some_and(
-            |instructions| instructions.starts_with("BrowserClaw — the browser for agents")
+            |instructions| instructions.starts_with("BrowserOS neo — the browser for agents")
         )
     );
     let session_id = headers

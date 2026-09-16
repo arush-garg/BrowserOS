@@ -1,9 +1,18 @@
-import { AlertTriangle, ArrowRight, Download, RefreshCw } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  ChevronDown,
+  Download,
+  Lock,
+  RefreshCw,
+} from 'lucide-react'
+import { useId, useRef, useState } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
 import { FormField, FormItem, FormMessage } from '@/components/ui/form'
 import type {
   BrowserOSImportItem,
+  BrowserOSImportSource,
   BrowserOSOnboardingState,
 } from '../browseros-onboarding-api'
 import { DisplayHeading, Em, StepCopy } from '../components/DisplayHeading'
@@ -11,7 +20,8 @@ import { ImportedSummaryCard } from '../components/ImportedSummaryCard'
 import { ImportItemChecklist } from '../components/ImportItemChecklist'
 import { ImportingProgressCard } from '../components/ImportingProgressCard'
 import { ImportSourceTile } from '../components/ImportSourceTile'
-import { MacKeychainNotice } from '../components/MacKeychainNotice'
+import { MacKeychainDialog } from '../components/MacKeychainDialog'
+import { MacKeychainReminder } from '../components/MacKeychainNotice'
 import { StepWrap } from '../components/StepWrap'
 import {
   completedImportItemCount,
@@ -19,9 +29,10 @@ import {
   importItemLabel,
   importItemListLabel,
   importProgressTotal,
+  isMacOS,
+  needsMacKeychainPermission,
   sanitizeImportSelection,
   selectedSourceById,
-  splitImportSelection,
 } from '../onboarding-v2.helpers'
 import type { OnboardingFormValues } from '../onboarding-v2.schemas'
 import type { ImportPhase } from '../onboarding-v2.types'
@@ -35,32 +46,32 @@ interface ImportStepProps {
   onContinue: () => void
 }
 
-/**
- * Names the logins rather than counting them, so the default action reads as a
- * credential handover instead of a bulk browser import. Extras stay countable
- * because they are opt-in and the user should see what they added.
- */
 function importButtonLabelFor(
   hasSource: boolean,
   hasSupportedItems: boolean,
   checkedItems: readonly BrowserOSImportItem[],
-  sourceName: string,
+  browserName: string,
 ): string {
   if (!hasSource) return 'Pick a profile'
   if (!hasSupportedItems) return 'Nothing to copy from this profile'
   if (checkedItems.length === 0) return 'Select what to copy'
 
-  const { loginItems, extraItems } = splitImportSelection(checkedItems)
-  if (loginItems.length === 0) {
-    return `Copy ${extraItems.length} ${
-      extraItems.length === 1 ? 'item' : 'items'
-    } from ${sourceName}`
-  }
-  if (extraItems.length === 0) return `Copy logins from ${sourceName}`
-  return `Copy logins + ${extraItems.length} more from ${sourceName}`
+  return `Copy from ${browserName.replace(/^Google /, '')}`
 }
 
-/** Renders the browser import step across quit, picker, progress, and success states. */
+/** Collapsing the list must not hide the profile whose data will be copied. */
+function visibleProfiles(
+  sources: readonly BrowserOSImportSource[],
+  selectedSource: BrowserOSImportSource | undefined,
+  expanded: boolean,
+) {
+  if (expanded) return sources
+  const visible = sources.slice(0, 4)
+  if (selectedSource && !visible.includes(selectedSource))
+    visible[3] = selectedSource
+  return visible
+}
+
 export function ImportStep({
   phase,
   state,
@@ -69,12 +80,26 @@ export function ImportStep({
   onRefresh,
   onContinue,
 }: ImportStepProps) {
+  const [permissionOpen, setPermissionOpen] = useState(false)
+  const [showAllProfiles, setShowAllProfiles] = useState(false)
+  const importButtonRef = useRef<HTMLButtonElement>(null)
+  const profileListId = useId()
   const selectedSourceId = form.watch('selectedSourceId')
   const selectedSource = selectedSourceById(state.sources, selectedSourceId)
   const sourceResult = state.results?.[0]
   const checkedItems = selectedSource
     ? sanitizeImportSelection(selectedSource, form.watch('selectedItems'))
     : []
+  const needsPermission = needsMacKeychainPermission(
+    isMacOS(),
+    selectedSource,
+    checkedItems,
+  )
+  const visibleSources = visibleProfiles(
+    state.sources,
+    selectedSource,
+    showAllProfiles,
+  )
   const sourceName =
     sourceResult?.displayName ||
     selectedSource?.profileName ||
@@ -106,8 +131,24 @@ export function ImportStep({
     Boolean(selectedSource),
     hasSupportedItems,
     checkedItems,
-    sourceName,
+    selectedSource?.browserName ?? 'browser',
   )
+
+  function requestImport() {
+    if (!isPickerValid) return
+    if (needsPermission) {
+      setPermissionOpen(true)
+      return
+    }
+    onImport()
+  }
+
+  function confirmImport() {
+    setPermissionOpen(false)
+    // Do not defer to an effect or animation: native import needs the recent
+    // Continue gesture. The bridge owns the pending lock until native replies.
+    if (isPickerValid && (phase === 'picker' || phase === 'failed')) onImport()
+  }
 
   function toggleImportItem(item: BrowserOSImportItem) {
     if (!selectedSource) return
@@ -125,14 +166,13 @@ export function ImportStep({
   }
 
   return (
-    <StepWrap>
+    <StepWrap className="max-w-[800px]">
       <DisplayHeading>
         Your agents need your <Em>logins.</Em>
       </DisplayHeading>
       <StepCopy>
-        Gmail, GitHub, your bank &mdash; whatever Chrome is already signed into.
-        Copy these logins, which your Chrome already has. Everything is stored
-        locally on this machine.
+        Bring your signed-in sessions and saved data from Chrome. Everything is
+        copied locally to this machine.
       </StepCopy>
 
       {phase === 'picker' && (
@@ -159,10 +199,12 @@ export function ImportStep({
             name="selectedSourceId"
             render={({ field }) => (
               <FormItem
-                className="mb-4 flex flex-col gap-2.5"
+                id={profileListId}
+                className="mb-3 flex flex-col gap-2"
                 role="radiogroup"
+                aria-label="Browser profiles"
               >
-                {state.sources.map((source) => (
+                {visibleSources.map((source) => (
                   <ImportSourceTile
                     key={source.id}
                     source={source}
@@ -194,6 +236,25 @@ export function ImportStep({
               </FormItem>
             )}
           />
+          {state.sources.length > 4 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mb-4 text-ink-2"
+              aria-expanded={showAllProfiles}
+              aria-controls={profileListId}
+              onClick={() => setShowAllProfiles(!showAllProfiles)}
+            >
+              <ChevronDown
+                aria-hidden
+                className={`size-3.5 ${showAllProfiles ? 'rotate-180' : ''}`}
+              />
+              {showAllProfiles
+                ? 'Show fewer profiles'
+                : `Show ${state.sources.length - 4} more profiles`}
+            </Button>
+          )}
           {selectedSource && hasSupportedItems && (
             <ImportItemChecklist
               items={selectedSource.supportedItems}
@@ -206,36 +267,52 @@ export function ImportStep({
               {state.error.message}
             </div>
           )}
-          <MacKeychainNotice />
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              size="lg"
-              onClick={onImport}
-              disabled={!isPickerValid}
-            >
-              <Download className="size-4" />
-              {importButtonLabel}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              variant="ghost"
-              onClick={onContinue}
-            >
-              Skip for now
-            </Button>
+          <div className="sticky -bottom-6 z-10 border-border-2 border-t bg-bg-canvas py-4">
+            {needsPermission && (
+              <p className="mb-3 flex items-center gap-2 text-ink-3 text-xs">
+                <Lock aria-hidden className="size-3.5" />
+                macOS may ask for your Mac login password.
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                size="lg"
+                ref={importButtonRef}
+                onClick={requestImport}
+                disabled={!isPickerValid}
+              >
+                <Download className="size-4" />
+                {importButtonLabel}
+              </Button>
+              <Button
+                type="button"
+                size="lg"
+                variant="ghost"
+                onClick={onContinue}
+              >
+                Skip for now
+              </Button>
+              {selectedSource?.profileName && (
+                <span className="text-ink-3 text-xs">
+                  From {selectedSource.profileName}’s profile
+                </span>
+              )}
+            </div>
           </div>
         </>
       )}
 
       {phase === 'importing' && (
-        <ImportingProgressCard
-          currentItemLabel={currentItemLabel}
-          progress={completedItems}
-          sourceLabel={currentSourceLabel}
-          total={totalItems}
-        />
+        <>
+          <ImportingProgressCard
+            currentItemLabel={currentItemLabel}
+            progress={completedItems}
+            sourceLabel={currentSourceLabel}
+            total={totalItems}
+          />
+          {needsPermission && <MacKeychainReminder />}
+        </>
       )}
 
       {phase === 'failed' && (
@@ -247,14 +324,15 @@ export function ImportStep({
             </div>
             <div className="text-[12.5px] text-ink-2">
               {state.error?.message ??
-                "BrowserClaw couldn't finish this import. Try again below, or refresh the profile list."}
+                "BrowserOS neo couldn't finish this import. Try again below, or refresh the profile list."}
             </div>
           </div>
           <div className="flex flex-wrap gap-2.5">
             <Button
               type="button"
               size="lg"
-              onClick={onImport}
+              ref={importButtonRef}
+              onClick={requestImport}
               disabled={!isPickerValid}
             >
               <Download className="size-4" />
@@ -289,6 +367,16 @@ export function ImportStep({
           </Button>
         </>
       )}
+      <MacKeychainDialog
+        open={
+          permissionOpen &&
+          isPickerValid &&
+          (phase === 'picker' || phase === 'failed')
+        }
+        onOpenChange={setPermissionOpen}
+        onContinue={confirmImport}
+        returnFocus={importButtonRef}
+      />
     </StepWrap>
   )
 }

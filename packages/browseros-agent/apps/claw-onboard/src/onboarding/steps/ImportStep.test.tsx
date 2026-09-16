@@ -126,12 +126,12 @@ function buttonMarkupFor(html: string, label: string): string {
 }
 
 describe('ImportStep', () => {
-  it('renders the picker, the Keychain notice, and a Copy button in picker phase', () => {
+  it('renders a compact picker without the permission dialog before Copy', () => {
     const html = render('picker')
     expect(html).toContain('Pick a profile')
-    expect(html).toContain('Google Chrome - Work')
-    expect(html).toContain('Google Chrome - Personal')
-    expect(html).toContain('Microsoft Edge - Default')
+    expect(html).toContain('Work')
+    expect(html).toContain('Personal')
+    expect(html).toContain('Microsoft Edge')
     expect(html).toContain('What to copy')
     for (const item of defaultImportItemsForSource(
       MOCK_BROWSEROS_IMPORT_SOURCES[0],
@@ -140,68 +140,76 @@ describe('ImportStep', () => {
         'aria-checked="true"',
       )
     }
-    expect(html).toContain('2 selected')
-    // JSX wraps "macOS will ask" in a semibold span, so the string
-    // "macOS will ask to read" is split by a </span> boundary in the
-    // rendered HTML. Assert on the positive plus a negative that
-    // explicitly rules out the old "macOS will ask permission"
-    // phrasing; together these pin the assertion to the new copy
-    // without fighting the JSX structure.
-    expect(html).toContain('macOS will ask')
-    expect(html).not.toContain('macOS will ask permission')
-    expect(html).toContain('Allow')
+    expect(html).toContain('5 categories selected')
+    expect(html).not.toContain('Example macOS dialog')
     expect(html).not.toContain('Always Allow')
-    expect(html).toContain('Copy logins from Work')
+    expect(html).not.toContain('/icon/keychain-prompt.png')
+    expect(html).toContain('Copy from Chrome')
     expect(html).not.toContain('Chrome is open')
     expect(html).not.toContain('Quit Chrome for me')
     expect(html).not.toContain('disabled=""')
   })
 
-  // No MCP tool exposes history, bookmarks, search engines, autofill or
-  // extensions to an agent, so they must never ride along by default.
-  it('checks logins only and leaves the browsing setup unchecked', () => {
+  it('checks every supported non-optional item by default', () => {
     const source = MOCK_BROWSEROS_IMPORT_SOURCES[1]
     const html = render('picker', readyState(), {
       selectedSourceId: source.id,
       selectedItems: defaultImportItemsForSource(source),
     })
 
-    expect(html).toContain('2 selected')
-    expect(html).toContain('Copy logins from Personal')
-    for (const item of ['Cookies', 'Passwords']) {
+    expect(html).toContain('5 categories selected')
+    expect(html).toContain('Copy from Chrome')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Signed-in sessions (cookies)',
+      'Saved passwords',
+      'Autofill',
+    ]) {
       const row = checklistRowFor(html, item)
       expect(row).toContain('data-checked=""')
       expect(row).toContain('aria-checked="true"')
     }
-    for (const item of ['History', 'Bookmarks', 'Autofill']) {
-      const row = checklistRowFor(html, item)
-      expect(row).toContain('data-unchecked=""')
-      expect(row).toContain('aria-checked="false"')
+    expect(html).not.toContain('<details')
+  })
+
+  it('collapses only search engines and extensions behind a disclosure', () => {
+    const html = render('picker')
+    const detailsStart = html.indexOf('<details')
+    const detailsEnd = html.indexOf('</details>', detailsStart)
+    const details = html.slice(detailsStart, detailsEnd)
+
+    expect(detailsStart).toBeGreaterThan(-1)
+    expect(html).toContain('Also copy my browsing setup')
+    expect(details).toContain('Search engines')
+    expect(details).toContain('Extensions')
+    for (const item of [
+      'History',
+      'Bookmarks',
+      'Signed-in sessions (cookies)',
+      'Saved passwords',
+      'Autofill',
+    ]) {
+      expect(details).not.toContain(item)
+    }
+    for (const item of ['Search engines', 'Extensions']) {
+      expect(checklistRowFor(html, item)).toContain('aria-checked="false"')
     }
   })
 
-  it('collapses the non-login items behind a disclosure', () => {
-    const html = render('picker')
-
-    expect(html).toContain('<details')
-    expect(html).toContain('Also copy my browsing setup')
-    // The extras stay reachable, just not part of the default ask.
-    expect(checklistRowFor(html, 'History')).toContain('aria-checked="false"')
-  })
-
-  it('counts opted-in extras separately from the logins', () => {
+  it('counts only the selected categories', () => {
     const html = render('picker', readyState(), {
       selectedItems: ['cookies', 'passwords', 'history'],
     })
 
-    expect(html).toContain('3 selected')
-    expect(html).toContain('Copy logins + 1 more from Work')
+    expect(html).toContain('3 categories selected')
+    expect(html).toContain('Copy from Chrome')
   })
 
   it('disables the copy action until at least one item is selected', () => {
     const html = render('picker', readyState(), { selectedItems: [] })
 
-    expect(html).toContain('0 selected')
+    expect(html).toContain('0 categories selected')
     expect(html).toContain('Select what to copy')
     expect(html).toContain('disabled=""')
   })
@@ -230,31 +238,13 @@ describe('ImportStep', () => {
     expect(html).toContain('disabled=""')
   })
 
-  it('uses the singular source tile item count for one supported item', () => {
-    const html = render(
-      'picker',
-      readyState({
-        sources: [
-          {
-            ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
-            supportedItems: ['history'],
-            recommendedItems: ['history'],
-          },
-        ],
-      }),
-    )
-
-    expect(html).toContain('1 item')
-    expect(html).not.toContain('1 items')
-  })
-
-  it('uses the singular item label when one item is selected', () => {
+  it('allows copying one selected category', () => {
     const html = render('picker', readyState(), {
       selectedItems: ['history'],
     })
 
-    expect(html).toContain('1 selected')
-    expect(html).toContain('Copy 1 item from Work')
+    expect(html).toContain('1 categories selected')
+    expect(html).toContain('Copy from Chrome')
   })
 
   it('renders the importing progress card during importing phase', () => {
@@ -280,7 +270,7 @@ describe('ImportStep', () => {
         ],
       }),
     )
-    expect(html).toContain('Importing Cookies')
+    expect(html).toContain('Importing Signed-in sessions (cookies)')
     expect(html).toContain('Google Chrome - Work')
     expect(html).toContain('2 / 7 items')
   })
@@ -427,5 +417,20 @@ describe('ImportStep', () => {
     expect(PICK_PROFILE_MESSAGE).not.toBe('')
     expect(html).toContain('data-slot="form-message"')
     expect(html).toContain(PICK_PROFILE_MESSAGE)
+  })
+  it('shows four profiles while keeping a selection outside the first four visible', () => {
+    const sources = Array.from({ length: 7 }, (_, index) => ({
+      ...MOCK_BROWSEROS_IMPORT_SOURCES[0],
+      id: `profile-${index}`,
+      profileName: `Person ${index}`,
+    }))
+    const html = render('picker', readyState({ sources }), {
+      selectedSourceId: 'profile-6',
+    })
+    expect(html).toContain('Person 6')
+    expect(html).not.toContain('Person 3')
+    expect(html).not.toContain('Person 4')
+    expect(html).toContain('Show 3 more profiles')
+    expect(html.match(/type="radio"/g)).toHaveLength(4)
   })
 })

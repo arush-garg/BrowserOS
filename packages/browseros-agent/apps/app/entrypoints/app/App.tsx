@@ -1,26 +1,23 @@
+import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout'
 import { SidebarLayout } from '@/components/layout/SidebarLayout'
-import { AgentCommandConversation } from '@/screens/agent-command/AgentCommandConversation'
 import { AgentCommandHome } from '@/screens/agent-command/AgentCommandHome'
-import { AgentCommandLayout } from '@/screens/agent-command/AgentCommandLayout'
 import { AISettingsPage } from '@/screens/ai-settings/AISettingsPage'
 import { LoginPage } from '@/screens/auth/LoginPage'
 import { LogoutPage } from '@/screens/auth/LogoutPage'
 import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
+import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
 import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
 import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
-import { OnboardingDemo } from '@/screens/onboarding/demo/OnboardingDemo'
-import { FeaturesPage } from '@/screens/onboarding/features/Features'
-import { Onboarding } from '@/screens/onboarding/index/Onboarding'
-import { StepsLayout } from '@/screens/onboarding/steps/StepsLayout'
+import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 import { UsagePage } from '@/screens/usage/UsagePage'
@@ -31,13 +28,6 @@ function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const experimentId = params.get('experimentId') ?? 'default'
   const maxTurns = maxTurnsStr ? Number.parseInt(maxTurnsStr, 10) : 7
   return { maxTurns, experimentId }
-}
-
-// Agent management moved into AI & Agents settings; conversations live under
-// /home/agents. Keep old /agents links alive.
-const LegacyAgentRedirect: FC = () => {
-  const params = useParams()
-  return <Navigate to={`/home/agents/${params.agentId ?? ''}`} replace />
 }
 
 const OptionsRedirect: FC = () => {
@@ -73,17 +63,7 @@ export const App: FC = () => {
 
         <Route element={<SidebarLayout />}>
           <Route path="home" element={<NewTabLayout />}>
-            <Route element={<AgentCommandLayout />}>
-              <Route index element={<AgentCommandHome />} />
-              <Route
-                path="agents/:agentId"
-                element={<AgentCommandConversation />}
-              />
-              <Route
-                path="agents/:agentId/sessions/:sessionId"
-                element={<AgentCommandConversation />}
-              />
-            </Route>
+            <Route index element={<AgentCommandHome />} />
             <Route path="chat" element={<NewTabChat />} />
             <Route path="personalize" element={<Personalize />} />
           </Route>
@@ -99,6 +79,7 @@ export const App: FC = () => {
             <Route path="chat" element={<LlmHubPage />} />
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
+            <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route
               path="search"
               element={<Navigate to="/settings/ai" replace />}
@@ -109,11 +90,13 @@ export const App: FC = () => {
           </Route>
         </Route>
 
+        <Route path="features" element={<FeaturesPage />} />
+
+        {/* First-run setup, opened by the native onboarding on completion.
+            Outside every layout route on purpose: no sidebar, no chrome. */}
         <Route path="onboarding">
-          <Route index element={<Onboarding />} />
-          <Route path="steps/:stepId" element={<StepsLayout />} />
-          <Route path="demo" element={<OnboardingDemo />} />
-          <Route path="features" element={<FeaturesPage />} />
+          <Route path="ai" element={<OnboardingAiPage />} />
+          <Route index element={<Navigate to="/onboarding/ai" replace />} />
         </Route>
 
         <Route path="/" element={<Navigate to="/home" replace />} />
@@ -135,7 +118,10 @@ export const App: FC = () => {
           path="/agents"
           element={<Navigate to="/settings/ai" replace />}
         />
-        <Route path="/agents/:agentId" element={<LegacyAgentRedirect />} />
+        <Route
+          path="/agents/:agentId"
+          element={<Navigate to="/settings/ai" replace />}
+        />
         <Route path="/options/*" element={<OptionsRedirect />} />
 
         <Route path="*" element={<Navigate to="/home" replace />} />

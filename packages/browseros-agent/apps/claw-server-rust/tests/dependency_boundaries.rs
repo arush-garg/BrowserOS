@@ -127,6 +127,17 @@ fn browser_to_sessions_is_an_allowed_service_edge() {
 }
 
 #[test]
+fn tab_cleanup_to_browser_is_an_allowed_service_edge() {
+    assert!(
+        check_source(
+            Path::new("services/tab_cleanup.rs"),
+            "use crate::services::browser::BrowserService;",
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn services_cannot_depend_on_api() {
     let errors = violations("services/browser/example.rs", "use crate::api::http;");
     assert!(
@@ -193,6 +204,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
     let wire_names = [
         "server_started",
         "agent_session_started",
+        "agent_session_task_declared",
         "agent_session_ended",
         "agent_session_tool_usage",
         "agent_session_efficiency_computed",
@@ -232,7 +244,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         );
     }
     assert_eq!(sdk_locations, ["analytics/service.rs"]);
-    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 7);
+    assert_eq!(claw_server_rust::analytics::events::ALL.len(), 8);
     Ok(())
 }
 
@@ -418,6 +430,8 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("cockpit", "browser" | "sessions" | "profiles")
             | ("recordings", "browser")
             | ("replay", "recordings")
+            | ("tab_cleanup", "browser")
+            | ("skills", "harness")
     )
 }
 

@@ -1,28 +1,7 @@
-import { storage } from '@wxt-dev/storage'
+import { agentBrandKey } from '@/components/agents/agent-brand-marks'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
-import type {
-  HarnessAdapterDescriptor,
-  HarnessAgent,
-  HarnessAgentAdapter,
-} from '@/modules/agents/agent-harness-types'
-import {
-  isChatProviderType,
-  resolveChatProvider,
-} from '../../lib/llm-providers/provider-runtime'
-
-/** Legacy key — kept for migration, no longer used for reads/writes. */
-const SIDEPANEL_CHAT_TARGET_SELECTION_KEY =
-  'browseros:sidepanel-chat-target-selection'
-
-/**
- * Per-tab provider selection map, keyed by tab ID string.
- * Follows the same pattern as selectedTextStorage.
- */
-export const chatTargetSelectionStorage = storage.defineItem<
-  Record<string, SidepanelChatTargetSelection>
->('local:chatTargetSelectionMap', { defaultValue: {} })
-
-export type SidepanelTargetKind = 'llm' | 'acp'
+import type { AcpAgent, AcpAgentType } from '@/modules/agents/acp-agent-types'
+import { resolveChatProvider } from '../../lib/llm-providers/provider-runtime'
 
 export type SidepanelChatTarget =
   | {
@@ -38,14 +17,13 @@ export type SidepanelChatTarget =
       name: string
       type: 'acp'
       agentId: string
-      adapter: HarnessAgentAdapter
+      agentType: AcpAgentType
+      /** Brand id for the agent's logo (its type, or a popular-agent id). */
+      brandKey?: string
       adapterName: string
       modelId: string
       modelLabel: string
-      modelControl: HarnessAdapterDescriptor['modelControl']
-      recommended?: boolean
       reasoningEffort: string
-      reasoningEffortLabel?: string
     }
 
 export type SidepanelChatTargetSelection = Pick<
@@ -55,8 +33,7 @@ export type SidepanelChatTargetSelection = Pick<
 
 export interface BuildSidepanelChatTargetsInput {
   providers: LlmProviderConfig[]
-  adapters: HarnessAdapterDescriptor[]
-  agents?: HarnessAgent[]
+  agents?: AcpAgent[]
 }
 
 export interface ResolveSidepanelChatTargetInput {
@@ -89,49 +66,31 @@ let sidepanelChatTargetSelectionStorage:
 
 export function buildSidepanelChatTargets({
   providers,
-  adapters,
   agents = [],
 }: BuildSidepanelChatTargetsInput): SidepanelChatTarget[] {
-  return [
-    ...providers
-      .filter((provider) => isChatProviderType(provider.type))
-      .map(toLlmTarget),
-    ...agents.map((agent) => toAcpTargetForAgent(agent, adapters)),
-  ]
+  return [...providers.map(toLlmTarget), ...agents.map(toAcpTargetForAgent)]
 }
 
-function toAcpTargetForAgent(
-  agent: HarnessAgent,
-  adapters: HarnessAdapterDescriptor[],
-): SidepanelChatTarget {
-  const adapter = adapters.find((entry) => entry.id === agent.adapter)
-  const modelId = agent.modelId ?? adapter?.defaultModelId ?? 'default'
-  const reasoningEffort =
-    agent.reasoningEffort ?? adapter?.defaultReasoningEffort ?? 'medium'
-  const model = adapter?.models.find((entry) => entry.id === modelId)
-  const reasoning = adapter?.reasoningEfforts.find(
-    (effort) => effort.id === reasoningEffort,
-  )
+function toAcpTargetForAgent(agent: AcpAgent): SidepanelChatTarget {
   return {
     kind: 'acp',
     id: agent.id,
     name: agent.name,
     type: 'acp',
     agentId: agent.id,
-    adapter: agent.adapter,
-    adapterName: adapter?.name ?? formatAdapterName(agent.adapter),
-    modelId,
-    modelLabel: model?.label ?? modelId,
-    modelControl: adapter?.modelControl ?? 'best-effort',
-    recommended: model?.recommended,
-    reasoningEffort,
-    reasoningEffortLabel: reasoning?.label,
+    agentType: agent.type,
+    brandKey: agentBrandKey(agent),
+    adapterName: formatAdapterName(agent.type),
+    modelId: agent.modelId ?? 'default',
+    modelLabel: agent.modelId ?? 'Agent default',
+    reasoningEffort: agent.reasoningEffort ?? 'default',
   }
 }
 
-function formatAdapterName(adapter: HarnessAgentAdapter): string {
+function formatAdapterName(adapter: AcpAgentType): string {
   if (adapter === 'claude') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
+  if (adapter === 'custom') return 'Custom agent'
   return adapter
 }
 
@@ -157,66 +116,80 @@ export function resolveSidepanelChatTarget({
     : undefined
 }
 
+export type RepairSelectionDecision =
+  | { repair: false }
+  | { repair: true; selection: SidepanelChatTargetSelection | null }
+
+/**
+ * Decides whether a persisted sidebar selection needs repair.
+ *
+ * Repair exists for one case: the selection names something that has been
+ * deleted, so the sidebar would otherwise point at nothing. Absence from the
+ * list in hand is not evidence of that. Each extension surface holds its own
+ * query cache of a list that lives on the server, so a provider added in
+ * another surface is missing here until this one refetches, and rewriting the
+ * selection then destroys a choice the user just made. That is what made
+ * picking a new provider appear to revert to BrowserOS while picking an agent
+ * worked, since ACP selections were already exempt.
+ *
+ * So a selection is only repaired when the list is known to be complete, and a
+ * selection this list cannot confirm is left alone for the next render, when
+ * the revision signal will have brought the list up to date.
+ * `resolveSidepanelChatTarget` already falls back non-destructively for
+ * display, so nothing is broken while that happens. Stale entries are still
+ * cleaned on delete by `clearSidepanelChatTargetSelectionForAgent`.
+ */
+export function resolveRepairedSelection({
+  selection,
+  resolvedTarget,
+  ready,
+  knownIds,
+}: {
+  selection: SidepanelChatTargetSelection | null
+  resolvedTarget: SidepanelChatTarget | undefined
+  ready: boolean
+  /**
+   * Every id this surface currently knows about, of either kind. A selection
+   * naming something absent from it is treated as not yet loaded rather than
+   * as deleted.
+   */
+  knownIds?: ReadonlySet<string>
+}): RepairSelectionDecision {
+  if (!ready || !selection) return { repair: false }
+  if (selection.kind === 'acp') return { repair: false }
+  if (
+    resolvedTarget &&
+    resolvedTarget.kind === selection.kind &&
+    resolvedTarget.id === selection.id
+  ) {
+    return { repair: false }
+  }
+  // Inconclusive rather than deleted: this surface has not seen it yet.
+  if (knownIds && !knownIds.has(selection.id)) return { repair: false }
+  return {
+    repair: true,
+    selection: resolvedTarget
+      ? { kind: resolvedTarget.kind, id: resolvedTarget.id }
+      : null,
+  }
+}
+
 export function toLlmProviderConfig(
   target: SidepanelChatTarget | undefined,
 ): LlmProviderConfig | undefined {
   return target?.kind === 'llm' ? target.provider : undefined
 }
 
-/**
- * Persist the chat target selection for a specific tab.
- * Uses chrome.storage.local via @wxt-dev/storage for cross-context persistence.
- */
 export async function persistSidepanelChatTargetSelection(
   target: SidepanelChatTarget | undefined,
-  tabId: number,
+  store?: SidepanelChatTargetSelectionWriter,
 ): Promise<void> {
-  const map = await chatTargetSelectionStorage.getValue()
-  const key = String(tabId)
-  if (target) {
-    map[key] = { kind: target.kind, id: target.id }
-  } else {
-    delete map[key]
-  }
-  await chatTargetSelectionStorage.setValue(map)
+  await saveSidepanelChatTargetSelection(
+    target ? { kind: target.kind, id: target.id } : null,
+    store,
+  )
 }
 
-/**
- * Wraps chatTargetSelectionStorage into the store interface used by
- * the ACP helpers below. Returns a singleton so watch/listener
- * lifetime is well-defined.
- */
-async function getSidepanelChatTargetSelectionStorage(): Promise<SidepanelChatTargetSelectionStore> {
-  if (!sidepanelChatTargetSelectionStorage) {
-    sidepanelChatTargetSelectionStorage = {
-      getValue: async () => {
-        const map = await chatTargetSelectionStorage.getValue()
-        const entries = Object.values(map)
-        return entries.length > 0 ? (entries[0] ?? null) : null
-      },
-      setValue: async (value) => {
-        if (value) {
-          // Store as a single-entry map (backed by per-tab map storage)
-          const map = await chatTargetSelectionStorage.getValue()
-          const tabIds = Object.keys(map)
-          const key = tabIds[0] ?? 'default'
-          map[key] = value
-          await chatTargetSelectionStorage.setValue(map)
-        } else {
-          await chatTargetSelectionStorage.setValue({})
-        }
-      },
-      watch: (callback) =>
-        chatTargetSelectionStorage.watch((map) => {
-          const entries = Object.values(map ?? {})
-          callback(entries.length > 0 ? (entries[0] ?? null) : null)
-        }),
-    }
-  }
-  return sidepanelChatTargetSelectionStorage
-}
-
-/** Writes a selection identity (or null to clear) without needing a full target. */
 export async function saveSidepanelChatTargetSelection(
   selection: SidepanelChatTargetSelection | null,
   store?: SidepanelChatTargetSelectionWriter,
@@ -225,7 +198,30 @@ export async function saveSidepanelChatTargetSelection(
   await targetStore.setValue(selection)
 }
 
-/** Clears the persisted selection only when it points at the given agent. */
+/**
+ * The single "change the selected chat target" side effect, shared by every
+ * surface (sidebar, home, settings). Persists the selection and, for an LLM
+ * target, also updates the default-provider id so both stores stay consistent.
+ * Keeping this in one place is what prevents surfaces from drifting apart.
+ */
+/**
+ * Records the chosen chat target.
+ *
+ * One write, for either kind. While llm providers and acp agents were separate
+ * tables the default could only name an llm one, so this wrote the selection
+ * unconditionally and the default only when the kind happened to be llm.
+ * Choosing an agent left the default pointing at whichever provider was
+ * selected before it, a stale shadow of the real choice.
+ */
+export async function commitChatTargetSelection(
+  selection: SidepanelChatTargetSelection | null,
+  deps: { setDefaultProvider: (providerId: string) => Promise<void> },
+  store?: SidepanelChatTargetSelectionWriter,
+): Promise<void> {
+  await saveSidepanelChatTargetSelection(selection, store)
+  if (selection) await deps.setDefaultProvider(selection.id)
+}
+
 export async function clearSidepanelChatTargetSelectionForAgent(
   agentId: string,
   store?: SidepanelChatTargetSelectionReader &
@@ -238,11 +234,6 @@ export async function clearSidepanelChatTargetSelectionForAgent(
   }
 }
 
-/**
- * Subscribes to selection changes. The production store loads lazily, so the
- * subscription may attach a tick later; the returned unsubscribe is always
- * synchronous and safe to call before attachment completes.
- */
 export function watchSidepanelChatTargetSelection(
   callback: (selection: SidepanelChatTargetSelection | null) => void,
   store?: SidepanelChatTargetSelectionWatcher,
@@ -256,39 +247,18 @@ export function watchSidepanelChatTargetSelection(
       if (cancelled) return
       unwatch = targetStore.watch(callback)
     })
-    // Failed storage import leaves the watch inert; this module stays
-    // sentry-free for bun-test loadability, and the load path surfaces the
-    // same failure to callers, who report it.
     .catch(() => undefined)
   return () => {
     cancelled = true
     unwatch?.()
   }
 }
+
 export async function loadSidepanelChatTargetSelection(
-  tabId?: number,
+  store?: SidepanelChatTargetSelectionReader,
 ): Promise<SidepanelChatTargetSelection | null> {
-  const map = await chatTargetSelectionStorage.getValue()
-  if (tabId === undefined) return null
-  const key = String(tabId)
-  if (map[key]) return map[key]
-  // Migration: try legacy sessionStorage once
-  try {
-    const stored = window.sessionStorage.getItem(
-      SIDEPANEL_CHAT_TARGET_SELECTION_KEY,
-    )
-    if (stored) {
-      const legacy = JSON.parse(stored) as SidepanelChatTargetSelection
-      // Migrate to per-tab storage and clear legacy
-      map[key] = legacy
-      await chatTargetSelectionStorage.setValue(map)
-      window.sessionStorage.removeItem(SIDEPANEL_CHAT_TARGET_SELECTION_KEY)
-      return legacy
-    }
-  } catch {
-    // ignore
-  }
-  return null
+  const targetStore = store ?? (await getSidepanelChatTargetSelectionStorage())
+  return targetStore.getValue()
 }
 
 function toLlmTarget(provider: LlmProviderConfig): SidepanelChatTarget {
@@ -299,4 +269,18 @@ function toLlmTarget(provider: LlmProviderConfig): SidepanelChatTarget {
     type: provider.type,
     provider,
   }
+}
+
+async function getSidepanelChatTargetSelectionStorage(): Promise<SidepanelChatTargetSelectionStore> {
+  if (sidepanelChatTargetSelectionStorage) {
+    return sidepanelChatTargetSelectionStorage
+  }
+
+  const { storage } = await import('@wxt-dev/storage')
+  sidepanelChatTargetSelectionStorage =
+    storage.defineItem<SidepanelChatTargetSelection | null>(
+      'local:sidepanel-chat-target-selection',
+      { fallback: null },
+    )
+  return sidepanelChatTargetSelectionStorage
 }

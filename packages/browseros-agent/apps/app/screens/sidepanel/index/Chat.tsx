@@ -1,41 +1,24 @@
 import { Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import {
-  GOAL_CONTINUE_EVENT,
-  GOAL_SET_EVENT,
   SIDEPANEL_AI_TRIGGERED_EVENT,
   SIDEPANEL_MODE_CHANGED_EVENT,
   SIDEPANEL_STOP_CLICKED_EVENT,
   SIDEPANEL_SUGGESTION_CLICKED_EVENT,
   SIDEPANEL_TAB_REMOVED_EVENT,
   SIDEPANEL_TAB_TOGGLED_EVENT,
-  SIDEPANEL_VOICE_ERROR_EVENT,
-  SIDEPANEL_VOICE_RECORDING_STARTED_EVENT,
-  SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT,
-  SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
-import { goalStorage } from '@/lib/goal/goal-storage'
-import { evaluateGoal, toGoalEvalProvider } from '@/lib/goal/goalEval'
 import { track } from '@/lib/metrics/track'
-import { useSteer } from '@/lib/steer/useSteer'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
-import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
-import { useVoiceInput } from '@/modules/voice/voice.hooks'
-import {
-  type ChatSessionLike,
-  useVoiceLoop,
-} from '@/modules/voice/voice-loop.hooks'
 import { buildChatErrorProps } from './Chat.helpers'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
 import { IncognitoNotice } from './IncognitoNotice'
-
-const RESTORE_LOADING_TIMEOUT_MS = 12000
 
 /**
  * @public
@@ -48,54 +31,19 @@ export const Chat = () => {
     sendMessage,
     status,
     stop,
-    providers,
     agentUrlError,
     chatError,
     canSend,
     selectedProvider,
-    handleSelectProvider,
     getActionForMessage,
     liked,
     onClickLike,
     disliked,
     onClickDislike,
     isRestoringConversation,
-    activeTabId,
-    conversationId,
     isIncognito,
     retryLastTurn,
   } = useChatSessionContext()
-
-  const steer = useSteer({ conversationId })
-  const { selectedProvider: selectedLlmProvider } = useLlmProviders()
-
-  interface SteerMessageItem {
-    id: string
-    text: string
-    status: 'pending' | 'injected'
-    /** Index into `messages` after which this steer should appear. */
-    afterMessageIndex: number
-  }
-  const [steerMessages, setSteerMessages] = useState<SteerMessageItem[]>([])
-
-  // When a steer is sent, record its position so we can interleave it correctly.
-  // If the agent is already working, the steer is "injected" inline — it doesn't
-  // need to wait for the next status transition to show as confirmed.
-  const handleSteerSent = useCallback(
-    (text: string) => {
-      const isAgentBusy = status === 'streaming' || status === 'submitted'
-      setSteerMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          text,
-          status: isAgentBusy ? ('injected' as const) : ('pending' as const),
-          afterMessageIndex: messages.length - 1,
-        },
-      ])
-    },
-    [messages.length, status],
-  )
 
   const {
     popupVisible,
@@ -106,15 +54,9 @@ export const Chat = () => {
     onDismiss: onDismissJtbdPopup,
   } = useJtbdPopup()
 
-  const voice = useVoiceInput()
-  const chatSessionRef = useRef<ChatSessionLike | null>(null)
-  chatSessionRef.current = { sendMessage, stop, status, messages }
-  const voiceLoop = useVoiceLoop({ chatSessionRef })
-
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
   const [mounted, setMounted] = useState(false)
-  const [restoreTimedOut, setRestoreTimedOut] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -132,23 +74,9 @@ export const Chat = () => {
     })()
   }, [])
 
-  useEffect(() => {
-    if (!isRestoringConversation) {
-      setRestoreTimedOut(false)
-      return
-    }
-
-    const timeoutId = setTimeout(() => {
-      setRestoreTimedOut(true)
-    }, RESTORE_LOADING_TIMEOUT_MS)
-
-    return () => {
-      clearTimeout(timeoutId)
-    }
-  }, [isRestoringConversation])
-
   // Trigger JTBD popup when AI finishes responding
   const previousChatStatus = useRef(status)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only trigger on status change
   useEffect(() => {
     const aiWasProcessing =
       previousChatStatus.current === 'streaming' ||
@@ -160,72 +88,6 @@ export const Chat = () => {
     }
     previousChatStatus.current = status
   }, [status])
-
-  // Goal keep-going: when AI finishes and a goal is active, ask the server whether
-  // the goal is met. Continue only when evaluation says the goal is not yet met.
-  // Any failure (no server, bad response, network error) falls back to injecting
-  // a keep-going message so an active goal never silently stalls.
-  useEffect(() => {
-    const aiWasProcessing =
-      previousChatStatus.current === 'streaming' ||
-      previousChatStatus.current === 'submitted'
-    const aiJustFinished = aiWasProcessing && status === 'ready'
-    const aiErrored = aiWasProcessing && status === 'error'
-
-    if (!aiJustFinished && !aiErrored) return
-
-    goalStorage.getValue().then(async (goal) => {
-      if (!goal?.active) return
-      if (aiErrored) {
-        goalStorage.setValue({ ...goal, active: false })
-        return
-      }
-
-      const continueMessage = `Keep going with the goal: ${goal.goal}`
-      const provider = toGoalEvalProvider(
-        selectedLlmProvider,
-        selectedProvider?.agentId,
-      )
-      if (!provider) {
-        track(GOAL_CONTINUE_EVENT)
-        sendMessage({ text: continueMessage })
-        return
-      }
-
-      const result = await evaluateGoal({
-        goal: goal.goal,
-        sessionId: conversationId,
-        provider,
-      })
-
-      if (result.evaluated && result.goalMet) {
-        goalStorage.setValue({ ...goal, active: false })
-        return
-      }
-
-      track(GOAL_CONTINUE_EVENT)
-      sendMessage({ text: continueMessage })
-    })
-  }, [status])
-
-  // Insert transcript into input when transcription completes
-  useEffect(() => {
-    if (voice.transcript && !voice.isTranscribing) {
-      setInput((prev) => {
-        const separator = prev.trim() ? ' ' : ''
-        return prev + separator + voice.transcript
-      })
-      track(SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT)
-      voice.clearTranscript()
-    }
-  }, [voice.transcript, voice.isTranscribing])
-
-  // Track voice errors
-  useEffect(() => {
-    if (voice.error) {
-      track(SIDEPANEL_VOICE_ERROR_EVENT, { error: voice.error })
-    }
-  }, [voice.error])
 
   const handleModeChange = (newMode: ChatMode) => {
     track(SIDEPANEL_MODE_CHANGED_EVENT, { from: mode, to: newMode })
@@ -259,22 +121,6 @@ export const Chat = () => {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
 
-    // Handle /goal slash command
-    if (messageText.startsWith('/goal ')) {
-      const goalText = messageText.slice(6).trim()
-      if (goalText) {
-        goalStorage.setValue({
-          goal: goalText,
-          active: true,
-          createdAt: Date.now(),
-        })
-        track(GOAL_SET_EVENT)
-      }
-      setInput('')
-      setAttachedTabs([])
-      return
-    }
-
     recordMessageSent()
 
     if (attachedTabs.length) {
@@ -290,54 +136,6 @@ export const Chat = () => {
     setInput('')
     setAttachedTabs([])
   }
-
-  // Interrupt the agent, then send text as a normal message.
-  const handleInterruptAndSend = useCallback(
-    (text: string) => {
-      stop()
-      recordMessageSent()
-      if (attachedTabs.length) {
-        const action = createBrowserOSAction({
-          mode,
-          message: text,
-          tabs: attachedTabs,
-        })
-        sendMessage({ text, action })
-      } else {
-        sendMessage({ text })
-      }
-      setAttachedTabs([])
-    },
-    [stop, sendMessage, mode, attachedTabs, recordMessageSent],
-  )
-
-  // Lifecycle for steer bubbles:
-  // - pending → injected when the model starts streaming (steer was received)
-  // - on busy → ready: ACP turns cannot drain mid-turn server-side, so any
-  //   still-queued steers are fetched and delivered as follow-up messages
-  const prevChatStatusRef = useRef(status)
-  useEffect(() => {
-    if (status === 'streaming' && prevChatStatusRef.current !== 'streaming') {
-      setSteerMessages((prev) =>
-        prev.map((m) =>
-          m.status === 'pending' ? { ...m, status: 'injected' as const } : m,
-        ),
-      )
-    }
-    const aiWasBusy =
-      prevChatStatusRef.current === 'streaming' ||
-      prevChatStatusRef.current === 'submitted'
-    if (aiWasBusy && status === 'ready') {
-      // Deliver any steers the server never injected mid-turn (ACP turns
-      // run as a single step inside the spawned agent process). They come
-      // back here and go out as fresh messages.
-      void steer.drainSteers().then((undelivered) => {
-        for (const text of undelivered) handleInterruptAndSend(text)
-        setSteerMessages([])
-      })
-    }
-    prevChatStatusRef.current = status
-  }, [status, steer.drainSteers, handleInterruptAndSend])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -355,27 +153,6 @@ export const Chat = () => {
     executeMessage(suggestion)
   }
 
-  const handleStartRecording = async () => {
-    const started = await voice.startRecording()
-    if (started) {
-      track(SIDEPANEL_VOICE_RECORDING_STARTED_EVENT)
-    }
-  }
-
-  const handleStopRecording = async () => {
-    await voice.stopRecording()
-    track(SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT)
-  }
-
-  const voiceState = {
-    isRecording: voice.isRecording,
-    isTranscribing: voice.isTranscribing,
-    audioLevels: voice.audioLevels,
-    error: voice.error,
-    onStartRecording: handleStartRecording,
-    onStopRecording: handleStopRecording,
-  }
-
   const chatErrorProps = buildChatErrorProps({
     chatError,
     selectedProvider,
@@ -387,18 +164,7 @@ export const Chat = () => {
       <main className="mt-4 flex h-full flex-1 flex-col space-y-4 overflow-y-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
-            {restoreTimedOut ? (
-              <ChatError
-                error={
-                  new Error(
-                    'Loading took longer than expected. Try sending a message to re-establish the connection.',
-                  )
-                }
-                providerType={selectedProvider?.type}
-              />
-            ) : (
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            )}
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : messages.length === 0 ? (
           <ChatEmptyState
@@ -410,7 +176,6 @@ export const Chat = () => {
           <ChatMessages
             messages={messages}
             status={status}
-            steerMessages={steerMessages}
             getActionForMessage={getActionForMessage}
             liked={liked}
             onClickLike={onClickLike}
@@ -434,9 +199,6 @@ export const Chat = () => {
       {isIncognito && <IncognitoNotice />}
 
       <ChatFooter
-        providers={providers}
-        selectedProvider={selectedProvider}
-        onSelectProvider={handleSelectProvider}
         mode={mode}
         onModeChange={handleModeChange}
         input={input}
@@ -448,13 +210,6 @@ export const Chat = () => {
         attachedTabs={attachedTabs}
         onToggleTab={toggleTabSelection}
         onRemoveTab={removeTab}
-        voice={voiceState}
-        activeTabId={activeTabId}
-        steer={steer}
-        onSteerSent={handleSteerSent}
-        onInterruptAndSend={handleInterruptAndSend}
-        voiceLoop={voiceLoop}
-        onOpenVoiceMode={voiceLoop.open}
       />
     </>
   )

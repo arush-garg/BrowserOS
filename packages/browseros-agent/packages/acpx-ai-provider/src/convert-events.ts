@@ -1,9 +1,14 @@
 import type {
+  JSONValue,
   LanguageModelV2FinishReason,
   LanguageModelV2StreamPart,
   LanguageModelV2Usage,
 } from '@ai-sdk/provider'
-import type { AcpRuntimeEvent, AcpRuntimeTurnResult } from 'acpx/runtime'
+import type {
+  AcpRuntimeAvailableCommand,
+  AcpRuntimeEvent,
+  AcpRuntimeTurnResult,
+} from 'acpx/runtime'
 import { fromRuntimeError } from './errors'
 
 type TextStream = 'output' | 'thought'
@@ -16,8 +21,24 @@ interface ToolCallState {
   inputClosed: boolean
 }
 
+export type UsageUpdateEvent = Extract<AcpRuntimeEvent, { type: 'status' }> & {
+  tag: 'usage_update'
+}
+
 export interface EventTranslatorOptions {
   generateId: () => string
+  /**
+   * Invoked with the raw `usage_update` event (including the new `cost`
+   * and `breakdown` fields) every time the agent emits one. Synchronous
+   * — must not throw or block.
+   */
+  onUsageUpdate?: (event: UsageUpdateEvent) => void
+  /**
+   * Invoked with the agent's full advertised slash-command list every
+   * time `available_commands_update` arrives. Synchronous — must not
+   * throw or block.
+   */
+  onAvailableCommands?: (commands: AcpRuntimeAvailableCommand[]) => void
 }
 
 export interface FinishOptions {
@@ -55,14 +76,20 @@ const STOP_REASON_MAP: Record<string, LanguageModelV2FinishReason> = {
  */
 export class EventTranslator {
   private readonly generateId: () => string
+  private readonly onUsageUpdate?: (event: UsageUpdateEvent) => void
+  private readonly onAvailableCommands?: (
+    commands: AcpRuntimeAvailableCommand[],
+  ) => void
   private currentBlock: BlockKind = null
   private currentBlockId: string | null = null
+  private currentMessageId: string | null = null
   private readonly toolCalls = new Map<string, ToolCallState>()
-  private accumulatedTotalTokens: number | undefined
-  private accumulatedSize: number | undefined
+  private lastUsageEvent: UsageUpdateEvent | undefined
 
   constructor(opts: EventTranslatorOptions) {
     this.generateId = opts.generateId
+    this.onUsageUpdate = opts.onUsageUpdate
+    this.onAvailableCommands = opts.onAvailableCommands
   }
 
   translate(event: AcpRuntimeEvent): LanguageModelV2StreamPart[] {
@@ -102,13 +129,20 @@ export class EventTranslator {
       finishReason,
       usage,
     }
+
+    const acpxMeta: Record<string, JSONValue> = {}
+    if (this.lastUsageEvent?.size !== undefined) {
+      acpxMeta.contextWindow = this.lastUsageEvent.size
+    }
+    if (this.lastUsageEvent?.cost !== undefined) {
+      acpxMeta.cost = this.lastUsageEvent.cost as JSONValue
+    }
     if (result.status === 'failed') {
-      part.providerMetadata = {
-        acpx: {
-          errorCode: result.error.code ?? 'unknown',
-          errorMessage: result.error.message,
-        },
-      }
+      acpxMeta.errorCode = result.error.code ?? 'unknown'
+      acpxMeta.errorMessage = result.error.message
+    }
+    if (Object.keys(acpxMeta).length > 0) {
+      part.providerMetadata = { acpx: acpxMeta }
     }
     return part
   }
@@ -119,17 +153,20 @@ export class EventTranslator {
   }
 
   private accumulatedUsage(): LanguageModelV2Usage {
-    if (
-      this.accumulatedTotalTokens === undefined &&
-      this.accumulatedSize === undefined
-    ) {
-      return EMPTY_USAGE
-    }
+    const ev = this.lastUsageEvent
+    if (!ev) return EMPTY_USAGE
+    const breakdown = ev.breakdown
+    // Prefer the per-turn breakdown when the agent provided one; fall
+    // back to the top-level `used` for totalTokens when no breakdown was
+    // sent (codex today). `size` is the context-window ceiling — it
+    // belongs on providerMetadata.acpx.contextWindow, not on
+    // cachedInputTokens.
     return {
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: this.accumulatedTotalTokens,
-      cachedInputTokens: this.accumulatedSize,
+      inputTokens: breakdown?.inputTokens,
+      outputTokens: breakdown?.outputTokens,
+      totalTokens: breakdown?.totalTokens ?? ev.used,
+      cachedInputTokens: breakdown?.cachedReadTokens,
+      reasoningTokens: breakdown?.thoughtTokens,
     }
   }
 
@@ -139,7 +176,14 @@ export class EventTranslator {
     const target: TextStream = event.stream === 'thought' ? 'thought' : 'output'
     const parts: LanguageModelV2StreamPart[] = []
 
-    if (this.currentBlock !== target) {
+    // ACP chunks are token fragments, so only a new message ID or stream
+    // starts a separate AI SDK block. Missing IDs continue the current block;
+    // the first identified message also separates any preceding untagged text.
+    // Keep generated block IDs: one ACP message can contain both text and
+    // reasoning, or resume its text after a tool call.
+    const messageChanged =
+      event.messageId && event.messageId !== this.currentMessageId
+    if (this.currentBlock !== target || messageChanged) {
       parts.push(...this.closeCurrentBlock())
       const id = this.generateId()
       parts.push({
@@ -148,6 +192,7 @@ export class EventTranslator {
       })
       this.currentBlock = target
       this.currentBlockId = id
+      this.currentMessageId = event.messageId ?? null
     }
 
     if (event.text.length > 0 && this.currentBlockId) {
@@ -169,6 +214,7 @@ export class EventTranslator {
     }
     this.currentBlock = null
     this.currentBlockId = null
+    this.currentMessageId = null
     return [part]
   }
 
@@ -183,11 +229,10 @@ export class EventTranslator {
 
     let state = this.toolCalls.get(callId)
     if (!state) {
-      const blockId = this.generateId()
       const toolName = event.title?.trim() || 'tool'
-      state = { blockId, toolName, emittedText: '', inputClosed: false }
+      state = { blockId: callId, toolName, emittedText: '', inputClosed: false }
       this.toolCalls.set(callId, state)
-      parts.push({ type: 'tool-input-start', id: blockId, toolName })
+      parts.push({ type: 'tool-input-start', id: callId, toolName })
     }
 
     parts.push(...this.appendToolText(state, event.text))
@@ -250,8 +295,15 @@ export class EventTranslator {
     event: Extract<AcpRuntimeEvent, { type: 'status' }>,
   ): LanguageModelV2StreamPart[] {
     if (event.tag === 'usage_update') {
-      if (event.used !== undefined) this.accumulatedTotalTokens = event.used
-      if (event.size !== undefined) this.accumulatedSize = event.size
+      const usageEvent = event as UsageUpdateEvent
+      this.lastUsageEvent = usageEvent
+      this.onUsageUpdate?.(usageEvent)
+      return []
+    }
+    if (event.tag === 'available_commands_update') {
+      if (event.availableCommands) {
+        this.onAvailableCommands?.(event.availableCommands)
+      }
       return []
     }
     if (event.tag === 'plan') {

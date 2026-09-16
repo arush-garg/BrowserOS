@@ -17,6 +17,8 @@ const invalidatedQueryKeys: unknown[] = []
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
   useSessionPreviewUrl: () => null,
+  // Null base keeps LivePreview from opening a real EventSource under linkedom.
+  useApiBaseUrl: () => null,
 }))
 
 mock.module('@/modules/api/cancel.hooks', () => ({
@@ -84,7 +86,6 @@ function session(
     slug: 'codex',
     label: 'Codex',
     name: 'Research BrowserClaw',
-    harness: 'Codex',
     color: '#0254ec',
     startedAt: 100,
     state: 'active',
@@ -164,6 +165,13 @@ describe('RunningGrid', () => {
     await render([])
     expect(container.textContent).not.toContain('Running now')
     expect(container.textContent).not.toContain('0 live')
+  })
+
+  it('uses the Audit hover blue caption tone', async () => {
+    await render([session()])
+
+    const card = container.querySelector('[data-session-card="session-live"]')
+    expect(card?.querySelector('[data-caption-tone="blue"]')).not.toBeNull()
   })
 
   it('renders and cancels two same-profile sessions by distinct session ids', async () => {

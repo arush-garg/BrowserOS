@@ -2,24 +2,34 @@ import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import {
   createDefaultBrowserOSProvider,
   defaultProviderIdStorage,
-  providersStorage,
 } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
 import {
-  findCloudChatProviderById,
-  resolveCloudChatProvider,
+  findChatProviderById,
+  resolveChatProvider,
 } from '../llm-providers/provider-runtime'
 
 const resolveProvider = async (
   providerId?: string,
 ): Promise<LlmProviderConfig> => {
-  const providers = await providersStorage.getValue()
-  if (providers?.length) {
-    const explicitProvider = findCloudChatProviderById(providers, providerId)
+  const loaded = await listProvidersOrNull()
+  // Same rule as the scheduled run: the configured default is a choice too, and
+  // its model and credentials are in the list that failed to load. Callers here
+  // already catch and surface this.
+  if (loaded === null) {
+    throw new Error(
+      'Cannot reach the BrowserOS server to load the selected provider',
+    )
+  }
+
+  const providers = loaded
+  if (providers.length) {
+    const explicitProvider = findChatProviderById(providers, providerId)
     if (explicitProvider) return explicitProvider
 
     const defaultProviderId = await defaultProviderIdStorage.getValue()
-    const provider = resolveCloudChatProvider(providers, defaultProviderId)
+    const provider = resolveChatProvider(providers, defaultProviderId)
     if (provider) return provider
   }
   return createDefaultBrowserOSProvider()

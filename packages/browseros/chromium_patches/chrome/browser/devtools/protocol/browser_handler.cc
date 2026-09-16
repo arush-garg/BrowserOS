@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf30626ecb 100644
+index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e100bf4bb8 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -8,19 +8,32 @@
+@@ -8,18 +8,32 @@
  #include <vector>
  
  #include "base/functional/bind.h"
@@ -11,43 +11,79 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +#include "base/strings/utf_string_conversions.h"
 +#include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_commands.h"
- #include "chrome/browser/ui/browser_list.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
  #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 +#include "chrome/browser/ui/tabs/tab_enums.h"
- #include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/tabs/tab_group_model.h"
-+#include "components/tabs/public/tab_group.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "components/tab_groups/tab_group_color.h"
 +#include "components/tab_groups/tab_group_id.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/tab_group.h"
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -34,6 +47,11 @@ using protocol::Response;
+@@ -33,6 +47,19 @@ using protocol::Response;
  
  namespace {
  
 +constexpr char kHiddenWindowsRetired[] =
 +    "Hidden windows are no longer supported.";
-+constexpr char kHiddenTabsRetired[] =
-+    "Hidden tabs are no longer supported.";
++constexpr char kHiddenTabsRetired[] = "Hidden tabs are no longer supported.";
++
++// BrowserOS: true when the profile behind |bwi| forbids automation from
++// pulling the user's attention (browseros::prefs::kAutomationNeverStealsFocus).
++// Every command in this handler comes from a CDP client, so the pref alone
++// decides; no per-tab attachment check is needed here.
++bool NeverStealFocus(BrowserWindowInterface* bwi) {
++  Profile* profile = bwi ? bwi->GetProfile() : nullptr;
++  return profile && browseros::AutomationNeverStealsFocus(profile->GetPrefs());
++}
 +
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -72,12 +90,381 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -49,18 +76,22 @@ BrowserWindow* GetBrowserWindow(int window_id) {
+ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+     ui::BaseWindow* window) {
+   std::string window_state = "normal";
+-  if (window->IsMinimized())
++  if (window->IsMinimized()) {
+     window_state = "minimized";
+-  if (window->IsMaximized())
++  }
++  if (window->IsMaximized()) {
+     window_state = "maximized";
+-  if (window->IsFullscreen())
++  }
++  if (window->IsFullscreen()) {
+     window_state = "fullscreen";
++  }
+ 
+   gfx::Rect bounds;
+-  if (window->IsMinimized())
++  if (window->IsMinimized()) {
+     bounds = window->GetRestoredBounds();
+-  else
++  } else {
+     bounds = window->GetBounds();
++  }
+   return protocol::Browser::Bounds::Create()
+       .SetLeft(bounds.x())
+       .SetTop(bounds.y())
+@@ -70,14 +101,406 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -91,19 +127,24 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +}
 +
 +BrowserWindowInterface::Type ParseWindowType(const std::string& type_str) {
-+  if (type_str == "popup")
++  if (type_str == "popup") {
 +    return BrowserWindowInterface::TYPE_POPUP;
-+  if (type_str == "app")
++  }
++  if (type_str == "app") {
 +    return BrowserWindowInterface::TYPE_APP;
++  }
 +#if !BUILDFLAG(IS_ANDROID)
-+  if (type_str == "devtools")
++  if (type_str == "devtools") {
 +    return BrowserWindowInterface::TYPE_DEVTOOLS;
++  }
 +#endif
-+  if (type_str == "app_popup")
++  if (type_str == "app_popup") {
 +    return BrowserWindowInterface::TYPE_APP_POPUP;
++  }
 +#if !BUILDFLAG(IS_ANDROID)
-+  if (type_str == "picture_in_picture")
++  if (type_str == "picture_in_picture") {
 +    return BrowserWindowInterface::TYPE_PICTURE_IN_PICTURE;
++  }
 +#endif
 +  return BrowserWindowInterface::TYPE_NORMAL;
 +}
@@ -172,8 +213,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    info->SetGroupId(SerializeGroupId(group.value()));
 +  }
 +
-+  Profile* profile =
-+      Profile::FromBrowserContext(wc->GetBrowserContext());
++  Profile* profile = Profile::FromBrowserContext(wc->GetBrowserContext());
 +  if (profile) {
 +    info->SetBrowserContextId(profile->GetDebugName());
 +  }
@@ -201,11 +241,13 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +
 +  if (target_id.has_value()) {
 +    auto host = content::DevToolsAgentHost::GetForId(target_id.value());
-+    if (!host)
++    if (!host) {
 +      return Response::ServerError("No target with given id");
++    }
 +    content::WebContents* wc = host->GetWebContents();
-+    if (!wc)
++    if (!wc) {
 +      return Response::ServerError("No web contents in the target");
++    }
 +
 +    BrowserWindowInterface* found_bwi = nullptr;
 +    int found_index = -1;
@@ -221,8 +263,9 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +          return true;
 +        });
 +
-+    if (!found_bwi)
++    if (!found_bwi) {
 +      return Response::ServerError("No tab with given id");
++    }
 +
 +    result->web_contents = wc;
 +    result->bwi = found_bwi;
@@ -237,8 +280,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  content::WebContents* found_wc = nullptr;
 +  int found_index = -1;
 +  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-+      [tid, &found_bwi, &found_wc,
-+       &found_index](BrowserWindowInterface* bwi) {
++      [tid, &found_bwi, &found_wc, &found_index](BrowserWindowInterface* bwi) {
 +        TabStripModel* tab_strip = bwi->GetTabStripModel();
 +        for (int i = 0; i < tab_strip->count(); ++i) {
 +          content::WebContents* wc = tab_strip->GetWebContentsAt(i);
@@ -253,8 +295,9 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +        return true;
 +      });
 +
-+  if (!found_wc)
++  if (!found_wc) {
 +    return Response::ServerError("No tab with given id");
++  }
 +
 +  result->web_contents = found_wc;
 +  result->bwi = found_bwi;
@@ -262,8 +305,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  return Response::Success();
 +}
 +
-+std::optional<tab_groups::TabGroupId> DeserializeGroupId(
-+    const std::string& s) {
++std::optional<tab_groups::TabGroupId> DeserializeGroupId(const std::string& s) {
 +  auto token = base::Token::FromString(s);
 +  if (!token) {
 +    return std::nullopt;
@@ -298,15 +340,33 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +
 +std::optional<tab_groups::TabGroupColorId> ParseTabGroupColor(
 +    const std::string& s) {
-+  if (s == "grey") return tab_groups::TabGroupColorId::kGrey;
-+  if (s == "blue") return tab_groups::TabGroupColorId::kBlue;
-+  if (s == "red") return tab_groups::TabGroupColorId::kRed;
-+  if (s == "yellow") return tab_groups::TabGroupColorId::kYellow;
-+  if (s == "green") return tab_groups::TabGroupColorId::kGreen;
-+  if (s == "pink") return tab_groups::TabGroupColorId::kPink;
-+  if (s == "purple") return tab_groups::TabGroupColorId::kPurple;
-+  if (s == "cyan") return tab_groups::TabGroupColorId::kCyan;
-+  if (s == "orange") return tab_groups::TabGroupColorId::kOrange;
++  if (s == "grey") {
++    return tab_groups::TabGroupColorId::kGrey;
++  }
++  if (s == "blue") {
++    return tab_groups::TabGroupColorId::kBlue;
++  }
++  if (s == "red") {
++    return tab_groups::TabGroupColorId::kRed;
++  }
++  if (s == "yellow") {
++    return tab_groups::TabGroupColorId::kYellow;
++  }
++  if (s == "green") {
++    return tab_groups::TabGroupColorId::kGreen;
++  }
++  if (s == "pink") {
++    return tab_groups::TabGroupColorId::kPink;
++  }
++  if (s == "purple") {
++    return tab_groups::TabGroupColorId::kPurple;
++  }
++  if (s == "cyan") {
++    return tab_groups::TabGroupColorId::kCyan;
++  }
++  if (s == "orange") {
++    return tab_groups::TabGroupColorId::kOrange;
++  }
 +  return std::nullopt;
 +}
 +
@@ -320,9 +380,8 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  auto tab_ids = std::make_unique<protocol::Array<int>>();
 +  for (int i = 0; i < strip->count(); ++i) {
 +    if (strip->GetTabGroupForTab(i) == group_id) {
-+      int tid = sessions::SessionTabHelper::IdForTab(
-+                    strip->GetWebContentsAt(i))
-+                    .id();
++      int tid =
++          sessions::SessionTabHelper::IdForTab(strip->GetWebContentsAt(i)).id();
 +      tab_ids->push_back(tid);
 +    }
 +  }
@@ -403,8 +462,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    }
 +
 +    if (*out_bwi && *out_bwi != found_bwi) {
-+      return Response::InvalidParams(
-+          "All tabs must be in the same window");
++      return Response::InvalidParams("All tabs must be in the same window");
 +    }
 +
 +    *out_bwi = found_bwi;
@@ -427,28 +485,45 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
                                 const std::string& target_id)
      : target_id_(target_id) {
 -  // Dispatcher can be null in tests.
-   if (dispatcher)
+-  if (dispatcher)
++  if (dispatcher) {
      protocol::Browser::Dispatcher::wire(dispatcher, this);
++  }
  }
-@@ -120,6 +507,65 @@ Response BrowserHandler::GetWindowForTarget(
+ 
+ BrowserHandler::~BrowserHandler() = default;
+@@ -88,8 +511,9 @@ Response BrowserHandler::GetWindowForTarget(
+     std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
+   auto host =
+       content::DevToolsAgentHost::GetForId(target_id.value_or(target_id_));
+-  if (!host)
++  if (!host) {
+     return Response::ServerError("No target with given id");
++  }
+   content::WebContents* web_contents = host->GetWebContents();
+   if (!web_contents) {
+     return Response::ServerError("No web contents in the target");
+@@ -118,12 +542,74 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
-+Response BrowserHandler::GetTabForTarget(
-+    std::optional<std::string> target_id,
-+    int* out_tab_id,
-+    int* out_window_id) {
++Response BrowserHandler::GetTabForTarget(std::optional<std::string> target_id,
++                                         int* out_tab_id,
++                                         int* out_window_id) {
 +  auto host =
 +      content::DevToolsAgentHost::GetForId(target_id.value_or(target_id_));
-+  if (!host)
++  if (!host) {
 +    return Response::ServerError("No target with given id");
++  }
 +  content::WebContents* web_contents = host->GetWebContents();
-+  if (!web_contents)
++  if (!web_contents) {
 +    return Response::ServerError("No web contents in the target");
++  }
 +
 +  SessionID tab_id = sessions::SessionTabHelper::IdForTab(web_contents);
-+  if (!tab_id.is_valid())
++  if (!tab_id.is_valid()) {
 +    return Response::ServerError("No tab id for target");
++  }
 +
 +  *out_tab_id = tab_id.id();
 +
@@ -458,10 +533,9 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  return Response::Success();
 +}
 +
-+Response BrowserHandler::GetTargetForTab(
-+    int tab_id,
-+    std::string* out_target_id,
-+    int* out_window_id) {
++Response BrowserHandler::GetTargetForTab(int tab_id,
++                                         std::string* out_target_id,
++                                         int* out_window_id) {
 +  content::WebContents* found_contents = nullptr;
 +  int found_window_id = -1;
 +  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
@@ -473,20 +547,21 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +          SessionID sid = sessions::SessionTabHelper::IdForTab(wc);
 +          if (sid.is_valid() && sid.id() == tab_id) {
 +            found_contents = wc;
-+            found_window_id =
-+                browser_window_interface->GetSessionID().id();
++            found_window_id = browser_window_interface->GetSessionID().id();
 +            return false;
 +          }
 +        }
 +        return true;
 +      });
-+  if (!found_contents)
++  if (!found_contents) {
 +    return Response::ServerError("No tab with given id");
++  }
 +
 +  scoped_refptr<content::DevToolsAgentHost> host =
 +      content::DevToolsAgentHost::GetOrCreateFor(found_contents);
-+  if (!host)
++  if (!host) {
 +    return Response::ServerError("No target for tab");
++  }
 +
 +  *out_target_id = host->GetId();
 +  *out_window_id = found_window_id;
@@ -496,7 +571,26 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -297,3 +743,657 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+   BrowserWindow* window = GetBrowserWindow(window_id);
+-  if (!window)
++  if (!window) {
+     return Response::ServerError("Browser window not found");
++  }
+ 
+   *out_bounds = GetBrowserWindowBounds(window);
+   return Response::Success();
+@@ -138,8 +624,9 @@ Response BrowserHandler::SetWindowBounds(
+     int window_id,
+     std::unique_ptr<protocol::Browser::Bounds> window_bounds) {
+   BrowserWindow* window = GetBrowserWindow(window_id);
+-  if (!window)
++  if (!window) {
+     return Response::ServerError("Browser window not found");
++  }
+   gfx::Rect bounds = window->GetBounds();
+   const bool set_bounds = window_bounds->HasLeft() || window_bounds->HasTop() ||
+                           window_bounds->HasWidth() ||
+@@ -295,3 +782,668 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -556,8 +650,8 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  Browser::CreateParams params(type, profile, true);
 +  if (bounds) {
 +    params.initial_bounds =
-+        gfx::Rect(bounds->GetLeft(0), bounds->GetTop(0),
-+                   bounds->GetWidth(0), bounds->GetHeight(0));
++        gfx::Rect(bounds->GetLeft(0), bounds->GetTop(0), bounds->GetWidth(0),
++                  bounds->GetHeight(0));
 +  }
 +
 +  Browser* browser = Browser::Create(params);
@@ -565,10 +659,16 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  chrome::AddTabAt(browser, navigate_url, -1, true);
 +
-+  browser->window()->Show();
++  // Show() activates the window (and on macOS the whole app); when automation
++  // must not steal focus the new window is shown behind the user's work.
++  if (browseros::AutomationNeverStealsFocus(profile->GetPrefs())) {
++    browser->window()->ShowInactive();
++  } else {
++    browser->window()->Show();
++  }
 +
-+  BrowserWindowInterface* bwi = GetBrowserWindowInterface(
-+      browser->session_id().id());
++  BrowserWindowInterface* bwi =
++      GetBrowserWindowInterface(browser->session_id().id());
 +  if (!bwi) {
 +    return Response::ServerError("Failed to create window");
 +  }
@@ -594,6 +694,11 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  if (!bwi) {
 +    return Response::ServerError("Browser window not found");
 +  }
++  // Raising a window is exactly what the never-steal-focus pref forbids.
++  // Report success so callers proceed as if the window had been raised.
++  if (NeverStealFocus(bwi)) {
++    return Response::Success();
++  }
 +  bwi->GetWindow()->Activate();
 +  return Response::Success();
 +}
@@ -613,7 +718,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    return Response::InvalidParams(kHiddenWindowsRetired);
 +  }
 +
-+  if (activate.value_or(false)) {
++  if (activate.value_or(false) && !NeverStealFocus(bwi)) {
 +    bwi->GetWindow()->Show();
 +    bwi->GetWindow()->Activate();
 +  } else {
@@ -632,12 +737,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> window_id,
 +    std::optional<bool> /* include_hidden */,
 +    std::unique_ptr<protocol::Array<protocol::Browser::TabInfo>>* out_tabs) {
-+  auto tabs =
-+      std::make_unique<protocol::Array<protocol::Browser::TabInfo>>();
++  auto tabs = std::make_unique<protocol::Array<protocol::Browser::TabInfo>>();
 +
 +  if (window_id.has_value()) {
-+    BrowserWindowInterface* bwi =
-+        GetBrowserWindowInterface(window_id.value());
++    BrowserWindowInterface* bwi = GetBrowserWindowInterface(window_id.value());
 +    if (!bwi) {
 +      return Response::ServerError("Browser window not found");
 +    }
@@ -650,8 +753,8 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +        [&tabs](BrowserWindowInterface* bwi) {
 +          TabStripModel* tab_strip = bwi->GetTabStripModel();
 +          for (int i = 0; i < tab_strip->count(); ++i) {
-+            tabs->push_back(BuildTabInfo(tab_strip->GetWebContentsAt(i), bwi,
-+                                         i));
++            tabs->push_back(
++                BuildTabInfo(tab_strip->GetWebContentsAt(i), bwi, i));
 +          }
 +          return true;
 +        });
@@ -690,10 +793,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> tab_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  *out_tab = BuildTabInfo(lookup.web_contents, lookup.bwi, lookup.tab_index);
 +  return Response::Success();
@@ -723,7 +826,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  Browser* browser = bwi->GetBrowserForMigrationOnly();
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  int insert_index = index.value_or(-1);
-+  bool foreground = !background.value_or(false);
++  // Default to a background tab: an agent opening pages must not switch the
++  // user's tab. An explicit background=false selects the tab within its
++  // window; nothing in this command ever raises the window.
++  bool foreground = !background.value_or(true);
 +
 +  content::WebContents* new_wc = chrome::AddAndReturnTabAt(
 +      browser, navigate_url, insert_index, foreground);
@@ -745,10 +851,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +Response BrowserHandler::CloseTab(std::optional<std::string> target_id,
 +                                  std::optional<int> tab_id) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  TabStripModel* tab_strip = lookup.bwi->GetTabStripModel();
 +  tab_strip->CloseWebContentsAt(lookup.tab_index,
@@ -759,13 +865,17 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +Response BrowserHandler::ActivateTab(std::optional<std::string> target_id,
 +                                     std::optional<int> tab_id) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  lookup.bwi->GetTabStripModel()->ActivateTabAt(lookup.tab_index);
-+  lookup.bwi->GetWindow()->Activate();
++  // Under the never-steal-focus pref this selects the tab within its window
++  // but leaves raising the window to the user.
++  if (!NeverStealFocus(lookup.bwi)) {
++    lookup.bwi->GetWindow()->Activate();
++  }
 +  return Response::Success();
 +}
 +
@@ -776,10 +886,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> index,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  BrowserWindowInterface* target_bwi = lookup.bwi;
 +
@@ -817,8 +927,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +        tab_strip->MoveWebContentsAt(lookup.tab_index, index.value(), false);
 +    *out_tab = BuildTabInfo(lookup.web_contents, target_bwi, new_index);
 +  } else {
-+    *out_tab =
-+        BuildTabInfo(lookup.web_contents, target_bwi, lookup.tab_index);
++    *out_tab = BuildTabInfo(lookup.web_contents, target_bwi, lookup.tab_index);
 +  }
 +  return Response::Success();
 +}
@@ -828,10 +937,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> tab_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  Browser* browser = lookup.bwi->GetBrowserForMigrationOnly();
 +  content::WebContents* new_wc =
@@ -851,10 +960,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> tab_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  TabStripModel* tab_strip = lookup.bwi->GetTabStripModel();
 +  int new_index = tab_strip->SetTabPinned(lookup.tab_index, true);
@@ -867,10 +976,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<int> tab_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  TabStripModel* tab_strip = lookup.bwi->GetTabStripModel();
 +  int new_index = tab_strip->SetTabPinned(lookup.tab_index, false);
@@ -886,10 +995,10 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    std::optional<bool> activate,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
 +  TabLookupResult lookup;
-+  Response response = ResolveTabIdentifier(target_id, tab_id,
-+                                           &lookup);
-+  if (!response.IsSuccess())
++  Response response = ResolveTabIdentifier(target_id, tab_id, &lookup);
++  if (!response.IsSuccess()) {
 +    return response;
++  }
 +
 +  return Response::InvalidParams(kHiddenTabsRetired);
 +}
@@ -904,8 +1013,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +      std::make_unique<protocol::Array<protocol::Browser::TabGroupInfo>>();
 +
 +  if (window_id.has_value()) {
-+    BrowserWindowInterface* bwi =
-+        GetBrowserWindowInterface(window_id.value());
++    BrowserWindowInterface* bwi = GetBrowserWindowInterface(window_id.value());
 +    if (!bwi) {
 +      return Response::ServerError("Browser window not found");
 +    }
@@ -953,9 +1061,9 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  if (title.has_value()) {
 +    const tab_groups::TabGroupVisualData* current =
 +        strip->group_model()->GetTabGroup(gid)->visual_data();
-+    tab_groups::TabGroupVisualData new_data(
-+        base::UTF8ToUTF16(title.value()), current->color(),
-+        current->is_collapsed());
++    tab_groups::TabGroupVisualData new_data(base::UTF8ToUTF16(title.value()),
++                                            current->color(),
++                                            current->is_collapsed());
 +    strip->ChangeTabGroupVisuals(gid, new_data);
 +  }
 +
@@ -1036,8 +1144,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +        "Tabs must be in the same window as the group");
 +  }
 +
-+  lookup.bwi->GetTabStripModel()->AddToExistingGroup(indices,
-+                                                      lookup.group_id);
++  lookup.bwi->GetTabStripModel()->AddToExistingGroup(indices, lookup.group_id);
 +
 +  *out_group = BuildTabGroupInfo(lookup.bwi, lookup.group_id);
 +  return Response::Success();
@@ -1104,7 +1211,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +    // Same-window move.
 +    if (index.has_value()) {
 +      lookup.bwi->GetTabStripModel()->MoveGroupTo(lookup.group_id,
-+                                                   index.value());
++                                                  index.value());
 +    }
 +    *out_group = BuildTabGroupInfo(lookup.bwi, lookup.group_id);
 +    return Response::Success();
@@ -1129,8 +1236,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  std::vector<std::unique_ptr<content::WebContents>> detached;
 +  for (int i = source_strip->count() - 1; i >= 0; --i) {
 +    if (source_strip->GetTabGroupForTab(i) == lookup.group_id) {
-+      detached.push_back(
-+          source_strip->DetachWebContentsAtForInsertion(i));
++      detached.push_back(source_strip->DetachWebContentsAtForInsertion(i));
 +    }
 +  }
 +  std::ranges::reverse(detached);
@@ -1147,8 +1253,7 @@ index 30bd52d09c3fc65f429f4de24bf054822243a68b..7926d6f3f48a73452725cef3b3e21ebf
 +  }
 +
 +  // Group the inserted tabs.
-+  tab_groups::TabGroupId new_gid =
-+      target_strip->AddToNewGroup(new_indices);
++  tab_groups::TabGroupId new_gid = target_strip->AddToNewGroup(new_indices);
 +  target_strip->ChangeTabGroupVisuals(new_gid, saved_visual);
 +
 +  *out_group = BuildTabGroupInfo(target_bwi, new_gid);

@@ -1,3 +1,4 @@
+import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { CockpitShell } from '@/components/layout/CockpitShell'
@@ -6,6 +7,8 @@ import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
 import { Mcp } from '@/screens/mcp/Mcp'
 import { Replay } from '@/screens/replay/Replay'
+import { SkillDetail } from '@/screens/skills/SkillDetail'
+import { Skills } from '@/screens/skills/Skills'
 import { TaskDetailPage } from '@/screens/task-detail/TaskDetailPage'
 
 /** Mounts the v2 cockpit route tree. */
@@ -17,6 +20,16 @@ export function App() {
         <Route element={<CockpitShell />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
+          <Route
+            path="/diagnostics"
+            element={
+              <div className="mx-auto max-w-5xl px-6 py-10">
+                <DiagnosticsPage />
+              </div>
+            }
+          />
+          <Route path="/skills" element={<Skills />} />
+          <Route path="/skills/:name" element={<SkillDetail />} />
           <Route
             path="/audit"
             element={

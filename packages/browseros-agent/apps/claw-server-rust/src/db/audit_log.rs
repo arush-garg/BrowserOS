@@ -54,7 +54,14 @@ pub struct RecordToolDispatchInput {
     pub args_json: String,
     pub result_meta: String,
     pub duration_ms: i64,
+    /// When the dispatch started, so a long-running script tool sorts before the
+    /// child primitives it recorded while executing. `None` falls back to the
+    /// write time (fine for fast granular tools and child rows).
+    pub created_at: Option<i64>,
     pub dispatch_id: DispatchId,
+    /// Parent script dispatch when this row is a primitive executed inside a
+    /// `run`/`execute` script; `None` for ordinary top-level tool dispatches.
+    pub parent_dispatch_id: Option<DispatchId>,
     /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
     pub tool_input_token_estimate: i64,
     /// Approximate semantic content returned by BrowserClaw after result effects.
@@ -142,6 +149,8 @@ pub struct TaskSummary {
     pub tool_input_token_estimate: i64,
     pub tool_output_token_estimate: i64,
     pub tokens_measured: bool,
+    /// Agent-declared, PII-scrubbed summary of the task; None when never declared.
+    pub task_summary: Option<String>,
 }
 
 impl From<tasks::Model> for TaskSummary {
@@ -168,6 +177,7 @@ impl From<tasks::Model> for TaskSummary {
             tool_input_token_estimate: model.tool_input_token_estimate,
             tool_output_token_estimate: model.tool_output_token_estimate,
             tokens_measured: model.tokens_measured,
+            task_summary: model.task_summary,
         }
     }
 }
@@ -255,7 +265,7 @@ impl AuditLog {
     pub async fn append_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
         let result = ToolDispatches::insert(tool_dispatches::ActiveModel {
             id: NotSet,
-            created_at: Set(now_epoch_ms()),
+            created_at: Set(input.created_at.unwrap_or_else(now_epoch_ms)),
             agent_id: Set(input.agent_id),
             slug: Set(input.slug),
             agent_label: Set(input.agent_label),
@@ -273,6 +283,7 @@ impl AuditLog {
             tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
             token_estimator_version: Set(input.token_estimator_version.max(0)),
             dispatch_id: Set(Some(input.dispatch_id.into_inner())),
+            parent_dispatch_id: Set(input.parent_dispatch_id.map(DispatchId::into_inner)),
             has_screenshot: Set(false),
         })
         .exec(self.db.connection())
@@ -339,6 +350,20 @@ impl AuditLog {
         mark_screenshot(self.db.connection(), dispatch_id).await
     }
 
+    /// Reads the child primitives recorded inside a script dispatch, in run
+    /// order, so the self-healing distiller can replay the sequence.
+    pub async fn dispatches_with_parent(
+        &self,
+        parent_dispatch_id: &str,
+    ) -> AppResult<Vec<ToolDispatchRow>> {
+        Ok(ToolDispatches::find()
+            .filter(tool_dispatches::Column::ParentDispatchId.eq(parent_dispatch_id))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?)
+    }
+
     /// Records a session start and refreshes its task summary atomically.
     pub async fn record_session_start(
         &self,
@@ -363,6 +388,32 @@ impl AuditLog {
         .exec(&txn)
         .await?;
         recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Stores the agent-declared, already-scrubbed task summary and refreshes the
+    /// FTS5 search index for the session. Last write wins.
+    pub async fn set_task_summary(&self, session_id: &str, summary: &str) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE tasks SET task_summary = ? WHERE session_id = ?",
+            [summary.to_owned().into(), session_id.to_owned().into()],
+        ))
+        .await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM task_search WHERE session_id = ?",
+            [session_id.to_owned().into()],
+        ))
+        .await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO task_search(session_id, summary) VALUES (?, ?)",
+            [session_id.to_owned().into(), summary.to_owned().into()],
+        ))
+        .await?;
         txn.commit().await?;
         Ok(())
     }
@@ -431,9 +482,15 @@ impl AuditLog {
     pub async fn list_tasks(&self, query: ListTasksQuery) -> AppResult<ListTasksResult> {
         let limit = query.limit.unwrap_or(25).clamp(1, 100);
         let page_size = usize::try_from(limit).unwrap_or(100);
+        // Full-text hits over the task summary, resolved to the session_ids the FTS5
+        // index matched, so the summary participates in the same OR filter as the fields.
+        let summary_matches = match query.search.as_deref() {
+            Some(search) => fts_search_session_ids(self.db.connection(), search).await?,
+            None => Vec::new(),
+        };
         let search_condition = query.search.map(|search| {
             let pattern = format!("%{}%", search.to_ascii_lowercase());
-            Condition::any()
+            let mut any = Condition::any()
                 .add(Func::lower(Expr::col(tasks::Column::Title)).like(pattern.clone()))
                 .add(Func::lower(Expr::col(tasks::Column::AgentLabel)).like(pattern.clone()))
                 .add(
@@ -442,7 +499,11 @@ impl AuditLog {
                         Expr::value(""),
                     ]))
                     .like(pattern),
-                )
+                );
+            if !summary_matches.is_empty() {
+                any = any.add(tasks::Column::SessionId.is_in(summary_matches));
+            }
+            any
         });
         let condition = Condition::all()
             .add(tasks::Column::DispatchCount.gt(0))
@@ -566,6 +627,42 @@ async fn mark_screenshot<C: ConnectionTrait>(conn: &C, dispatch_id: i64) -> AppR
     Ok(())
 }
 
+/// Turns raw user search text into a safe FTS5 query: each whitespace token that
+/// carries a letter or digit becomes a quoted prefix term (`"token"*`), joined by
+/// spaces (implicit AND). Quoting neutralizes FTS5 operators in user input; the
+/// trailing `*` gives search-as-you-type prefix matching. Empty when nothing usable.
+fn build_fts_query(search: &str) -> String {
+    search
+        .split_whitespace()
+        .filter(|token| token.chars().any(char::is_alphanumeric))
+        .map(|token| format!("\"{}\"*", token.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Resolves a user search string against the `task_search` FTS5 index to the set of
+/// matching `session_id`s. Empty (no query) yields no matches rather than erroring.
+async fn fts_search_session_ids<C: ConnectionTrait>(
+    conn: &C,
+    search: &str,
+) -> AppResult<Vec<String>> {
+    let fts_query = build_fts_query(search);
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = conn
+        .query_all(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT session_id FROM task_search WHERE task_search MATCH ?",
+            [fts_query.into()],
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.try_get::<String>("", "session_id").ok())
+        .collect())
+}
+
 async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppResult<()> {
     let dispatches = query_dispatches_for_session(conn, session_id).await?;
     let start = query_start(conn, session_id).await?;
@@ -650,6 +747,10 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         tool_output_token_estimate: Set(tool_output_token_estimate),
         tokens_measured: Set(tokens_measured),
         updated_at: Set(now_epoch_ms()),
+        // Owned by name_session via set_task_summary, not by the recompute projection:
+        // NULL on first insert, and deliberately absent from update_columns below so a
+        // later recompute never clobbers a declared summary.
+        task_summary: Set(None),
     })
     .on_conflict(
         OnConflict::column(tasks::Column::SessionId)
@@ -687,6 +788,10 @@ async fn query_dispatches_for_session<C: ConnectionTrait>(
 ) -> AppResult<Vec<ToolDispatchRow>> {
     Ok(ToolDispatches::find()
         .filter(tool_dispatches::Column::SessionId.eq(session_id))
+        // created_at first so a script tool (stamped with its start) sorts
+        // before the child primitives it recorded while executing; id breaks
+        // ties for rows written in the same millisecond.
+        .order_by_asc(tool_dispatches::Column::CreatedAt)
         .order_by_asc(tool_dispatches::Column::Id)
         .all(conn)
         .await?)
@@ -886,6 +991,8 @@ mod tests {
             result_meta: result_meta(is_error, false, &json!({ "page": 1 }), 1),
             duration_ms: 10,
             dispatch_id: crate::ids::DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
             tool_input_token_estimate: 11,
             tool_output_token_estimate: 22,
             token_estimator_version: 1,
@@ -1108,6 +1215,68 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_summary_is_searchable_survives_recompute_and_is_purged() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // A dispatch materializes the listable task row; the summary is set out-of-band.
+        audit
+            .record_tool_dispatch(dispatch("s1", "https://shop.example.com", false))
+            .await?;
+        audit
+            .set_task_summary("s1", "Reconciled the quarterly wholesale invoices")
+            .await?;
+
+        // FTS5 search over the summary finds the session (title/site do not contain the term),
+        // and the summary round-trips on the returned task.
+        let hit = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("wholesale".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(hit.tasks.len(), 1);
+        assert_eq!(hit.tasks[0].session_id, "s1");
+        assert_eq!(
+            hit.tasks[0].task_summary.as_deref(),
+            Some("Reconciled the quarterly wholesale invoices")
+        );
+
+        // A later recompute (session end) must not clobber the declared summary.
+        audit.record_session_end("s1", "closed", None).await?;
+        let after = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("reconciled".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(after.tasks.len(), 1);
+        assert_eq!(
+            after.tasks[0].task_summary.as_deref(),
+            Some("Reconciled the quarterly wholesale invoices")
+        );
+
+        // A non-matching query returns nothing.
+        let miss = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("zzznotthere".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(miss.tasks.is_empty());
+
+        // Retention purges the task and its search-index rows.
+        audit.delete_sessions(&["s1".to_string()]).await?;
+        let purged = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("wholesale".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(purged.tasks.is_empty());
         Ok(())
     }
 
@@ -1427,6 +1596,20 @@ impl AuditLog {
             .exec(&txn)
             .await?
             .rows_affected;
+        // task_search is an FTS5 virtual table (not a SeaORM entity); purge its rows for
+        // the same sessions so the search index does not retain deleted summaries.
+        let placeholders = session_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let delete_index = format!("DELETE FROM task_search WHERE session_id IN ({placeholders})");
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            &delete_index,
+            session_ids.iter().map(|id| id.clone().into()),
+        ))
+        .await?;
         txn.commit().await?;
         Ok(AuditDeleteCounts {
             dispatches,

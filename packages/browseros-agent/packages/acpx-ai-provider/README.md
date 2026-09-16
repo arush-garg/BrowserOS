@@ -10,13 +10,10 @@
 > [PROVENANCE.md](./PROVENANCE.md) for the pinned upstream revision and local
 > adaptations.
 
-> [!WARNING]
-> **Alpha software.** Both this package and its underlying runtime
-> ([`acpx`](https://www.npmjs.com/package/acpx)) are pre-1.0. Public
-> APIs may change in any minor release. Pin a version in production
-> and read the [Known limitations](#known-limitations) section before
-> picking it up — most of the rough edges flow through from
-> `acpx/runtime`, which is itself still stabilizing its event shape.
+> This workspace package is version **1.0.0** and supports AI SDK v7.
+> Its underlying [`acpx`](https://www.npmjs.com/package/acpx) runtime is
+> still pre-1.0; see [Known limitations](#known-limitations) for the
+> integration's current constraints.
 
 ## Why
 
@@ -42,13 +39,13 @@ spawn config.
 {
   "dependencies": {
     "@browseros/acpx-ai-provider": "workspace:*",
-    "acpx": "^0.12.0",
-    "ai": "6.0.230"
+    "acpx": "^0.13.0",
+    "ai": "^7.0.0"
   }
 }
 ```
 
-`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6, `acpx` ≥ 0.6.
+`acpx` and `ai` are peer dependencies. Use `ai` ≥ 6 and `acpx` 0.13.x.
 
 ## Quickstart
 
@@ -103,7 +100,7 @@ createAcpxProvider({
   stateDir: '~/.acpx',             // session store location
   mcpServers: [/* … */],
   agentRegistryOverrides: {
-    'my-agent': 'node ./bin/my-agent.js --acp',
+    'my-agent': ['node', './bin/my-agent.js', '--acp'],
   },
   // advanced: inject a pre-built runtime (testing, multi-provider sharing)
   runtime: customRuntime,
@@ -125,10 +122,10 @@ through `agentRegistryOverrides`:
 const provider = createAcpxProvider({
   agent: 'my-acp-server',
   agentRegistryOverrides: {
-    'my-acp-server': './bin/my-acp-server --stdio',
+    'my-acp-server': ['./bin/my-acp-server', '--stdio'],
     // anything that produces an ACP-over-stdio process is fine:
-    //   'my-acp-server': 'node ./script.js --acp',
-    //   'my-acp-server': 'npx @my-org/acp-adapter@1.2.3',
+    //   'my-acp-server': ['node', './script.js', '--acp'],
+    //   'my-acp-server': ['npx', '@my-org/acp-adapter@1.2.3'],
   },
 })
 ```

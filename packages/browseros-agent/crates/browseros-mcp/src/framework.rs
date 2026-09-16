@@ -24,12 +24,26 @@ pub struct BrowserToolDefaults {
     pub default_tab_group_id: Option<String>,
 }
 
+/// A saved helper the host hot-loads into a script's runtime so the agent can
+/// call it by name. `source` is a bare function expression (header stripped).
+#[derive(Debug, Clone)]
+pub struct HelperSource {
+    pub name: String,
+    pub source: String,
+}
+
 #[derive(Clone)]
 pub struct BrowserToolOptions {
     pub session: Arc<BrowserSession>,
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
+    /// Host hook a script tool invokes around each primitive; `None` outside
+    /// the host (unit tests, non-host callers), which disables the hook.
+    pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// Helpers the host loads into the script runtime before the agent's code
+    /// runs, exposed as `helpers.<name>`. Empty outside the host.
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 #[derive(Clone)]
@@ -38,6 +52,10 @@ pub struct ToolCtx {
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
+    /// See [`BrowserToolOptions::inner_call_hook`].
+    pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
+    /// See [`BrowserToolOptions::preloaded_helpers`].
+    pub preloaded_helpers: Vec<HelperSource>,
 }
 
 impl ToolCtx {
@@ -48,6 +66,8 @@ impl ToolCtx {
             defaults: options.defaults,
             cancel: options.cancel,
             output_files: options.output_files,
+            inner_call_hook: options.inner_call_hook,
+            preloaded_helpers: options.preloaded_helpers,
         }
     }
 
@@ -58,6 +78,90 @@ impl ToolCtx {
             Ok(())
         }
     }
+}
+
+/// Host-injected hook a script tool (`run`/`execute`) calls around each browser
+/// primitive so the host can enforce per-primitive ownership and record the
+/// primitive as a child audit row. `browseros-mcp` cannot reach the host's
+/// guards or audit store, so the host implements this and passes it in via
+/// [`ToolCtx::inner_call_hook`].
+pub trait InnerCallHook: Send + Sync {
+    /// Authorize a primitive about to run against the caller's ownership.
+    /// `page` is the primitive's target page id, when it addresses one.
+    /// `Err(reason)` rejects the primitive and the reason is surfaced to the
+    /// script as a thrown error.
+    fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Record a completed inner primitive as a child audit row.
+    fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
+
+    /// Signal that the script just created a page. The host claims and groups
+    /// it exactly as a `tabs new` would, so a script's tabs get the agent's
+    /// tab group, ownership, and the cockpit ownership window.
+    fn on_page_created<'a>(&'a self, page_id: u32) -> BoxFuture<'a, ()>;
+
+    /// Tag each page from a `pages.list` result with its ownership bucket so the
+    /// script can tell its own tabs from the user's and other agents' tabs, the
+    /// same tri-bucket view the granular `tabs list` tool returns. `browseros-mcp`
+    /// cannot compute ownership, so the host annotates. The default returns the
+    /// pages unchanged, which is correct when no host is attached.
+    fn annotate_pages<'a>(&'a self, pages: &'a [Value]) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { pages.to_vec() })
+    }
+
+    /// Resolve a page id to its helper host bucket (hostname minus a leading
+    /// `www.`). `browseros-mcp` cannot read a page's URL from ownership state,
+    /// so the host does it. The default has no host.
+    fn resolve_host<'a>(&'a self, _page: u32) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
+
+    /// Persist a reusable helper for a host under `helpers/<host>/<name>.js` with
+    /// a provenance header. `Err(reason)` is surfaced to the script. The default
+    /// reports that persistence is unavailable (no host attached).
+    fn save_helper<'a>(
+        &'a self,
+        _host: &'a str,
+        _name: &'a str,
+        _source: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { Err("helpers are not available in this context".to_string()) })
+    }
+
+    /// List a host's saved helpers with provenance for discovery. Each value is
+    /// `{ name, ageDays, candidate, agent }`. The default has none.
+    fn list_helpers<'a>(&'a self, _host: &'a str) -> BoxFuture<'a, Vec<Value>> {
+        Box::pin(async move { Vec::new() })
+    }
+
+    /// Read a helper's source body (provenance header stripped), ready to eval.
+    /// The default has none.
+    fn read_helper<'a>(&'a self, _host: &'a str, _name: &'a str) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { None })
+    }
+}
+
+/// A completed inner primitive handed to [`InnerCallHook::record`].
+#[derive(Debug, Clone, Copy)]
+pub struct InnerCallRecord<'a> {
+    /// The bridge method that ran, e.g. `"input.click"` or `"nav.goto"`.
+    pub method: &'a str,
+    /// Target page id, when the primitive addressed a specific page.
+    pub page: Option<u32>,
+    /// The primitive's arguments as a JSON array, so the audit shows what ran
+    /// and the self-healing distiller can replay the sequence.
+    pub args: &'a Value,
+    /// Whether this primitive ran inside a hot-loaded helper call (a replay), so
+    /// the distiller can skip a successful reuse's actions.
+    pub from_helper: bool,
+    /// Whether the primitive failed.
+    pub is_error: bool,
+    /// Wall-clock duration of the primitive in milliseconds.
+    pub duration_ms: i64,
+    /// Estimated output tokens of the primitive's result payload (v1 estimator),
+    /// so the inner audit row counts toward session token measurement the same
+    /// way a granular tool's output does.
+    pub output_token_estimate: i64,
 }
 
 #[derive(Clone)]
@@ -343,6 +447,8 @@ fn normalize_schema_value(value: &mut Value) {
                 object.remove("default");
             }
 
+            collapse_nullable_enum(object);
+
             for key in [
                 "additionalItems",
                 "additionalProperties",
@@ -385,6 +491,57 @@ fn normalize_schema_value(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Rewrites a nullable enum — `{"type": ["string", "null"], "enum": [..., null]}`, which is
+/// what schemars emits for an `Option<SomeEnum>` field — into the plain single-type form.
+///
+/// An optional argument is already optional by being absent from `required`, and the extra
+/// `null` is what strict MCP clients reject: a Pydantic-backed client decodes every `enum`
+/// entry as the declared type and fails the tool list outright on the trailing `None`.
+/// Arguments are deserialized with serde rather than validated against this schema, so
+/// dropping it changes what clients are told, not what the server accepts.
+fn collapse_nullable_enum(object: &mut JsonObject) {
+    let Some(Value::Array(values)) = object.get("enum") else {
+        return;
+    };
+    if !values.iter().any(Value::is_null) {
+        return;
+    }
+    let kept_values: Vec<Value> = values
+        .iter()
+        .filter(|value| !value.is_null())
+        .cloned()
+        .collect();
+    // An enum of nothing but `null` carries no variants to keep; leave it untouched.
+    if kept_values.is_empty() {
+        return;
+    }
+
+    // A strict client rejects a `null` enum entry whatever the `type` says, so the
+    // `null` is dropped from any enum that has one. When `type` is the
+    // `["<type>", "null"]` array schemars emits for an Option, collapse it in the
+    // same pass; a scalar or missing type is left as-is.
+    let type_replacement = match object.get("type") {
+        Some(Value::Array(types)) => {
+            let kept_types: Vec<Value> = types
+                .iter()
+                .filter(|entry| entry.as_str() != Some("null"))
+                .cloned()
+                .collect();
+            match kept_types.as_slice() {
+                [] => None,
+                [single] => Some(single.clone()),
+                _ => Some(Value::Array(kept_types)),
+            }
+        }
+        _ => None,
+    };
+
+    object.insert("enum".to_string(), Value::Array(kept_values));
+    if let Some(replacement) = type_replacement {
+        object.insert("type".to_string(), replacement);
     }
 }
 
@@ -503,4 +660,69 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized(schema: Value) -> Value {
+        let Value::Object(object) = schema else {
+            panic!("test schema should be an object");
+        };
+        Value::Object((*normalize_schema_object(object)).clone())
+    }
+
+    #[test]
+    fn nullable_enum_normalization_collapses_schemars_option_enum_shape() {
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "button": {
+                    "type": ["string", "null"],
+                    "enum": ["left", "right", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/button"),
+            Some(&json!({
+                "type": "string",
+                "enum": ["left", "right"]
+            }))
+        );
+    }
+
+    #[test]
+    fn nullable_enum_normalization_strips_null_even_without_the_nullable_type_array() {
+        // A strict client rejects a `null` enum entry whatever `type` says, so the
+        // `null` is dropped whether `type` is a scalar string or absent; only the
+        // `["<type>", "null"]` array is additionally collapsed.
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["ready", null]
+                },
+                "implicit": {
+                    "enum": ["ready", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/state/enum"),
+            Some(&json!(["ready"]))
+        );
+        assert_eq!(
+            schema.pointer("/properties/state/type"),
+            Some(&json!("string"))
+        );
+        assert_eq!(
+            schema.pointer("/properties/implicit/enum"),
+            Some(&json!(["ready"]))
+        );
+    }
 }

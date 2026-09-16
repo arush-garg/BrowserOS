@@ -74,25 +74,19 @@ describe('registerBrowserTools', () => {
       BROWSER_TOOLS.map((tool) => tool.name),
     )
     expect(fake.configs.get('tabs')?.inputSchema).toBeDefined()
-    const tabsShape = (
-      fake.configs.get('tabs')?.inputSchema as {
-        shape?: Record<string, unknown>
-      }
-    )?.shape
-    expect(Object.keys(tabsShape ?? {}).sort()).toEqual([
+    const tabsSchema = fake.configs.get('tabs')?.inputSchema as
+      | { shape: Record<string, unknown> }
+      | undefined
+    expect(Object.keys(tabsSchema?.shape ?? {}).sort()).toEqual([
       'action',
       'background',
-      'field',
       'page',
-      'query',
       'url',
     ])
-    const windowsShape = (
-      fake.configs.get('windows')?.inputSchema as {
-        shape?: Record<string, unknown>
-      }
-    )?.shape
-    expect(Object.keys(windowsShape ?? {}).sort()).toEqual([
+    const windowsSchema = fake.configs.get('windows')?.inputSchema as
+      | { shape: Record<string, unknown> }
+      | undefined
+    expect(Object.keys(windowsSchema?.shape ?? {}).sort()).toEqual([
       'action',
       'windowId',
     ])
@@ -161,11 +155,19 @@ describe('registerBrowserTools', () => {
 
       const result = await fake.handlers.get('run')?.({ code: 'return 42' })
 
-      expect(result?.structuredContent).toEqual({
-        ok: true,
-        value: 42,
-        logs: [],
-      })
+      // Structured content stays present in both modes, but run output is
+      // page-derived and untrusted, so its value/logs are fenced too (a
+      // schema-bearing tool's structuredContent is model-visible).
+      const structured = result?.structuredContent as {
+        ok: boolean
+        value?: string
+        logs: string[]
+      }
+      expect(structured.ok).toBe(true)
+      expect(structured.logs).toEqual([])
+      expect(typeof structured.value).toBe('string')
+      expect(structured.value).toContain('UNTRUSTED_PAGE_CONTENT')
+      expect(structured.value).toContain('42')
     }
   })
 
@@ -293,5 +295,33 @@ describe('registerBrowserTools', () => {
     await run
 
     expect(ends).toEqual([{ tool_name: 'tabs', source: 'unit-test' }])
+  })
+
+  it('delivers the session handle in _meta when the handler catch fires, never in structuredContent', async () => {
+    const fake = createFakeServer()
+
+    // Throw from the executor seam so the handler's own catch block runs (the
+    // in-tool path returns isError instead of throwing). Regression for the
+    // exception path leaking structuredContent: { session } (#2651).
+    registerBrowserTools(
+      fake.server as never,
+      { pages: {} } as unknown as BrowserSession,
+      {},
+      {
+        sessionIdentity: true,
+        executor: async () => {
+          throw new Error('boom')
+        },
+      },
+    )
+
+    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+
+    expect(result?.isError).toBe(true)
+    // The error text stays in content, never shadowed by the handle (#2651).
+    expect(textOf(result)).toContain('boom')
+    expect(result).not.toHaveProperty('structuredContent')
+    const meta = (result as { _meta?: Record<string, unknown> })?._meta
+    expect(typeof meta?.['com.browseros/session']).toBe('string')
   })
 })

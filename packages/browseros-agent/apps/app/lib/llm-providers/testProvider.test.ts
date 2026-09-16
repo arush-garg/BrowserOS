@@ -43,6 +43,12 @@ function baseProvider(
 }
 
 describe('testProvider — request body', () => {
+  it('passes custom header templates to the local test endpoint', async () => {
+    const headers = { 'x-opencode-session': '{{conversationId}}' }
+    await testProvider(baseProvider({ headers }), 'http://127.0.0.1:9000')
+    expect(lastCall?.body.headers).toEqual(headers)
+  })
+
   it('forwards model-backed fields for non-ACP providers', async () => {
     await testProvider(baseProvider(), 'http://127.0.0.1:9000')
     expect(lastCall?.url).toBe('http://127.0.0.1:9000/test-provider')
@@ -50,39 +56,6 @@ describe('testProvider — request body', () => {
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
       apiKey: 'sk-test',
-    })
-  })
-
-  it('forwards ACP fields when present', async () => {
-    await testProvider(
-      baseProvider({
-        type: 'claude-code',
-        apiKey: undefined,
-        acpAgentId: 'claude',
-        acpFixedWorkspacePath: '/tmp/x',
-      }),
-      'http://127.0.0.1:9000',
-    )
-    expect(lastCall?.body).toMatchObject({
-      provider: 'claude-code',
-      acpAgentId: 'claude',
-      acpFixedWorkspacePath: '/tmp/x',
-    })
-  })
-
-  it('forwards acp-custom command for the probe spawn path', async () => {
-    await testProvider(
-      baseProvider({
-        type: 'acp-custom',
-        acpAgentId: 'my-agent',
-        acpCommand: 'my-bin acp',
-      }),
-      'http://127.0.0.1:9000',
-    )
-    expect(lastCall?.body).toMatchObject({
-      provider: 'acp-custom',
-      acpAgentId: 'my-agent',
-      acpCommand: 'my-bin acp',
     })
   })
 })

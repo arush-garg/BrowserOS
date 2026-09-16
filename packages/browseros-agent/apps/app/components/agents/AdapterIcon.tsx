@@ -1,34 +1,30 @@
-import { Bot, Cpu, Sparkles } from 'lucide-react'
+import { Blocks, Bot } from 'lucide-react'
 import type { FC } from 'react'
-import type { HarnessAgentAdapter } from '@/modules/agents/agent-harness-types'
+import type { AcpAgentType } from '@/modules/agents/acp-agent-types'
+import { BRAND_MARKS } from './agent-brand-marks'
 
-/**
- * Single icon component for any adapter the agent rail can render.
- * Falls back to a generic bot when the adapter is unknown so future
- * adapters land without a code change at the call site.
- */
 export interface AdapterIconProps {
-  adapter: HarnessAgentAdapter | 'unknown'
+  adapter: AcpAgentType | 'unknown'
   className?: string
 }
 
 export const AdapterIcon: FC<AdapterIconProps> = ({ adapter, className }) => {
-  switch (adapter) {
-    case 'claude':
-      return <Sparkles className={className} aria-label="Claude Code" />
-    case 'codex':
-      return <Cpu className={className} aria-label="Codex" />
-    default:
-      return <Bot className={className} aria-label="Agent" />
+  const Mark = BRAND_MARKS[adapter]
+  if (Mark) return <Mark className={className} />
+  if (adapter === 'custom') {
+    return <Blocks className={className} aria-label="Custom agent" />
   }
+  return <Bot className={className} aria-label="Agent" />
 }
 
-export function adapterLabel(adapter: HarnessAgentAdapter | 'unknown'): string {
+export function adapterLabel(adapter: AcpAgentType | 'unknown'): string {
   switch (adapter) {
     case 'claude':
       return 'Claude Code'
     case 'codex':
       return 'Codex'
+    case 'custom':
+      return 'Custom agent'
     default:
       return 'Agent'
   }

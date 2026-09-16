@@ -18,50 +18,11 @@ const stubBunPresent: typeof import('../../../../src/lib/agents/host-acp/bundled
 const stubBunMissing: typeof import('../../../../src/lib/agents/host-acp/bundled-bun').resolveBundledBun =
   () => null
 
-function splitCommandLikeAcpx(value: string): {
-  command: string
-  args: string[]
+function decodeEnvironmentPayload(value: string | undefined): {
+  argv: string[]
+  env: Record<string, string>
 } {
-  const parts: string[] = []
-  let current = ''
-  let quote: string | null = null
-  let escaping = false
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch
-      escaping = false
-      continue
-    }
-    if (ch === '\\' && quote !== "'") {
-      escaping = true
-      continue
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null
-      } else {
-        current += ch
-      }
-      continue
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch
-      continue
-    }
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        parts.push(current)
-        current = ''
-      }
-      continue
-    }
-    current += ch
-  }
-
-  if (escaping) current += '\\'
-  if (current.length > 0) parts.push(current)
-  return { command: parts[0] ?? '', args: parts.slice(1) }
+  return JSON.parse(Buffer.from(value ?? '', 'base64url').toString('utf8'))
 }
 
 describe('resolveAcpSpawnCommand', () => {
@@ -74,9 +35,17 @@ describe('resolveAcpSpawnCommand', () => {
     })
     expect(out).not.toBeNull()
     expect(out?.source).toBe('bundled-bun')
-    expect(out?.command).toBe(
-      `env PATH='${dirname(FAKE_BUN_PATH)}:/usr/bin' '${FAKE_BUN_PATH}' x --bun --silent --package '${HOST_ACP_ADAPTER_CONFIG.claude.acpPackageSpec}' '${HOST_ACP_ADAPTER_CONFIG.claude.acpBin}'`,
-    )
+    expect(out.argv).toEqual([
+      'env',
+      `PATH=${dirname(FAKE_BUN_PATH)}:/usr/bin`,
+      FAKE_BUN_PATH,
+      'x',
+      '--bun',
+      '--silent',
+      '--package',
+      HOST_ACP_ADAPTER_CONFIG.claude.acpPackageSpec,
+      HOST_ACP_ADAPTER_CONFIG.claude.acpBin,
+    ])
   })
 
   it('returns the bundled-bun launcher for codex when the binary exists', () => {
@@ -87,9 +56,36 @@ describe('resolveAcpSpawnCommand', () => {
       resolveBundledBun: stubBunPresent,
     })
     expect(out?.source).toBe('bundled-bun')
-    expect(out?.command).toBe(
-      `env PATH='${dirname(FAKE_BUN_PATH)}:/usr/bin' '${FAKE_BUN_PATH}' x --bun --silent --package '${HOST_ACP_ADAPTER_CONFIG.codex.acpPackageSpec}' '${HOST_ACP_ADAPTER_CONFIG.codex.acpBin}'`,
-    )
+    expect(out?.argv).toEqual([
+      'env',
+      `PATH=${dirname(FAKE_BUN_PATH)}:/usr/bin`,
+      FAKE_BUN_PATH,
+      'x',
+      '--bun',
+      '--silent',
+      '--package',
+      HOST_ACP_ADAPTER_CONFIG.codex.acpPackageSpec,
+      HOST_ACP_ADAPTER_CONFIG.codex.acpBin,
+    ])
+  })
+
+  it('passes Codex process configuration through the bundled launcher', () => {
+    const codexConfig = JSON.stringify({
+      developer_instructions: "Use BrowserOS, not Codex's browser.\n",
+    })
+    const out = resolveAcpSpawnCommand({
+      agentType: 'codex',
+      env: { PATH: '/usr/bin' },
+      resourcesDir: '/fake/resources',
+      spawnEnv: {
+        CODEX_CONFIG: codexConfig,
+        INITIAL_AGENT_MODE: 'agent-full-access',
+      },
+      resolveBundledBun: stubBunPresent,
+    })
+    expect(out.argv).toContain(`CODEX_CONFIG=${codexConfig}`)
+    expect(out.argv).toContain('INITIAL_AGENT_MODE=agent-full-access')
+    expect(out.argv).toContain(`PATH=${dirname(FAKE_BUN_PATH)}:/usr/bin`)
   })
 
   it('falls back to the host npx command when the bundled binary is missing', () => {
@@ -99,28 +95,23 @@ describe('resolveAcpSpawnCommand', () => {
       resolveBundledBun: stubBunMissing,
     })
     expect(out?.source).toBe('host-npx-fallback')
-    expect(out?.command).toBe(HOST_ACP_ADAPTER_CONFIG.claude.acpCommand)
+    expect(out?.argv).toEqual(HOST_ACP_ADAPTER_CONFIG.claude.acpArgv)
   })
 
-  it('returns null for acp-custom so the caller uses the user-supplied command', () => {
+  it('passes process configuration through the host npx fallback', () => {
     const out = resolveAcpSpawnCommand({
-      agentType: 'acp-custom',
+      agentType: 'codex',
       resourcesDir: '/fake/resources',
-      resolveBundledBun: stubBunPresent,
+      spawnEnv: { INITIAL_AGENT_MODE: 'agent-full-access' },
+      resolveBundledBun: stubBunMissing,
     })
-    expect(out).toBeNull()
+    expect(out.argv[0]).toBe('env')
+    expect(out.argv).toContain('INITIAL_AGENT_MODE=agent-full-access')
+    expect(out.argv).toContain('npx')
+    expect(out.argv).toContain(HOST_ACP_ADAPTER_CONFIG.codex.acpPackageSpec)
   })
 
-  it('returns null for an unknown agent type', () => {
-    const out = resolveAcpSpawnCommand({
-      agentType: 'gemini',
-      resourcesDir: '/fake/resources',
-      resolveBundledBun: stubBunPresent,
-    })
-    expect(out).toBeNull()
-  })
-
-  it('quotes the bundled bun path so paths with spaces survive', () => {
+  it('preserves a bundled bun path with spaces', () => {
     const bunWithSpaces =
       '/Applications/BrowserOS App/Contents/bin/third party/bun'
     const out = resolveAcpSpawnCommand({
@@ -128,11 +119,10 @@ describe('resolveAcpSpawnCommand', () => {
       resourcesDir: '/Applications/BrowserOS.app/Contents/Resources',
       resolveBundledBun: () => bunWithSpaces,
     })
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    const bunIndex = split.args.indexOf(bunWithSpaces)
-    expect(split.command).toBe('env')
+    const bunIndex = out.argv.indexOf(bunWithSpaces)
+    expect(out.argv[0]).toBe('env')
     expect(bunIndex).toBeGreaterThanOrEqual(0)
-    expect(split.args.slice(bunIndex)).toEqual([
+    expect(out.argv.slice(bunIndex)).toEqual([
       bunWithSpaces,
       'x',
       '--bun',
@@ -143,53 +133,143 @@ describe('resolveAcpSpawnCommand', () => {
     ])
   })
 
-  it('preserves Windows bundled bun path separators through acpx command splitting', () => {
+  it('uses structured argv for the Windows bundled launcher', () => {
     const out = resolveAcpSpawnCommand({
-      agentType: 'claude',
+      agentType: 'codex',
+      env: { Path: 'C:\\Windows\\System32' },
       resourcesDir: 'C:\\fake\\resources',
       platform: 'win32',
+      spawnEnv: { INITIAL_AGENT_MODE: 'agent-full-access' },
       resolveBundledBun: () => WINDOWS_BUN_PATH,
     })
 
     expect(out?.source).toBe('bundled-bun')
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    expect(split.args).toContain(WINDOWS_BUN_PATH)
+    expect(out.argv.slice(0, 3)).toEqual([
+      WINDOWS_BUN_PATH,
+      '--eval',
+      expect.any(String),
+    ])
+    const payload = decodeEnvironmentPayload(out.argv[3])
+    expect(payload.argv).toEqual([
+      WINDOWS_BUN_PATH,
+      'x',
+      '--bun',
+      '--silent',
+      '--package',
+      HOST_ACP_ADAPTER_CONFIG.codex.acpPackageSpec,
+      HOST_ACP_ADAPTER_CONFIG.codex.acpBin,
+    ])
+    expect(payload.env.INITIAL_AGENT_MODE).toBe('agent-full-access')
+    expect(payload.env.Path).toContain('C:\\Windows\\System32')
   })
-})
 
-describe('resolveAcpSpawnCommand extraEnv', () => {
-  it('bakes extraEnv into the bundled-bun command env prefix', () => {
+  it('uses cmd.exe for the Windows host npx fallback', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'codex',
+      env: {
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        Path: 'C:\\Windows\\System32',
+      },
+      platform: 'win32',
+      resourcesDir: 'C:\\missing',
+      spawnEnv: { INITIAL_AGENT_MODE: 'agent-full-access' },
+      resolveBundledBun: stubBunMissing,
+    })
+
+    expect(out.argv.slice(0, 2)).toEqual(['node', '--eval'])
+    const payload = decodeEnvironmentPayload(out.argv[3])
+    expect(payload.argv.slice(0, 4)).toEqual([
+      'C:\\Windows\\System32\\cmd.exe',
+      '/d',
+      '/s',
+      '/c',
+    ])
+    expect(payload.argv[4]).toContain('npx')
+    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.10.0')
+    expect(payload.env.INITIAL_AGENT_MODE).toBe('agent-full-access')
+  })
+
+  it('wraps Windows host npx even without extra environment', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'claude',
+      env: {
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        Path: 'C:\\Windows\\System32',
+      },
+      platform: 'win32',
+      resolveBundledBun: stubBunMissing,
+    })
+
+    expect(out.argv.slice(0, 2)).toEqual(['node', '--eval'])
+    const payload = decodeEnvironmentPayload(out.argv[3])
+    expect(payload.argv[0]).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(payload.argv[4]).toContain(
+      '@agentclientprotocol/claude-agent-acp@^^0.75.1',
+    )
+  })
+
+  it('does not replace the user Codex home', () => {
     const out = resolveAcpSpawnCommand({
       agentType: 'codex',
       resourcesDir: '/fake/resources',
       resolveBundledBun: stubBunPresent,
-      extraEnv: { CODEX_HOME: '/overlay/codex-home' },
     })
-    expect(out?.source).toBe('bundled-bun')
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    expect(split.command).toBe('env')
-    expect(split.args).toContain('CODEX_HOME=/overlay/codex-home')
+    expect(out?.argv.join('\n')).not.toContain('CODEX_HOME')
+  })
+})
+
+describe('resolveAcpSpawnCommand (custom)', () => {
+  const noLoginPath = () => undefined
+
+  it('runs a custom command as given, split into argv', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'npx -y @scope/my-agent-acp --stdio',
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['npx', '-y', '@scope/my-agent-acp', '--stdio'])
   })
 
-  it('wraps the npx fallback command with extraEnv', () => {
+  it('injects custom env at the process-launch boundary', () => {
     const out = resolveAcpSpawnCommand({
-      agentType: 'codex',
-      resolveBundledBun: stubBunMissing,
-      extraEnv: { CODEX_HOME: '/overlay/codex-home' },
+      agentType: 'custom',
+      customCommand: 'my-agent',
+      spawnEnv: { MY_AGENT_KEY: 'secret' },
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
     })
-    expect(out?.source).toBe('host-npx-fallback')
-    const split = splitCommandLikeAcpx(out?.command ?? '')
-    expect(split.command).toBe('env')
-    expect(split.args).toContain('CODEX_HOME=/overlay/codex-home')
-    expect(out?.command).toContain(HOST_ACP_ADAPTER_CONFIG.codex.acpCommand)
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['env', 'MY_AGENT_KEY=secret', 'my-agent'])
   })
 
-  it('leaves the npx fallback command unchanged when extraEnv is absent', () => {
+  it('does not wrap the custom command in bundled-bun', () => {
     const out = resolveAcpSpawnCommand({
-      agentType: 'codex',
-      resolveBundledBun: stubBunMissing,
+      agentType: 'custom',
+      customCommand: 'my-agent --stdio',
+      resourcesDir: '/fake/resources',
+      resolveBundledBun: stubBunPresent,
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
     })
-    expect(out?.source).toBe('host-npx-fallback')
-    expect(out?.command).toBe(HOST_ACP_ADAPTER_CONFIG.codex.acpCommand)
+    expect(out.argv).toEqual(['my-agent', '--stdio'])
+    expect(out.argv.join(' ')).not.toContain('--package')
+  })
+
+  it('prepends the login-shell PATH so profile-installed binaries resolve', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'opencode acp',
+      env: { PATH: '/usr/bin' },
+      platform: 'darwin',
+      resolveLoginShellPath: () => '/opt/homebrew/bin:/usr/bin',
+    })
+    expect(out.argv).toEqual([
+      'env',
+      'PATH=/opt/homebrew/bin:/usr/bin',
+      'opencode',
+      'acp',
+    ])
   })
 })

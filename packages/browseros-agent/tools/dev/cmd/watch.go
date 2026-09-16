@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -35,13 +36,14 @@ var (
 const (
 	watchRunLockMode           = "watch"
 	defaultClawWatchServerPort = 9200
+	defaultClawWatchStateDir   = ".browserclaw-dev"
 	rustClawWatchPollInterval  = time.Second
 )
 
 func init() {
 	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
 	watchCmd.Flags().BoolVar(&watchManual, "manual", false, "Build agent statically instead of WXT HMR mode")
-	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserClaw UI and standalone server")
+	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserOS neo UI and standalone server")
 	rootCmd.AddCommand(watchCmd)
 }
 
@@ -161,7 +163,10 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		clawBinary = browser.ResolveInstalledBinary(browser.ProductBrowserClaw)
 		logClawBrowserBinary(clawBinary)
 	}
-	env := buildWatchEnvWithBinaryResolution(p, userDataDir, watchClaw, clawBinary)
+	env, err := buildWatchEnvWithBinaryResolution(p, userDataDir, watchClaw, clawBinary)
+	if err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -210,7 +215,7 @@ func watchMode() (string, error) {
 		return "", fmt.Errorf("--manual cannot be combined with --claw")
 	}
 	if watchClaw {
-		return "BrowserClaw", nil
+		return "BrowserOS neo", nil
 	}
 	if watchManual {
 		return "BrowserOS manual", nil
@@ -231,12 +236,20 @@ func resolveWatchDefaultPorts(root string, claw bool) (proc.Ports, error) {
 }
 
 // buildWatchEnv forwards the selected product into WXT's Chromium launcher config.
-func buildWatchEnv(p proc.Ports, userDataDir string, claw bool) []string {
+func buildWatchEnv(p proc.Ports, userDataDir string, claw bool) ([]string, error) {
 	return buildWatchEnvWithBinaryResolution(p, userDataDir, claw, browser.BinaryResolution{})
 }
 
-func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bool, binaryResolution browser.BinaryResolution) []string {
+func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bool, binaryResolution browser.BinaryResolution) ([]string, error) {
 	env := proc.BuildEnv(p, "development")
+	stateKey, stateDir, err := resolveWatchProductStateDir(claw)
+	if err != nil {
+		return nil, err
+	}
+	// Resolve the root once before launching anything. Chromium and every
+	// sidecar then open the same installation.json instead of independently
+	// interpreting dev mode, HOME, or a relative environment override.
+	env = replaceEnvValue(env, stateKey, stateDir)
 	env = append(env,
 		fmt.Sprintf("BROWSEROS_USER_DATA_DIR=%s", userDataDir),
 		fmt.Sprintf("BROWSEROS_PRODUCT=%s", watchProduct(claw)),
@@ -248,7 +261,39 @@ func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bo
 		env = append(env, fmt.Sprintf("BROWSEROS_BINARY=%s", binaryResolution.Path))
 		env = buildClawWatchEnv(env, p)
 	}
-	return env
+	return env, nil
+}
+
+func resolveWatchProductStateDir(claw bool) (string, string, error) {
+	key := "BROWSEROS_DIR"
+	dirName := devDirName
+	if claw {
+		key = "BROWSERCLAW_DIR"
+		dirName = defaultClawWatchStateDir
+	}
+	if override := strings.TrimSpace(os.Getenv(key)); override != "" {
+		absolute, err := filepath.Abs(expandTilde(override))
+		if err != nil {
+			return "", "", fmt.Errorf("resolve %s: %w", key, err)
+		}
+		return key, absolute, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s default: %w", key, err)
+	}
+	return key, filepath.Join(home, dirName), nil
+}
+
+func replaceEnvValue(env []string, key string, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			result = append(result, entry)
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func watchProduct(claw bool) string {
@@ -258,7 +303,7 @@ func watchProduct(claw bool) string {
 	return browser.ProductBrowserOS
 }
 
-// buildClawWatchEnv bridges shared dev ports into the standalone BrowserClaw apps.
+// buildClawWatchEnv bridges shared dev ports into the standalone BrowserOS neo apps.
 func buildClawWatchEnv(env []string, p proc.Ports) []string {
 	apiURL := fmt.Sprintf("http://127.0.0.1:%d", p.Server)
 	return append(env,
@@ -269,7 +314,7 @@ func buildClawWatchEnv(env []string, p proc.Ports) []string {
 
 func logClawBrowserBinary(resolution browser.BinaryResolution) {
 	if resolution.Fallback {
-		proc.LogMsgf(proc.TagInfo, "BrowserClaw app not found at %s; using %s", browser.BrowserClawBinaryPath, resolution.Path)
+		proc.LogMsgf(proc.TagInfo, "BrowserOS neo app not found at %s; using %s", browser.BrowserClawBinaryPath, resolution.Path)
 		return
 	}
 	proc.LogMsgf(proc.TagInfo, "Browser app: %s", resolution.Path)
@@ -289,18 +334,7 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 		proc.LogMsg(proc.TagBuild, "agent built")
 
 		reservations.ReleaseCDP()
-		procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
-			Tag:     proc.TagBrowser,
-			Dir:     root,
-			Restart: false,
-			Cmd: browser.BuildArgs(browser.ArgsConfig{
-				Root:              root,
-				Ports:             p,
-				UserDataDir:       userDataDir,
-				LoadDevExtensions: true,
-				Product:           browser.ProductBrowserOS,
-			}),
-		}))
+		procs = append(procs, proc.StartManaged(ctx, wg, browserOSManualProcConfig(root, env, p, userDataDir)))
 	} else {
 		reservations.ReleaseCDP()
 		procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
@@ -309,6 +343,21 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 			Env:     env,
 			Restart: true,
 			Cmd:     []string{"bun", "--env-file=../../.env.development", "wxt"},
+		}))
+
+		// Plain-URL preview of the extension pages. Static-serves the
+		// `dist/chrome-mv3-dev` directory that `wxt` writes to, so
+		// agent-browser (or any regular browser) can open the app pages
+		// via http://127.0.0.1:5175/app.html (for example the onboarding
+		// flow at /app.html#/onboarding) without installing the extension.
+		// The served HTML references wxt's Vite dev server for its module
+		// and HMR client URLs, so live-reload still works on this URL.
+		procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
+			Tag:     proc.TagWeb,
+			Dir:     agentDir,
+			Env:     env,
+			Restart: true,
+			Cmd:     []string{"bun", "run", "dev:web"},
 		}))
 	}
 
@@ -331,6 +380,24 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 		},
 	}))
 	return procs, nil
+}
+
+// browserOSManualProcConfig keeps the direct Chromium launch on the same
+// product-state environment as WXT and the server process.
+func browserOSManualProcConfig(root string, env []string, p proc.Ports, userDataDir string) proc.ProcConfig {
+	return proc.ProcConfig{
+		Tag:     proc.TagBrowser,
+		Dir:     root,
+		Env:     env,
+		Restart: false,
+		Cmd: browser.BuildArgs(browser.ArgsConfig{
+			Root:              root,
+			Ports:             p,
+			UserDataDir:       userDataDir,
+			LoadDevExtensions: true,
+			Product:           browser.ProductBrowserOS,
+		}),
+	}
 }
 
 // startClawWatch supervises the BrowserClaw UI plus standalone server.

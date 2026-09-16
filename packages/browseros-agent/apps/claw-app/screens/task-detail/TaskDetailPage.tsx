@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useParams } from 'react-router'
-import { ScreenshotLightbox } from '@/components/audit/ScreenshotLightbox'
+import {
+  ScreenshotLightbox,
+  type ScreenshotLightboxItem,
+} from '@/components/audit/ScreenshotLightbox'
 import { TaskHeader } from '@/components/audit/TaskHeader'
 import { EmptyState } from '@/components/cockpit/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -28,12 +31,29 @@ export function TaskDetailPage() {
   const { sessionId = '' } = useParams()
   const { detail, screenshots, isPending, isError, error } =
     useTaskDetailScreenData(sessionId)
-  const [lightboxId, setLightboxId] = useState<number | null>(null)
+  const [openScreenshotId, setOpenScreenshotId] = useState<number | null>(null)
 
   const groups = useMemo(
     () => (detail ? groupDispatchesByTab(detail.dispatches, screenshots) : []),
     [detail, screenshots],
   )
+
+  const lightboxItems = useMemo<ScreenshotLightboxItem[]>(() => {
+    if (!detail) return []
+    const urlByScreenshot = new Map<number, string | null>()
+    for (const dispatch of detail.dispatches) {
+      if (dispatch.screenshotId != null) {
+        urlByScreenshot.set(dispatch.screenshotId, dispatch.url ?? null)
+      }
+    }
+    return [...screenshots]
+      .sort((a, b) => a.capturedAt - b.capturedAt)
+      .map((screenshot) => ({
+        screenshotId: screenshot.screenshotId,
+        sourceUrl: urlByScreenshot.get(screenshot.screenshotId) ?? null,
+        offsetMs: Math.max(0, screenshot.capturedAt - detail.session.startedAt),
+      }))
+  }, [detail, screenshots])
 
   if (isPending) {
     return (
@@ -58,15 +78,6 @@ export function TaskDetailPage() {
       </div>
     )
   }
-
-  const selectedDispatch =
-    lightboxId !== null
-      ? (detail.dispatches.find((d) => d.screenshotId === lightboxId) ?? null)
-      : null
-  const selectedScreenshot =
-    lightboxId !== null
-      ? (screenshots.find((s) => s.screenshotId === lightboxId) ?? null)
-      : null
 
   const { session } = detail
   const endEvent = session.endedAt
@@ -98,7 +109,7 @@ export function TaskDetailPage() {
         group={g}
         startedAt={session.startedAt}
         endEvent={endEvent}
-        onScreenshotClick={setLightboxId}
+        onScreenshotClick={(screenshotId) => setOpenScreenshotId(screenshotId)}
       />
     ),
   }))
@@ -110,17 +121,17 @@ export function TaskDetailPage() {
         items={items}
         defaultId={pickDefaultTabId(groups)}
         listVariant="line"
+        // Many-tab sessions (one tab per browser page) overflow the fixed
+        // page width; scroll the strip horizontally instead of spilling
+        // off-screen, keep each trigger at its natural width, and hide the
+        // scrollbar so the strip scrolls cleanly with no visible track.
+        listClassName="w-full max-w-full justify-start overflow-x-auto [&_button]:shrink-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       />
       <ScreenshotLightbox
         sessionId={sessionId}
-        screenshotId={lightboxId}
-        sourceUrl={selectedDispatch?.url ?? null}
-        offsetMs={
-          selectedScreenshot
-            ? Math.max(0, selectedScreenshot.capturedAt - session.startedAt)
-            : null
-        }
-        onClose={() => setLightboxId(null)}
+        items={lightboxItems}
+        startId={openScreenshotId}
+        onClose={() => setOpenScreenshotId(null)}
       />
     </div>
   )

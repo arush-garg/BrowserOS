@@ -62,11 +62,13 @@ pub(super) async fn list(
             .collect();
         return Ok(Json(SessionList::new(items)));
     }
+    let response_status_filter = query.status;
+    let stored_status_filter = query.status.filter(|status| *status != TaskStatus::Done);
     let result = state
         .audit_log
         .list_tasks(ListTasksQuery {
             slug: query.slug,
-            status: query.status,
+            status: stored_status_filter,
             site: query.site,
             search: query.search,
             since: query.since,
@@ -77,18 +79,19 @@ pub(super) async fn list(
         .await
         .map_err(|source| internal(&request_id, source))?;
     let live = live_sessions(&state).await;
-    // profile_id lives on the live session's agent, not in the audit
-    // store, so a profileId filter can only match live sessions — and
-    // it applies after pagination, so a filtered page may come back
-    // short rather than backfilled.
+    // profile_id lives on the live session's agent, and a done filter
+    // must reconcile persisted-live rows. Both apply after pagination,
+    // so a filtered page may come back short rather than backfilled.
     let mut items = Vec::with_capacity(result.tasks.len());
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
         let summary = contract_summary(task, session).await;
-        if query
-            .profile_id
-            .as_ref()
-            .is_none_or(|profile_id| summary.profile_id.as_ref() == Some(profile_id))
+        if response_status_filter
+            .is_none_or(|status| summary.status == contract_status(status, true))
+            && query
+                .profile_id
+                .as_ref()
+                .is_none_or(|profile_id| summary.profile_id.as_ref() == Some(profile_id))
         {
             items.push(summary);
         }
@@ -206,13 +209,14 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         task.duration_ms.max(0),
         task.dispatch_count,
         task.tool_sequence,
-        contract_status(task.status),
+        contract_status(task.status, live.is_some()),
         task.error_count,
     );
     summary.profile_id = live
         .and_then(|session| session.agent().profile_id())
         .map(|profile_id| profile_id.as_str().to_string());
     summary.site = task.site;
+    summary.task_summary = task.task_summary;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
@@ -246,6 +250,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
     summary.harness = harness;
     summary.color = Some(color);
     summary.site = task.site;
+    summary.task_summary = task.task_summary;
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
@@ -304,8 +309,9 @@ fn contract_live_tab(projection: LiveTabProjection) -> SessionBrowserTab {
     tab
 }
 
-fn contract_status(status: TaskStatus) -> SessionStatus {
+fn contract_status(status: TaskStatus, is_live: bool) -> SessionStatus {
     match status {
+        TaskStatus::Live if !is_live => SessionStatus::Done,
         TaskStatus::Live => SessionStatus::Live,
         TaskStatus::Done => SessionStatus::Done,
         TaskStatus::Failed => SessionStatus::Failed,
@@ -336,6 +342,8 @@ fn contract_dispatch(
     dispatch.args_json = row.args_json;
     dispatch.result_meta = row.result_meta;
     dispatch.duration_ms = row.duration_ms;
+    dispatch.dispatch_key = row.dispatch_id;
+    dispatch.parent_dispatch_id = row.parent_dispatch_id;
     dispatch
 }
 

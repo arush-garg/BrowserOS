@@ -46,10 +46,6 @@ mock.module('@/lib/browseros/helpers', () => ({
   getMcpServerUrl: async () => 'http://127.0.0.1:9200/mcp',
 }))
 
-mock.module('@/lib/messaging/server/serverMessages', () => ({
-  sendServerMessage: async () => ({ tools: [] }),
-}))
-
 let MCPSettingsPage: FC
 
 beforeAll(async () => {
@@ -60,7 +56,7 @@ describe('MCPSettingsPage', () => {
   it('mounts the permanent BrowserClaw banner between the server header and integrations', () => {
     const html = renderToStaticMarkup(createElement(MCPSettingsPage))
 
-    expect(html).toContain('For better MCP support, use BrowserClaw')
+    expect(html).toContain('For better MCP support, use BrowserOS neo')
 
     // Pin the stub positions first: a missing stub would return -1 and turn the
     // ordering bounds below into assertions that are trivially true.

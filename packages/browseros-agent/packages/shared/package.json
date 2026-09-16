@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1",
-    "zod": "^3.25.76"
+    "zod": "^4.5.2"
   },
   "exports": {
     "./constants/exit-codes": {
@@ -62,13 +62,25 @@
       "types": "./src/schemas/llm.ts",
       "default": "./src/schemas/llm.ts"
     },
+    "./schemas/agent": {
+      "types": "./src/schemas/agent.ts",
+      "default": "./src/schemas/agent.ts"
+    },
     "./schemas/ui-stream": {
       "types": "./src/schemas/ui-stream.ts",
       "default": "./src/schemas/ui-stream.ts"
     },
+    "./schemas/chat-error": {
+      "types": "./src/schemas/chat-error.ts",
+      "default": "./src/schemas/chat-error.ts"
+    },
     "./schemas/browser-context": {
       "types": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
+    },
+    "./schemas/conversation-panels": {
+      "types": "./src/schemas/conversation-panels.ts",
+      "default": "./src/schemas/conversation-panels.ts"
     },
     "./mcp/claude-code-transport-tag": {
       "types": "./src/mcp/claude-code-transport-tag.ts",

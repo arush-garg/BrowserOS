@@ -1,10 +1,10 @@
 import { Lock, ShieldCheck, Zap } from 'lucide-react'
 
-/** Renders the persistent BrowserClaw visual rail beside the onboarding steps. */
+/** Renders the persistent BrowserOS neo visual rail beside the onboarding steps. */
 export function VisualRail() {
   return (
     <div
-      className="relative flex w-[360px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9"
+      className="relative hidden w-[280px] shrink-0 flex-col justify-between overflow-hidden border-border border-r p-9 lg:flex xl:w-[360px]"
       style={{
         background:
           'linear-gradient(165deg, var(--color-secondary) 0%, var(--color-bg-sunken) 55%, var(--color-bg-canvas) 100%)',
@@ -28,7 +28,7 @@ export function VisualRail() {
           src="/icon/128.png"
         />
         <div className="font-extrabold text-[17px] tracking-tight">
-          BrowserClaw
+          BrowserOS neo
         </div>
       </div>
       <div className="relative">

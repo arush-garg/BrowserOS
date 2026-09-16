@@ -1,306 +1,235 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type {
-  HarnessAdapterDescriptor,
-  HarnessAgent,
-} from '@/modules/agents/agent-harness-types'
-
-// The module eagerly calls storage.defineItem at import time, which touches
-// browser.runtime; stub @wxt-dev/storage so the module loads under bun test.
-const storageValues = new Map<string, unknown>()
-
-mock.module('@wxt-dev/storage', () => ({
-  storage: {
-    defineItem: <T>(key: string, options?: { defaultValue?: T }) => ({
-      getValue: async () =>
-        storageValues.has(key) ? storageValues.get(key) : options?.defaultValue,
-      setValue: async (value: T) => {
-        storageValues.set(key, value)
-      },
-      watch: () => () => {},
-    }),
-  },
-}))
-
-import type { SidepanelChatTargetSelection } from './sidepanel-chat-targets'
-
-// Dynamic import so the @wxt-dev/storage mock above is installed before the
-// module's top-level storage.defineItem call runs.
-const {
+import type { AcpAgent } from '@/modules/agents/acp-agent-types'
+import {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
+  commitChatTargetSelection,
+  persistSidepanelChatTargetSelection,
+  resolveRepairedSelection,
   resolveSidepanelChatTarget,
-  saveSidepanelChatTargetSelection,
-  toLlmProviderConfig,
-  watchSidepanelChatTargetSelection,
-} = await import('./sidepanel-chat-targets')
+  type SidepanelChatTargetSelection,
+} from './sidepanel-chat-targets'
 
-const timestamp = 1000
+const provider: LlmProviderConfig = {
+  id: 'browseros',
+  type: 'browseros',
+  name: 'BrowserOS',
+  modelId: 'browseros-auto',
+  supportsImages: true,
+  contextWindow: 200000,
+  temperature: 0.2,
+  createdAt: 1,
+  updatedAt: 1,
+}
 
-const providers: LlmProviderConfig[] = [
-  {
-    id: 'browseros',
-    type: 'browseros',
-    name: 'BrowserOS',
-    baseUrl: 'https://api.browseros.com/v1',
-    modelId: 'browseros-auto',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'anthropic-sonnet',
-    type: 'anthropic',
-    name: 'Anthropic Sonnet',
-    modelId: 'claude-sonnet-4-6',
-    apiKey: 'sk-ant',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-]
-
-const localRuntimeProviders: LlmProviderConfig[] = [
-  {
-    id: 'codex-provider',
-    type: 'codex',
-    name: 'Codex',
-    modelId: 'gpt-5.3-codex',
-    supportsImages: false,
-    contextWindow: 400000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'claude-code-provider',
-    type: 'claude-code',
-    name: 'Claude Code',
-    modelId: 'claude-sonnet-4-6',
-    supportsImages: false,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-]
-
-const adapters: HarnessAdapterDescriptor[] = [
-  {
-    id: 'claude',
-    name: 'Claude Code',
-    defaultModelId: 'haiku',
-    defaultReasoningEffort: 'medium',
-    modelControl: 'best-effort',
-    models: [
-      { id: 'sonnet', label: 'Sonnet' },
-      { id: 'haiku', label: 'Haiku', recommended: true },
-    ],
-    reasoningEfforts: [
-      { id: 'medium', label: 'Medium', recommended: true },
-      { id: 'high', label: 'High' },
-    ],
-  },
-  {
-    id: 'codex',
-    name: 'Codex',
-    defaultModelId: 'gpt-5.5',
-    defaultReasoningEffort: 'medium',
-    modelControl: 'runtime-supported',
-    models: [{ id: 'gpt-5.5', label: 'GPT-5.5', recommended: true }],
-    reasoningEfforts: [{ id: 'medium', label: 'Medium', recommended: true }],
-  },
-]
-
-const agents: HarnessAgent[] = [
-  {
-    id: 'agent-codex',
-    name: 'Review Bot',
-    adapter: 'codex',
-    modelId: 'gpt-5.5',
-    reasoningEffort: 'medium',
-    permissionMode: 'approve-all',
-    sessionKey: 'agent:agent-codex:main',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-]
+const agent: AcpAgent = {
+  id: '00000000-0000-4000-8000-000000000001',
+  name: 'Review Bot',
+  type: 'codex',
+  modelId: 'gpt-5.5',
+  reasoningEffort: 'high',
+  createdAt: 1,
+  updatedAt: 1,
+}
 
 describe('buildSidepanelChatTargets', () => {
-  it('returns LLM targets plus one ACP target per persisted harness agent', () => {
-    const targets = buildSidepanelChatTargets({ providers, adapters, agents })
-
-    expect(targets.map((target) => target.id)).toEqual([
-      'browseros',
-      'anthropic-sonnet',
-      'agent-codex',
-    ])
-  })
-
-  it('does not emit catalog-only ACP targets without persisted agents', () => {
+  it('combines model providers and persisted ACP agents', () => {
     const targets = buildSidepanelChatTargets({
-      providers,
-      adapters,
-      agents: [],
+      providers: [provider],
+      agents: [agent],
     })
 
-    expect(targets.map((target) => target.id)).toEqual([
-      'browseros',
-      'anthropic-sonnet',
-    ])
-  })
-
-  it('preserves adapter metadata for created agent targets', () => {
-    const targets = buildSidepanelChatTargets({ providers, adapters, agents })
-    const codex = targets.find((target) => target.id === 'agent-codex')
-
-    expect(codex).toMatchObject({
+    expect(targets).toHaveLength(2)
+    expect(targets[1]).toMatchObject({
       kind: 'acp',
-      agentId: 'agent-codex',
-      adapter: 'codex',
+      agentId: agent.id,
+      agentType: 'codex',
       adapterName: 'Codex',
       modelId: 'gpt-5.5',
-      modelLabel: 'GPT-5.5',
-      modelControl: 'runtime-supported',
-      recommended: true,
-      reasoningEffort: 'medium',
-      reasoningEffortLabel: 'Medium',
+      reasoningEffort: 'high',
     })
   })
 
-  it('still returns LLM targets when agents and adapters are unavailable', () => {
-    expect(
-      buildSidepanelChatTargets({ providers, adapters: [], agents: [] }),
-    ).toEqual([
-      {
-        kind: 'llm',
-        id: 'browseros',
-        name: 'BrowserOS',
-        type: 'browseros',
-        provider: providers[0],
-      },
-      {
-        kind: 'llm',
-        id: 'anthropic-sonnet',
-        name: 'Anthropic Sonnet',
-        type: 'anthropic',
-        provider: providers[1],
-      },
-    ])
-  })
-
-  it('emits local runtime provider configs as LLM targets so the composer can pick them', () => {
+  it('uses agent defaults when model and reasoning are unset', () => {
     const targets = buildSidepanelChatTargets({
-      providers: [...providers, ...localRuntimeProviders],
-      adapters,
-      agents,
+      providers: [],
+      agents: [{ ...agent, modelId: undefined, reasoningEffort: undefined }],
     })
 
-    expect(targets.map((target) => target.id)).toEqual([
-      'browseros',
-      'anthropic-sonnet',
-      'codex-provider',
-      'claude-code-provider',
-      'agent-codex',
-    ])
+    expect(targets[0]).toMatchObject({
+      modelId: 'default',
+      modelLabel: 'Agent default',
+      reasoningEffort: 'default',
+    })
   })
 })
 
 describe('resolveSidepanelChatTarget', () => {
-  it('resolves selected LLM targets back to their provider config', () => {
-    const targets = buildSidepanelChatTargets({ providers, adapters, agents })
-    const resolved = resolveSidepanelChatTarget({
-      targets,
-      defaultProviderId: 'browseros',
-      selection: { kind: 'llm', id: 'anthropic-sonnet' },
-    })
-
-    expect(resolved?.kind).toBe('llm')
-    expect(toLlmProviderConfig(resolved)?.modelId).toBe('claude-sonnet-4-6')
+  const targets = buildSidepanelChatTargets({
+    providers: [provider],
+    agents: [agent],
   })
 
-  it('falls back to the current default LLM provider when a persisted ACP target is stale', () => {
-    const targets = buildSidepanelChatTargets({
-      providers,
-      adapters,
-      agents: [],
-    })
-
+  it('resolves a persisted ACP selection', () => {
     expect(
       resolveSidepanelChatTarget({
         targets,
-        defaultProviderId: 'anthropic-sonnet',
-        selection: { kind: 'acp', id: 'agent-codex' },
+        defaultProviderId: provider.id,
+        selection: { kind: 'acp', id: agent.id },
       }),
-    ).toMatchObject({
-      kind: 'llm',
-      id: 'anthropic-sonnet',
-    })
+    ).toMatchObject({ kind: 'acp', id: agent.id })
   })
 
-  it('falls back when an old catalog-style ACP target id is persisted', () => {
-    const targets = buildSidepanelChatTargets({ providers, adapters, agents })
-
+  it('falls back to the default provider for a stale selection', () => {
     expect(
       resolveSidepanelChatTarget({
         targets,
-        defaultProviderId: 'anthropic-sonnet',
-        selection: { kind: 'acp', id: 'acp:codex:gpt-5.5:medium' },
+        defaultProviderId: provider.id,
+        selection: { kind: 'acp', id: 'deleted-agent' },
       }),
-    ).toMatchObject({
-      kind: 'llm',
-      id: 'anthropic-sonnet',
-    })
-  })
-
-  it('resolves a local runtime provider as the chat target when it is the default', () => {
-    const targets = buildSidepanelChatTargets({
-      providers: [...localRuntimeProviders, ...providers],
-      adapters,
-      agents: [],
-    })
-
-    expect(
-      resolveSidepanelChatTarget({
-        targets,
-        defaultProviderId: 'codex-provider',
-      }),
-    ).toMatchObject({
-      kind: 'llm',
-      id: 'codex-provider',
-    })
+    ).toMatchObject({ kind: 'llm', id: provider.id })
   })
 })
 
-describe('persistSidepanelChatTargetSelection', () => {
-  it('stores only target identity and does not mutate LLM provider arrays', async () => {
-    const store = createSelectionStore()
-    const originalProviders = providers.map((provider) => ({ ...provider }))
-    const targets = buildSidepanelChatTargets({ providers, adapters, agents })
-    const target = targets.find((candidate) => candidate.id === 'agent-codex')
+describe('resolveRepairedSelection', () => {
+  const targets = buildSidepanelChatTargets({
+    providers: [provider],
+    agents: [agent],
+  })
+  const llmTarget = targets[0]
+  const acpTarget = targets[1]
 
-    await saveSidepanelChatTargetSelection(
-      target ? { kind: target.kind, id: target.id } : null,
+  it('keeps an ACP selection while agents are still loading (not ready)', () => {
+    // Regression guard: agents not settled yet, so the resolved target has
+    // fallen back to the LLM provider. The stored ACP selection must survive.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: llmTarget,
+        ready: false,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a selection that matches the resolved target', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: acpTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a stale ACP selection even when ready (never wiped by the fetch-backed list)', () => {
+    // Regression guard: the agents list is fetch-backed and can be stale or
+    // cross-context-stale (a persisted cache, or another context that has not
+    // refetched a newly-created agent). An absent agent must NOT trigger a repair
+    // that silently downgrades the ACP default to the LLM fallback.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: 'deleted-agent' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('repairs a stale LLM selection to the resolved fallback once ready', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'removed-provider' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: provider.id } })
+  })
+
+  it('repairs to null when nothing resolves', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: undefined,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: null })
+  })
+
+  it('never repairs when there is no stored selection', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: null,
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+})
+
+describe('target selection storage', () => {
+  it('persists only target identity', async () => {
+    const store = createSelectionStore()
+    const target = buildSidepanelChatTargets({
+      providers: [provider],
+      agents: [agent],
+    })[1]
+
+    await persistSidepanelChatTargetSelection(target, store)
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
+  })
+
+  it('clears a selection when its agent is deleted', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: agent.id })
+
+    await clearSidepanelChatTargetSelectionForAgent(agent.id, store)
+
+    expect(await store.getValue()).toBeNull()
+  })
+})
+
+describe('commitChatTargetSelection', () => {
+  it('persists an LLM selection and updates the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'llm', id: provider.id },
+      { setDefaultProvider },
       store,
     )
 
-    expect(await store.getValue()).toEqual({
-      kind: 'acp',
-      id: 'agent-codex',
-    })
-    expect(providers).toEqual(originalProviders)
+    expect(await store.getValue()).toEqual({ kind: 'llm', id: provider.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(provider.id)
   })
 
-  it('persists null when no target is selected', async () => {
-    const store = createSelectionStore({ kind: 'acp', id: 'agent-codex' })
+  // Selecting an agent used to leave the default pointing at whichever llm
+  // provider was chosen before it, because the two lived in separate tables and
+  // the default could only name the llm one. They are one table now, so there
+  // is one selection and it records whatever was picked.
+  it('records an ACP selection as the default too', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
 
-    await saveSidepanelChatTargetSelection(null, store)
+    await commitChatTargetSelection(
+      { kind: 'acp', id: agent.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(agent.id)
+  })
+
+  it('clears the selection without touching the default provider id', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: agent.id })
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(null, { setDefaultProvider }, store)
 
     expect(await store.getValue()).toBeNull()
+    expect(setDefaultProvider).not.toHaveBeenCalled()
   })
 })
 
@@ -308,86 +237,59 @@ function createSelectionStore(
   initial: SidepanelChatTargetSelection | null = null,
 ) {
   let value = initial
-  const watchers = new Set<
-    (selection: SidepanelChatTargetSelection | null) => void
-  >()
   return {
     getValue: async () => value,
     setValue: async (next: SidepanelChatTargetSelection | null) => {
       value = next
-      for (const watcher of watchers) watcher(next)
     },
-    watch: (
-      callback: (selection: SidepanelChatTargetSelection | null) => void,
-    ) => {
-      watchers.add(callback)
-      return () => {
-        watchers.delete(callback)
-      }
-    },
+    watch: () => () => {},
   }
 }
 
-describe('saveSidepanelChatTargetSelection', () => {
-  it('writes the selection identity to the store', async () => {
-    const store = createSelectionStore()
+// Each extension surface holds its own cache of a list that lives on the
+// server, so one can be a refetch behind another. Repairing against a list
+// that has not caught up destroys a choice the user just made, which is what
+// made selecting a new provider appear to revert to BrowserOS.
+describe('resolveRepairedSelection with an incomplete list', () => {
+  const browserosTarget = {
+    kind: 'llm' as const,
+    id: 'browseros',
+    name: 'BrowserOS',
+    type: 'browseros' as const,
+    provider: {} as never,
+  }
 
-    await saveSidepanelChatTargetSelection(
-      { kind: 'acp', id: 'agent-codex' },
-      store,
-    )
-
-    expect(await store.getValue()).toEqual({ kind: 'acp', id: 'agent-codex' })
+  it('leaves a selection this surface has not seen yet alone', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'just-created' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+        knownIds: new Set(['browseros']),
+      }).repair,
+    ).toBe(false)
   })
 
-  it('clears the stored selection with null', async () => {
-    const store = createSelectionStore({ kind: 'llm', id: 'browseros' })
-
-    await saveSidepanelChatTargetSelection(null, store)
-
-    expect(await store.getValue()).toBeNull()
-  })
-})
-
-describe('clearSidepanelChatTargetSelectionForAgent', () => {
-  it('clears the selection pointing at the deleted agent', async () => {
-    const store = createSelectionStore({ kind: 'acp', id: 'agent-codex' })
-
-    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
-
-    expect(await store.getValue()).toBeNull()
+  // The case repair exists for: the provider is gone from a list that does
+  // know about it, so the selection genuinely dangles.
+  it('still repairs a selection the list can account for', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'deleted-but-known' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+        knownIds: new Set(['browseros', 'deleted-but-known']),
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: 'browseros' } })
   })
 
-  it('keeps a selection for a different agent', async () => {
-    const store = createSelectionStore({ kind: 'acp', id: 'agent-other' })
-
-    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
-
-    expect(await store.getValue()).toEqual({ kind: 'acp', id: 'agent-other' })
-  })
-
-  it('keeps an LLM selection even when ids collide', async () => {
-    const store = createSelectionStore({ kind: 'llm', id: 'agent-codex' })
-
-    await clearSidepanelChatTargetSelectionForAgent('agent-codex', store)
-
-    expect(await store.getValue()).toEqual({ kind: 'llm', id: 'agent-codex' })
-  })
-})
-
-describe('watchSidepanelChatTargetSelection', () => {
-  it('notifies on selection changes until unsubscribed', async () => {
-    const store = createSelectionStore()
-    const seen: Array<SidepanelChatTargetSelection | null> = []
-
-    const unsubscribe = watchSidepanelChatTargetSelection(
-      (selection) => seen.push(selection),
-      store,
-    )
-    await store.setValue({ kind: 'acp', id: 'agent-codex' })
-    unsubscribe()
-    await store.setValue(null)
-
-    expect(seen).toEqual([{ kind: 'acp', id: 'agent-codex' }])
+  it('repairs as before when no list is given', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+      }).repair,
+    ).toBe(true)
   })
 })

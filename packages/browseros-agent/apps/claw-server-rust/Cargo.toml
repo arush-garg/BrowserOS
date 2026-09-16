@@ -1,6 +1,6 @@
 [package]
 name = "claw-server-rust"
-version = "0.0.17"
+version = "0.0.53"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ name = "browseros-claw-server-rs"
 path = "src/main.rs"
 
 [dependencies]
+os_info = "3.15.0"
 harness-integrations.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
@@ -33,6 +34,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
+pulldown-cmark.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tempfile.workspace = true
