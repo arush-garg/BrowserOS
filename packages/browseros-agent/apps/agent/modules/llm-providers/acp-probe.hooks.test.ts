@@ -1,38 +1,42 @@
 import { describe, expect, it } from 'bun:test'
-import { isAcpProbeEnabled, resolveAcpAgentId } from './acp-probe.hooks'
+import { isAcpProbeEnabled, resolveAcpAgentType } from './acp-probe.hooks'
 
-describe('resolveAcpAgentId', () => {
-  it('returns the built-in claude id for claude-code', () => {
-    expect(resolveAcpAgentId({ providerType: 'claude-code' })).toBe('claude')
+describe('resolveAcpAgentType', () => {
+  it('maps claude-code to the claude ACP type', () => {
+    expect(resolveAcpAgentType({ providerType: 'claude-code' })).toBe('claude')
   })
 
-  it('returns the built-in codex id for codex', () => {
-    expect(resolveAcpAgentId({ providerType: 'codex' })).toBe('codex')
+  it('maps codex to the codex ACP type', () => {
+    expect(resolveAcpAgentType({ providerType: 'codex' })).toBe('codex')
   })
 
-  it('returns undefined for acp-custom without an explicit acpAgentId', () => {
-    expect(resolveAcpAgentId({ providerType: 'acp-custom' })).toBeUndefined()
+  it('maps acp-custom to the custom ACP type', () => {
+    expect(resolveAcpAgentType({ providerType: 'acp-custom' })).toBe('custom')
   })
 
-  it('honours an explicit acpAgentId override over the built-in default', () => {
+  it('honours an explicit acpAgentType override over the provider mapping', () => {
     expect(
-      resolveAcpAgentId({
+      resolveAcpAgentType({
         providerType: 'claude-code',
-        acpAgentId: 'claude-experimental',
+        acpAgentType: 'custom',
       }),
-    ).toBe('claude-experimental')
+    ).toBe('custom')
+  })
+
+  it('returns undefined for a non-ACP provider', () => {
+    expect(resolveAcpAgentType({ providerType: 'openai' })).toBeUndefined()
   })
 
   it('returns undefined when providerType is missing', () => {
-    expect(resolveAcpAgentId({ providerType: undefined })).toBeUndefined()
+    expect(resolveAcpAgentType({ providerType: undefined })).toBeUndefined()
   })
 })
 
 describe('isAcpProbeEnabled', () => {
   const URL = 'http://127.0.0.1:9000'
 
-  it('disables when providerType is missing', () => {
-    expect(isAcpProbeEnabled({ providerType: undefined }, URL, 'claude')).toBe(
+  it('disables when no ACP type resolved', () => {
+    expect(isAcpProbeEnabled({ providerType: undefined }, URL, undefined)).toBe(
       false,
     )
   })
@@ -53,55 +57,31 @@ describe('isAcpProbeEnabled', () => {
     ).toBe(false)
   })
 
-  it('enables for built-in claude-code with the resolved agent id', () => {
+  it('enables for built-in claude-code', () => {
     expect(
       isAcpProbeEnabled({ providerType: 'claude-code' }, URL, 'claude'),
     ).toBe(true)
   })
 
-  it('enables for built-in codex with the resolved agent id', () => {
+  it('enables for built-in codex', () => {
     expect(isAcpProbeEnabled({ providerType: 'codex' }, URL, 'codex')).toBe(
       true,
     )
   })
 
-  it('disables for acp-custom without a command', () => {
+  it('disables for a custom agent without a command', () => {
     expect(
-      isAcpProbeEnabled(
-        { providerType: 'acp-custom', acpAgentId: 'my-agent' },
-        URL,
-        'my-agent',
-      ),
+      isAcpProbeEnabled({ providerType: 'acp-custom' }, URL, 'custom'),
     ).toBe(false)
   })
 
-  it('disables for acp-custom without an agentId', () => {
+  it('enables for a custom agent with its command', () => {
     expect(
       isAcpProbeEnabled(
         { providerType: 'acp-custom', command: 'my-bin acp' },
         URL,
-        undefined,
-      ),
-    ).toBe(false)
-  })
-
-  it('enables for acp-custom with both command and agentId', () => {
-    expect(
-      isAcpProbeEnabled(
-        {
-          providerType: 'acp-custom',
-          acpAgentId: 'my-agent',
-          command: 'my-bin acp',
-        },
-        URL,
-        'my-agent',
+        'custom',
       ),
     ).toBe(true)
-  })
-
-  it('disables for built-in claude-code when agentId is somehow undefined', () => {
-    expect(
-      isAcpProbeEnabled({ providerType: 'claude-code' }, URL, undefined),
-    ).toBe(false)
   })
 })

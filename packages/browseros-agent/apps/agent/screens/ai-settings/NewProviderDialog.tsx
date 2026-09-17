@@ -71,7 +71,8 @@ import { cn } from '@/lib/utils'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useAcpProbe } from '@/modules/llm-providers/acp-probe.hooks'
-import { getModelContextLength, getModelsForProvider } from './models'
+import { useChatgptPlanModels } from '@/modules/llm-providers/chatgpt-models.hooks'
+import { contextLengthFor, resolveModelInfos } from './models'
 import {
   isCredentiallessProviderType,
   normalizeProviderFormValues,
@@ -213,7 +214,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     }
   }, [acpProbe.data, watchedType, form])
 
-  const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+  // A signed-in ChatGPT plan lists its models live; the built-in snapshot only
+  // stands in while signed out or offline.
+  const chatgptPlanModels = useChatgptPlanModels(watchedType === 'chatgpt-pro')
+  const planModels = chatgptPlanModels.data
+
+  const modelInfoList = useMemo(
+    () => resolveModelInfos(watchedType as ProviderType, planModels),
+    [watchedType, planModels],
+  )
 
   const modelFuse = useMemo(
     () =>
@@ -250,15 +259,12 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (initialValues?.id) return
 
     if (watchedModelId) {
-      const contextLength = getModelContextLength(
-        watchedType as ProviderType,
-        watchedModelId,
-      )
+      const contextLength = contextLengthFor(modelInfoList, watchedModelId)
       if (contextLength) {
         form.setValue('contextWindow', contextLength)
       }
     }
-  }, [watchedModelId, watchedType, form, initialValues?.id])
+  }, [watchedModelId, modelInfoList, form, initialValues?.id])
 
   useEffect(() => {
     if (initialValues) {

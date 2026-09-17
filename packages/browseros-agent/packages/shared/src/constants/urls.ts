@@ -19,6 +19,8 @@ export const EXTERNAL_URLS = {
   POSTHOG_DEFAULT: 'https://us.i.posthog.com',
   OPENAI_AUTH: 'https://auth.openai.com/oauth/authorize',
   OPENAI_TOKEN: 'https://auth.openai.com/oauth/token',
+  /** Codex backend used by ChatGPT subscription plans (includes /models). */
+  CHATGPT_CODEX_API: 'https://chatgpt.com/backend-api/codex',
   GITHUB_DEVICE_CODE: 'https://github.com/login/device/code',
   GITHUB_OAUTH_TOKEN: 'https://github.com/login/oauth/access_token',
   GITHUB_COPILOT_API: 'https://api.githubcopilot.com',

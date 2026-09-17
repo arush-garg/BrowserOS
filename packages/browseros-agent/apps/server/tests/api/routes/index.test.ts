@@ -211,6 +211,20 @@ describe('createApiRoutes', () => {
     expect(response.status).toBe(403)
   })
 
+  it('requires a trusted local app request before listing ChatGPT models', async () => {
+    const app = createTestApp()
+
+    // The listing spends the stored subscription credential server-side.
+    expect((await app.request('/oauth/chatgpt-pro/models')).status).toBe(403)
+    expect(
+      (
+        await app.request('/oauth/chatgpt-pro/models', {}, {
+          server: { requestIP: () => ({ address: '192.168.1.20' }) },
+        } as never)
+      ).status,
+    ).toBe(403)
+  })
+
   // These rows hold provider API keys in the clear. The blanket
   // requireTrustedOrigin only rejects a request that carries a disallowed
   // Origin, so a request with none passes it and the prefix guard is the only

@@ -7,16 +7,29 @@
  */
 
 import { Hono } from 'hono'
+import {
+  type ChatgptModelCredentials,
+  fetchChatgptModels,
+} from '../../lib/clients/oauth/chatgpt-models'
 import { getOAuthProvider } from '../../lib/clients/oauth/providers'
 import type { OAuthTokenManager } from '../../lib/clients/oauth/token-manager'
 import { logger } from '../../lib/logger'
 
 interface OAuthRouteDeps {
   tokenManager: OAuthTokenManager
+  /** Test seam for the ChatGPT plan's model list. */
+  listChatgptModels?: (
+    credentials: ChatgptModelCredentials,
+  ) => Promise<unknown[]>
 }
+
+// Only the ChatGPT plan serves a model list from its backend; the other
+// OAuth providers expose no equivalent endpoint.
+const MODEL_LISTING_PROVIDERS = new Set(['chatgpt-pro'])
 
 export function createOAuthRoutes(deps: OAuthRouteDeps) {
   const { tokenManager } = deps
+  const listChatgptModels = deps.listChatgptModels ?? fetchChatgptModels
 
   return new Hono()
     .get('/:provider/start', async (c) => {
@@ -90,6 +103,42 @@ export function createOAuthRoutes(deps: OAuthRouteDeps) {
           error: error instanceof Error ? error.message : String(error),
         })
         return c.text('Failed to store token', 500)
+      }
+    })
+
+    .get('/:provider/models', async (c) => {
+      const providerId = c.req.param('provider')
+      if (!MODEL_LISTING_PROVIDERS.has(providerId)) {
+        return c.json(
+          { error: `Model listing is not available for ${providerId}` },
+          404,
+        )
+      }
+
+      // An expired token refreshes here, so opening the dialog recovers an
+      // expired login without a separate refresh round trip.
+      let credentials: ChatgptModelCredentials | null = null
+      try {
+        credentials = await tokenManager.refreshIfExpired(providerId)
+      } catch (error) {
+        logger.warn('ChatGPT token unavailable for model list', {
+          provider: providerId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+      if (!credentials) {
+        return c.json({ error: 'Not authenticated with ChatGPT' }, 401)
+      }
+
+      try {
+        const models = await listChatgptModels(credentials)
+        return c.json({ models })
+      } catch (error) {
+        logger.warn('Failed to list ChatGPT models', {
+          provider: providerId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return c.json({ error: 'Could not load models from ChatGPT' }, 502)
       }
     })
 

@@ -92,6 +92,11 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/health', createHealthRoute({ browser }))
       .route('/shutdown', createShutdownRoute({ onShutdown }))
       .route('/status', createStatusRoute({ browser, activity }))
+      // The ChatGPT model list spends the stored subscription credential on an
+      // outbound call, so it gets the same localhost + app-origin check as
+      // /test-provider. Only that path is gated: the rest of /oauth is the
+      // login flow, which the extension reaches by top-level navigation.
+      .use('/oauth/chatgpt-pro/models', requireTrustedAppOrigin())
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
       .route(

@@ -1,3 +1,4 @@
+import type { AcpAgentType } from '@browseros/shared/schemas/agent'
 import { useQuery } from '@tanstack/react-query'
 import type { ProviderType } from '@/lib/llm-providers/types'
 // Relative value import: `bun test` resolves tsconfig `@/` paths only for
@@ -31,15 +32,19 @@ interface AcpProbeResult {
 
 export interface UseAcpProbeOptions {
   providerType: ProviderType | undefined
-  acpAgentId?: string
+  /** Overrides the ACP type derived from `providerType`. */
+  acpAgentType?: AcpAgentType
   command?: string
   cwd?: string
   enabled?: boolean
 }
 
-const BUILT_IN_AGENT_BY_TYPE: Partial<Record<ProviderType, string>> = {
+// The probe endpoint addresses an agent by ACP type, not by a saved agent id
+// (see POST /acpx/probe). `custom` is probed by its command instead.
+const ACP_TYPE_BY_PROVIDER: Partial<Record<ProviderType, AcpAgentType>> = {
   'claude-code': 'claude',
   codex: 'codex',
+  'acp-custom': 'custom',
 }
 
 // Probe results encode the agent's currently-installed CLI version, which
@@ -47,41 +52,39 @@ const BUILT_IN_AGENT_BY_TYPE: Partial<Record<ProviderType, string>> = {
 // dialog open instead of trusting a stale memory cache.
 const PROBE_STALE_TIME_MS = 0
 
-export function resolveAcpAgentId(
+export function resolveAcpAgentType(
   opts: UseAcpProbeOptions,
-): string | undefined {
-  if (opts.acpAgentId) return opts.acpAgentId
+): AcpAgentType | undefined {
+  if (opts.acpAgentType) return opts.acpAgentType
   if (!opts.providerType) return undefined
-  return BUILT_IN_AGENT_BY_TYPE[opts.providerType]
+  return ACP_TYPE_BY_PROVIDER[opts.providerType]
 }
 
 export function isAcpProbeEnabled(
   opts: UseAcpProbeOptions,
   agentServerUrl: string | undefined,
-  agentId: string | undefined,
+  agentType: AcpAgentType | undefined,
 ): boolean {
   if (!(opts.enabled ?? true)) return false
   if (!agentServerUrl) return false
-  if (!opts.providerType) return false
-  if (opts.providerType === 'acp-custom') {
-    return Boolean(opts.command) && Boolean(agentId)
-  }
-  return Boolean(agentId)
+  if (!agentType) return false
+  // A custom agent has no saved config yet, so it can only be probed by its
+  // command line.
+  if (agentType === 'custom') return Boolean(opts.command)
+  return true
 }
 
 export function useAcpProbe(opts: UseAcpProbeOptions) {
   const { baseUrl: agentServerUrl } = useAgentServerUrl()
-  const agentId = resolveAcpAgentId(opts)
-  const enabled = isAcpProbeEnabled(opts, agentServerUrl ?? undefined, agentId)
+  const agentType = resolveAcpAgentType(opts)
+  const enabled = isAcpProbeEnabled(
+    opts,
+    agentServerUrl ?? undefined,
+    agentType,
+  )
 
   return useQuery<AcpProbeResult>({
-    queryKey: [
-      'acpx-probe',
-      opts.providerType,
-      agentId,
-      opts.command,
-      opts.cwd,
-    ],
+    queryKey: ['acpx-probe', agentType, opts.command, opts.cwd],
     enabled,
     staleTime: PROBE_STALE_TIME_MS,
     queryFn: async () => {
@@ -89,9 +92,9 @@ export function useAcpProbe(opts: UseAcpProbeOptions) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agentId,
-          command: opts.command,
-          cwd: opts.cwd,
+          type: agentType,
+          ...(opts.command ? { command: opts.command } : {}),
+          ...(opts.cwd ? { cwd: opts.cwd } : {}),
         }),
       })
       if (!res.ok) {
