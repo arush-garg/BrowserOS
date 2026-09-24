@@ -29,7 +29,7 @@ Interpreter discovery: `BROWSEROS_LAYA_PYTHON`, nearest BrowserOS `.venv`/`venv`
 }
 ```
 
-Laya cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before page mutation.
+Laya cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before that text/select step mutates the page.
 
 ## Operations
 

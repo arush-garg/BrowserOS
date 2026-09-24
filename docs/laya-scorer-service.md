@@ -4,7 +4,7 @@ The `semantic_action` browser MCP tool uses Laya's browser-tuned checkpoint to c
 
 ## Setup
 
-BrowserOS prefers a repository-local `.venv`, then `~/Development/v_env`, then `python3`. Install the pinned runtime in the selected environment:
+BrowserOS searches from the current directory through its ancestors for `.venv` or `venv`, then tries `~/Development/v_env`, then `python3`. Install the pinned runtime in the selected environment:
 
 ```sh
 ~/Development/v_env/bin/python -m pip install -r   packages/browseros-agent/packages/browser-mcp/python/requirements-laya.txt
@@ -26,7 +26,7 @@ First request downloads `cklxx/laya-browser` checkpoint `v10s` at pinned revisio
 - One inference evaluates operation and target questions together.
 - Effective confidence is operation probability multiplied by target probability.
 - Page text and labels remain untrusted data; only caller goal controls behavior.
-- Laya makes finite choices and cannot generate text. Pass `text` when a goal can require `TYPE_TEXT` or `SELECT`; otherwise loop pauses with `needs_text` before mutating page.
+- Laya makes finite choices and cannot generate text. Pass `text` when a goal can require `TYPE_TEXT` or `SELECT`; otherwise loop pauses with `needs_text` before that text/select step mutates the page.
 - Loop stops on DONE, BLOCKED, low confidence, repeated no-progress action, error, or step limit.
 
 ## JSONL protocol

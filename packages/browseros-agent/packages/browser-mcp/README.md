@@ -27,16 +27,17 @@ See [semantic-action.md](./docs/semantic-action.md) for full documentation on th
 # Get page ID
 mcp call tabs '{ "action": "list" }'
 
-# Choose semantic action
+# Choose and execute semantic actions until the goal completes
 mcp call semantic_action '{
   "page": 1,
   "goal": "Click the login button"
 }'
 
-# Execute the action
-mcp call act '{
+# Or return one advisory decision without changing the page
+mcp call semantic_action '{
   "page": 1,
-  "action": { "kind": "click", "ref": "e5" }
+  "goal": "Click the login button",
+  "execute": false
 }'
 ```
 
@@ -46,7 +47,7 @@ Create `config.dev.json` in `packages/browseros-agent/`:
 
 ```json
 {
-  "ports": { "server": 9105, "cdp": 9205 },
+  "ports": { "server": 9105, "cdp": 9005 },
   "directories": { "resources": "./resources", "execution": "./out" },
   "flags": { "allow_remote_in_mcp": false }
 }
@@ -69,8 +70,8 @@ bun run test
 bun test packages/browser-mcp/src/tools/semantic-action.test.ts
 bun test packages/browser-mcp/src/tools/laya-client.test.ts
 
-# Integration tests (requires running server + Laya)
-BROWSEROS_LAYA_PYTHON=... bun test packages/browseros-agent/apps/server/tests/semantic-action.integration.test.ts
+# Integration tests (harness starts BrowserOS and server; requires Laya runtime)
+BROWSEROS_LAYA_PYTHON=... bun test apps/server/tests/semantic-action.integration.test.ts
 ```
 
 ## Development
