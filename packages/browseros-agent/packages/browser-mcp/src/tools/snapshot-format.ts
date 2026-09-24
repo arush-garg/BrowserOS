@@ -1,8 +1,6 @@
 import { writeTempToolOutputFile } from './output-file'
-import {
-  estimateTextTokens,
-  sliceTextByEstimatedTokens,
-} from './token-estimate'
+import { selectRelevantByTokens } from './snapshot-relevance'
+import { estimateTextTokens } from './token-estimate'
 import { wrapUntrusted } from './trust-boundary'
 
 const LARGE_SNAPSHOT_TOKEN_THRESHOLD = 15_000
@@ -24,10 +22,11 @@ export async function formatSnapshotResult(
   const tokenEstimate = estimateTextTokens(wrappedSnapshot)
 
   if (tokenEstimate > LARGE_SNAPSHOT_TOKEN_THRESHOLD) {
-    const excerpt = sliceTextByEstimatedTokens(
-      snapshotText,
-      MAX_INLINE_EXCERPT_TOKENS,
-    )
+    // Rank rather than slice: the refs an agent needs are as likely to sit at the bottom
+    // of a long page as at the top.
+    const excerpt = selectRelevantByTokens(snapshotText, {
+      budgetTokens: MAX_INLINE_EXCERPT_TOKENS,
+    }).text
     try {
       const path = await writeTempToolOutputFile({
         toolName: 'snapshot',
@@ -39,7 +38,7 @@ export async function formatSnapshotResult(
         text: [
           `Large snapshot (${tokenEstimate} estimated tokens, ${contentLength} chars) saved to: ${path}`,
           'Read the file for the full snapshot and refs.',
-          `Showing the first ${MAX_INLINE_EXCERPT_TOKENS} estimated tokens inline:`,
+          `Showing the ~${MAX_INLINE_EXCERPT_TOKENS} most relevant estimated tokens inline (elided nodes are marked):`,
           wrapUntrusted(excerpt, origin),
         ].join('\n'),
         structured: {
@@ -54,7 +53,7 @@ export async function formatSnapshotResult(
       return {
         text: [
           `Large snapshot (${tokenEstimate} estimated tokens, ${contentLength} chars) could not be saved to a BrowserOS output file: ${saveError}`,
-          `Showing the first ${MAX_INLINE_EXCERPT_TOKENS} estimated tokens instead:`,
+          `Showing the ~${MAX_INLINE_EXCERPT_TOKENS} most relevant estimated tokens instead (elided nodes are marked):`,
           wrapUntrusted(excerpt, origin),
         ].join('\n'),
         structured: {

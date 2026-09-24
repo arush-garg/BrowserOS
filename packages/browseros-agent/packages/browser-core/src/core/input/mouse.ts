@@ -83,3 +83,39 @@ export async function dispatchDrag(
     clickCount: 1,
   })
 }
+
+/**
+ * Presses the button, runs `hold` while it stays down, then releases — a long-press.
+ *
+ * `hold` decides how long the press lasts: a fixed delay, or a poll that resolves when
+ * some page condition is met. The release is in a `finally` on purpose: a hold that is
+ * aborted or throws mid-way would otherwise leave the button logically down for the rest
+ * of the page's life, turning every later move into a drag.
+ */
+export async function dispatchHold(
+  session: ProtocolApi,
+  x: number,
+  y: number,
+  button: MouseButton,
+  hold: () => Promise<void>,
+): Promise<void> {
+  await session.Input.dispatchMouseEvent({ type: 'mouseMoved', x, y })
+  await session.Input.dispatchMouseEvent({
+    type: 'mousePressed',
+    x,
+    y,
+    button,
+    clickCount: 1,
+  })
+  try {
+    await hold()
+  } finally {
+    await session.Input.dispatchMouseEvent({
+      type: 'mouseReleased',
+      x,
+      y,
+      button,
+      clickCount: 1,
+    })
+  }
+}

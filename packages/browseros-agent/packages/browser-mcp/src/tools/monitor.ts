@@ -1,15 +1,11 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { ProtocolApi } from '@browseros/cdp-protocol/protocol-api'
-import { z } from 'zod'
-import { defineTool, errorResult, intArg, textResult } from './framework'
+import { z } from 'zod/v4'
+import { defineTool, errorResult, textResult } from './framework'
 
+// A subscription nobody reads must not grow without bound, so the queue keeps
+// the newest window and drops the oldest events.
 const MAX_QUEUE_SIZE = 100
-const DEFAULT_EVENT_TYPES = [
-  'navigation',
-  'loading',
-  'error',
-  'dom_change',
-] as const
 const EVENT_TYPES = ['navigation', 'loading', 'error', 'dom_change'] as const
 
 type MonitorEventType = (typeof EVENT_TYPES)[number]
@@ -21,13 +17,15 @@ interface MonitorEvent {
 }
 
 interface Subscription {
-  pageId: number
   queue: MonitorEvent[]
   removeListeners: Array<() => void>
-  domTimer?: ReturnType<typeof setTimeout>
-  closed: boolean
+  eventTypes: readonly MonitorEventType[]
+  /** Events discarded by the cap since the last read, reported on that read. */
+  dropped: number
 }
 
+// Keyed by browser session so subscriptions cannot outlive the session they
+// watch, and two sessions monitoring the same page id stay independent.
 const subscriptions = new WeakMap<BrowserSession, Map<number, Subscription>>()
 
 function sessionSubscriptions(
@@ -45,238 +43,169 @@ function enqueue(
   type: MonitorEventType,
   details: Record<string, unknown>,
 ): void {
-  if (subscription.closed) return
-  if (subscription.queue.length >= MAX_QUEUE_SIZE) subscription.queue.shift()
+  if (subscription.queue.length >= MAX_QUEUE_SIZE) {
+    subscription.queue.shift()
+    subscription.dropped += 1
+  }
   subscription.queue.push({ type, timestamp: Date.now(), details })
 }
 
-function addListener(
-  session: ProtocolApi,
-  domain: string,
-  event: string,
-  handler: (params: unknown) => void,
-): () => void {
-  const api = (
-    session as unknown as Record<
-      string,
-      { on?: (name: string, callback: (params: unknown) => void) => () => void }
-    >
-  )[domain]
-  if (!api?.on) throw new Error(`CDP ${domain} event API unavailable`)
-  return api.on(event, handler)
+/** Attaches the CDP listeners for one event type, returning their removers. */
+function listen(
+  protocol: ProtocolApi,
+  type: MonitorEventType,
+  emit: (type: MonitorEventType, details: Record<string, unknown>) => void,
+): Array<() => void> {
+  switch (type) {
+    case 'navigation':
+      return [
+        protocol.Page.on('frameNavigated', (params) =>
+          emit('navigation', {
+            frameId: params.frame?.id,
+            url: params.frame?.url,
+          }),
+        ),
+      ]
+    case 'loading':
+      return [
+        protocol.Page.on('frameStartedLoading', (params) =>
+          emit('loading', { frameId: params.frameId, loading: true }),
+        ),
+        protocol.Page.on('frameStoppedLoading', (params) =>
+          emit('loading', { frameId: params.frameId, loading: false }),
+        ),
+      ]
+    case 'error':
+      return [
+        protocol.Runtime.on('exceptionThrown', (params) =>
+          emit('error', {
+            source: 'exception',
+            text: params.exceptionDetails?.text,
+            url: params.exceptionDetails?.url,
+            lineNumber: params.exceptionDetails?.lineNumber,
+          }),
+        ),
+        protocol.Runtime.on('consoleAPICalled', (params) => {
+          if (params.type !== 'error') return
+          emit('error', {
+            source: 'console',
+            text: params.args
+              .map((arg) => arg.description ?? String(arg.value ?? ''))
+              .join(' '),
+          })
+        }),
+      ]
+    case 'dom_change':
+      return [
+        protocol.DOM.on('childNodeInserted', (params) =>
+          emit('dom_change', {
+            change: 'inserted',
+            parentNodeId: params.parentNodeId,
+            nodeId: params.node?.nodeId,
+          }),
+        ),
+        protocol.DOM.on('childNodeRemoved', (params) =>
+          emit('dom_change', {
+            change: 'removed',
+            parentNodeId: params.parentNodeId,
+            nodeId: params.nodeId,
+          }),
+        ),
+        protocol.DOM.on('characterDataModified', (params) =>
+          emit('dom_change', {
+            change: 'text',
+            nodeId: params.nodeId,
+            characterData: params.characterData,
+          }),
+        ),
+      ]
+  }
 }
 
 export const monitor = defineTool({
   name: 'monitor',
   description:
-    'Start monitoring events for a page or read the monitored events.',
-  input: z.object({
-    action: z.enum(['start', 'read', 'stop']).default('start'),
-    page: intArg()
-      .optional()
-      .describe('Page id to monitor. Required for action="start" and "stop".'),
-    eventTypes: z
-      .array(z.enum(['navigation', 'loading', 'error', 'dom_change']))
-      .optional()
-      .describe('Event types to monitor. Defaults to all.'),
-  }),
+    'Watch a page for CDP events without blocking, as the observational counterpart to `wait`. action="start" subscribes the page, "read" drains everything queued since the last read, and "stop" unsubscribes - always stop a page you started. Event types: "navigation" (frame committed a new url), "loading" (frame started/stopped loading), "error" (uncaught exceptions and console.error), "dom_change" (nodes inserted, removed, or text edited); omit eventTypes to watch all four. The queue holds at most 100 events and drops the oldest ones past that, so read often on a busy page - each read reports how many were dropped.',
+  input: z
+    .object({
+      action: z
+        .enum(['start', 'read', 'stop'])
+        .default('start')
+        .describe('Subscribe, drain queued events, or unsubscribe.'),
+      page: z.number().int().describe('Page id from `tabs`.'),
+      eventTypes: z
+        .array(z.enum(EVENT_TYPES))
+        .nonempty()
+        .optional()
+        .describe('Event types to watch on "start". Defaults to all four.'),
+    })
+    .strict(),
+  annotations: { title: 'Monitor page events', readOnlyHint: true },
   handler: async (args, ctx) => {
+    const subs = sessionSubscriptions(ctx.session)
+    const existing = subs.get(args.page)
+
     switch (args.action) {
       case 'start': {
-        if (args.page === undefined) {
-          return errorResult('monitor start: page id is required')
-        }
-        const session = ctx.session
-        const subs = sessionSubscriptions(session)
-        const sub = subs.get(args.page)
-        if (sub) {
+        if (existing) {
           return textResult(
-            `monitoring already started for page ${args.page}`,
-            { page: args.page },
+            `monitoring already started for page ${args.page} (${existing.eventTypes.join(', ')})`,
+            { page: args.page, eventTypes: existing.eventTypes },
           )
         }
-        const newSub: Subscription = {
-          pageId: args.page,
+        const eventTypes = args.eventTypes ?? EVENT_TYPES
+        const subscription: Subscription = {
           queue: [],
           removeListeners: [],
-          closed: false,
-        }
-        subs.set(args.page, newSub)
-        const protocol = session.protocol
-        if (!protocol) {
-          return errorResult('monitor start: no protocol available')
-        }
-        const eventTypes = args.eventTypes ?? DEFAULT_EVENT_TYPES
-        for (const type of eventTypes) {
-          switch (type) {
-            case 'navigation': {
-              const remove = addListener(
-                protocol,
-                'Page',
-                'frameNavigated',
-                (params) => {
-                  const typedParams = params as { frameId: string; url: string }
-                  enqueue(newSub, 'navigation', {
-                    frameId: typedParams.frameId,
-                    url: typedParams.url,
-                  })
-                },
-              )
-              newSub.removeListeners.push(remove)
-              break
-            }
-            case 'loading': {
-              const remove1 = addListener(
-                protocol,
-                'Page',
-                'frameStartedLoading',
-                (params) => {
-                  const typedParams = params as { frameId: string }
-                  enqueue(newSub, 'loading', { frameId: typedParams.frameId })
-                },
-              )
-              const remove2 = addListener(
-                protocol,
-                'Page',
-                'frameStoppedLoading',
-                (params) => {
-                  const typedParams = params as { frameId: string }
-                  enqueue(newSub, 'loading', {
-                    frameId: typedParams.frameId,
-                    stopped: true,
-                  })
-                },
-              )
-              newSub.removeListeners.push(remove1, remove2)
-              break
-            }
-            case 'error': {
-              const remove1 = addListener(
-                protocol,
-                'Runtime',
-                'exceptionThrown',
-                (params) => {
-                  const typedParams = params as { exceptionDetails: unknown }
-                  enqueue(newSub, 'error', {
-                    exceptionDetails: typedParams.exceptionDetails,
-                  })
-                },
-              )
-              const remove2 = addListener(
-                protocol,
-                'Page',
-                'frameFailedToLoad',
-                (params) => {
-                  const typedParams = params as {
-                    frameId: string
-                    errorText: string
-                  }
-                  enqueue(newSub, 'error', {
-                    frameId: typedParams.frameId,
-                    errorText: typedParams.errorText,
-                  })
-                },
-              )
-              newSub.removeListeners.push(remove1, remove2)
-              break
-            }
-            case 'dom_change': {
-              const remove1 = addListener(
-                protocol,
-                'DOM',
-                'childNodeAdded',
-                (params) => {
-                  const typedParams = params as {
-                    parentNodeId: string
-                    nodeId: string
-                  }
-                  enqueue(newSub, 'dom_change', {
-                    parentNodeId: typedParams.parentNodeId,
-                    nodeId: typedParams.nodeId,
-                  })
-                },
-              )
-              const remove2 = addListener(
-                protocol,
-                'DOM',
-                'childNodeRemoved',
-                (params) => {
-                  const typedParams = params as {
-                    parentNodeId: string
-                    nodeId: string
-                  }
-                  enqueue(newSub, 'dom_change', {
-                    parentNodeId: typedParams.parentNodeId,
-                    nodeId: typedParams.nodeId,
-                  })
-                },
-              )
-              const remove3 = addListener(
-                protocol,
-                'DOM',
-                'characterDataModified',
-                (params) => {
-                  const typedParams = params as {
-                    nodeId: string
-                    characterData: string
-                  }
-                  enqueue(newSub, 'dom_change', {
-                    nodeId: typedParams.nodeId,
-                    characterData: typedParams.characterData,
-                  })
-                },
-              )
-              newSub.removeListeners.push(remove1, remove2, remove3)
-              break
-            }
-          }
-        }
-        return textResult(`monitoring started for page ${args.page}`, {
-          page: args.page,
           eventTypes,
-        })
+          dropped: 0,
+        }
+        const { session } = await ctx.session.pages.getSession(args.page)
+        const emit = (
+          type: MonitorEventType,
+          details: Record<string, unknown>,
+        ) => enqueue(subscription, type, details)
+        for (const type of eventTypes) {
+          subscription.removeListeners.push(...listen(session, type, emit))
+        }
+        // Registered only once the listeners are attached, so a failure above
+        // cannot leave a subscription that collects nothing and blocks restart.
+        subs.set(args.page, subscription)
+        return textResult(
+          `monitoring started for page ${args.page} (${eventTypes.join(', ')})`,
+          { page: args.page, eventTypes },
+        )
       }
       case 'read': {
-        if (args.page === undefined) {
-          return errorResult('monitor read: page id is required')
-        }
-        const session = ctx.session
-        const subs = sessionSubscriptions(session)
-        const sub = subs.get(args.page)
-        if (!sub) {
+        if (!existing) {
           return errorResult(
-            `monitor read: no monitoring for page ${args.page}`,
+            `monitor read: page ${args.page} is not monitored. Call monitor with action="start" first.`,
           )
         }
-        const queue = sub.queue
-        sub.queue = [] // clear the queue
-        return textResult(`read ${queue.length} events`, { events: queue })
+        const events = existing.queue
+        const dropped = existing.dropped
+        existing.queue = []
+        existing.dropped = 0
+        const suffix = dropped ? ` (${dropped} dropped, queue is full)` : ''
+        return textResult(`read ${events.length} events${suffix}`, {
+          page: args.page,
+          count: events.length,
+          dropped,
+          events,
+        })
       }
       case 'stop': {
-        if (args.page === undefined) {
-          return errorResult('monitor stop: page id is required')
-        }
-        const session = ctx.session
-        const subs = sessionSubscriptions(session)
-        const sub = subs.get(args.page)
-        if (!sub) {
+        if (!existing) {
           return errorResult(
-            `monitor stop: no monitoring for page ${args.page}`,
+            `monitor stop: page ${args.page} is not monitored.`,
           )
         }
-        // Remove all listeners
-        for (const remove of sub.removeListeners) {
-          remove()
-        }
-        sub.removeListeners = []
-        sub.closed = true
+        for (const remove of existing.removeListeners) remove()
         subs.delete(args.page)
         return textResult(`monitoring stopped for page ${args.page}`, {
           page: args.page,
         })
       }
-      default:
-        return errorResult('monitor: unsupported action')
     }
   },
 })

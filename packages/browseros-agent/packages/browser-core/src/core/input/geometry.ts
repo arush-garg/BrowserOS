@@ -60,10 +60,15 @@ export async function focusElement(
   session: ProtocolApi,
   backendNodeId: number,
 ): Promise<void> {
-  const pushed = await session.DOM.pushNodesByBackendIdsToFrontend({
-    backendNodeIds: [backendNodeId],
+  // Focus by resolved objectId (like jsClick) rather than DOM.focus by nodeId:
+  // the nodeId path needs DOM.pushNodesByBackendIdsToFrontend, which throws
+  // "Document needs to be requested first" unless DOM.getDocument ran on this
+  // session. resolveNode by backendNodeId has no such precondition.
+  const objectId = await resolveObjectId(session, backendNodeId)
+  await session.Runtime.callFunctionOn({
+    functionDeclaration: 'function(){this.focus()}',
+    objectId,
   })
-  await session.DOM.focus({ nodeId: pushed.nodeIds[0] })
 }
 
 export async function jsClick(

@@ -206,11 +206,11 @@ describe('evaluate tool', () => {
     )
     const text = textOf(result)
     expect(text).toContain(
-      'requested timeout 60000ms was clamped to 55000ms max',
+      'requested timeout 60000ms was clamped to 30000ms max',
     )
     expect(result.structuredContent).toMatchObject({
       requestedTimeoutMs: 60000,
-      appliedTimeoutMs: 55000,
+      appliedTimeoutMs: 30000,
     })
   })
 })

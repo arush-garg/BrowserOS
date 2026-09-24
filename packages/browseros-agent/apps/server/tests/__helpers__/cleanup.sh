@@ -13,7 +13,10 @@ SERVER_PORT=${SERVER_PORT:-9105}
 EXTENSION_PORT=${EXTENSION_PORT:-9305}
 
 for port in $CDP_PORT $SERVER_PORT $EXTENSION_PORT; do
-  pid=$(lsof -ti :$port 2>/dev/null || true)
+  # Only select the server listening on the test port. A broad `lsof -ti
+  # :$port` also returns clients connected to that port and can kill unrelated
+  # processes such as Hermes agents using the BrowserOS MCP server.
+  pid=$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
   if [ -n "$pid" ]; then
     echo "  Killing process on port $port (PID: $pid)"
     kill -9 $pid 2>/dev/null || true

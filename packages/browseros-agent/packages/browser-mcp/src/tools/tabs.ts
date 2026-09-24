@@ -7,7 +7,9 @@ export const tabs = defineTool({
     'Manage browser tabs. `list` returns every open page, `active` shows the current front page, `new` opens a fresh page, and `close` closes a page. When a task would disrupt a tab the user is actively using, prefer cloning it: copy its URL from `list` into `tabs new`, then work in the new page.',
   input: z
     .object({
-      action: z.enum(['list', 'active', 'new', 'close']).default('list'),
+      action: z
+        .enum(['list', 'active', 'new', 'close', 'match'])
+        .default('list'),
       url: z
         .string()
         .optional()
@@ -17,6 +19,14 @@ export const tabs = defineTool({
         .default(true)
         .describe('Open without stealing focus for action="new".'),
       page: z.number().int().optional().describe('Page id for action="close".'),
+      field: z
+        .enum(['title', 'url', 'content'])
+        .optional()
+        .describe('Field to match against for action="match".'),
+      query: z
+        .string()
+        .optional()
+        .describe('Case-insensitive substring to match for action="match".'),
     })
     .strict(),
   annotations: {
@@ -30,6 +40,7 @@ export const tabs = defineTool({
         const pages = await ctx.session.pages.list()
         const lines = pages.map(formatPageLine)
         return textResult(lines.join('\n') || '(no open pages)', {
+          matchableFields: ['title', 'url', 'content'],
           pages: pages.map((p) => ({
             page: p.pageId,
             url: p.url,
@@ -64,6 +75,43 @@ export const tabs = defineTool({
         }
         await ctx.session.pages.close(args.page)
         return textResult(`closed page ${args.page}`, { page: args.page })
+      }
+      case 'match': {
+        const field = args.field ?? 'title'
+        const query = (args.query ?? '').toLowerCase()
+        const pages = await ctx.session.pages.list()
+
+        const matched: typeof pages = []
+        for (const page of pages) {
+          let haystack = ''
+          if (field === 'title') {
+            haystack = page.title ?? ''
+          } else if (field === 'url') {
+            haystack = page.url ?? ''
+          } else {
+            const { session } = await ctx.session.pages.getSession(page.pageId)
+            const evaluated = await session.Runtime.evaluate({
+              expression: 'document.body.innerText',
+              returnByValue: true,
+            })
+            haystack = String(evaluated?.result?.value ?? '')
+          }
+          if (haystack.toLowerCase().includes(query)) {
+            matched.push(page)
+          }
+        }
+
+        const lines = matched.map(formatPageLine)
+        return textResult(lines.join('\n') || '(no open pages)', {
+          action: 'match',
+          field,
+          query: args.query,
+          pages: matched.map((p) => ({
+            page: p.pageId,
+            url: p.url,
+            title: p.title,
+          })),
+        })
       }
       default:
         return errorResult('tabs: unsupported action.')

@@ -20,11 +20,7 @@ declare module "wxt/browser" {
     | "/icon/32.png"
     | "/icon/48.png"
     | "/icon/96.png"
-    | "/onnxruntime/ort-wasm-simd-threaded.mjs"
-    | "/onnxruntime/ort-wasm-simd-threaded.wasm"
     | "/sidepanel.html"
-    | "/vad/silero_vad.onnx"
-    | "/vad/vad.worklet.bundle.min.js"
     | "/wxt.svg"
   type HtmlPublicPath = Extract<PublicPath, `${string}.html`>
   export interface WxtRuntime {

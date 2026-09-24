@@ -336,3 +336,312 @@ describe('act retry logic', () => {
     expect(attemptCount).toBe(2)
   })
 })
+
+// --- hold + recover -------------------------------------------------------
+
+interface HoldHarnessOptions {
+  evaluate?: () => unknown
+  clickFailures?: number
+  clickError?: string
+}
+
+function mockHoldSession(options: HoldHarnessOptions = {}) {
+  const calls: { kind: string; args: unknown[] }[] = []
+  const strategies: string[] = []
+  let remainingClickFailures = options.clickFailures ?? 0
+
+  const input = {
+    click: async (...args: unknown[]) => {
+      if (remainingClickFailures > 0) {
+        remainingClickFailures -= 1
+        throw new Error(options.clickError ?? 'Element detached')
+      }
+      calls.push({ kind: 'click', args })
+    },
+    type: async (...args: unknown[]) => {
+      calls.push({ kind: 'type', args })
+    },
+    scroll: async (...args: unknown[]) => {
+      strategies.push('scroll')
+      calls.push({ kind: 'scroll', args })
+    },
+    // Run the waiter exactly as the real implementation does, so a timing-out
+    // predicate still reaches the release path.
+    hold: async (ref: unknown, hold: () => Promise<void>, opts: unknown) => {
+      calls.push({ kind: 'hold', args: [ref, opts] })
+      try {
+        await hold()
+      } finally {
+        calls.push({ kind: 'release', args: [ref] })
+      }
+    },
+    holdAt: async (
+      x: unknown,
+      y: unknown,
+      hold: () => Promise<void>,
+      opts: unknown,
+    ) => {
+      calls.push({ kind: 'holdAt', args: [x, y, opts] })
+      try {
+        await hold()
+      } finally {
+        calls.push({ kind: 'release', args: [x, y] })
+      }
+    },
+  }
+
+  const session = {
+    input: () => input,
+    pages: {
+      getSession: async () => ({
+        session: {
+          Runtime: {
+            evaluate: async () => ({
+              result: { value: options.evaluate?.() ?? false },
+            }),
+          },
+        },
+      }),
+    },
+    observe: () => ({
+      diff: async () => ({
+        changed: false,
+        before: '',
+        after: '',
+        beforeUrl: '',
+        afterUrl: '',
+      }),
+      snapshot: async () => {
+        strategies.push('resnapshot')
+      },
+    }),
+  } as unknown as BrowserSession
+
+  return { session, calls, strategies }
+}
+
+function noteOf(result: { content?: unknown }): string {
+  if (!Array.isArray(result.content)) return ''
+  const first = result.content[0] as { text?: string } | undefined
+  return first?.text ?? ''
+}
+
+describe('act hold', () => {
+  it('presses, waits the requested time, and releases', async () => {
+    // Arrange
+    const { session, calls } = mockHoldSession()
+
+    // Act
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'hold', ref: 'e5', until: { kind: 'time', ms: 20 } },
+      { session },
+    )
+
+    // Assert
+    expect(result.isError).toBeFalsy()
+    expect(calls.map((c) => c.kind)).toEqual(['hold', 'release'])
+    expect(calls[0]?.args[0]).toBe('e5')
+    expect(noteOf(result)).toContain('released on paused 20ms')
+  })
+
+  it('defaults to a fixed-duration hold when no condition is given', async () => {
+    const { session, calls } = mockHoldSession()
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'hold', ref: 'e5', holdTimeout: 50 },
+      { session },
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(calls.map((c) => c.kind)).toEqual(['hold', 'release'])
+    // The default 1000ms press is clamped by the 50ms timeout, not ignored.
+    expect(noteOf(result)).toContain('released on paused 50ms')
+  })
+
+  it('releases as soon as the condition is satisfied', async () => {
+    const { session } = mockHoldSession({ evaluate: () => true })
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'hold',
+        ref: 'e5',
+        until: { kind: 'selector', value: '#confirmed' },
+        holdTimeout: 2_000,
+      },
+      { session },
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(noteOf(result)).toContain('released on')
+    expect(result.structuredContent).toMatchObject({
+      held: true,
+      matched: true,
+    })
+  })
+
+  it('still releases, and says so, when the condition never matches', async () => {
+    const { session, calls } = mockHoldSession({ evaluate: () => false })
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'hold',
+        ref: 'e5',
+        until: { kind: 'selector', value: '#never' },
+        holdTimeout: 60,
+      },
+      { session },
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(calls.map((c) => c.kind)).toEqual(['hold', 'release'])
+    expect(noteOf(result)).toContain('never matched')
+    expect(result.structuredContent).toMatchObject({
+      held: true,
+      matched: false,
+    })
+  })
+
+  it('rejects an invalid condition without pressing the button', async () => {
+    const { session, calls } = mockHoldSession()
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'hold',
+        ref: 'e5',
+        until: { kind: 'selector' },
+        holdTimeout: 60,
+      },
+      { session },
+    )
+
+    expect(result.isError).toBe(true)
+    expect(calls).toEqual([])
+  })
+
+  it('requires a ref', async () => {
+    const { session } = mockHoldSession()
+
+    const result = await executeTool(
+      act,
+      { page: 1, kind: 'hold' },
+      { session },
+    )
+
+    expect(result.isError).toBe(true)
+    expect(noteOf(result)).toContain('ref is required')
+  })
+
+  it('holds at coordinates when there is no ref', async () => {
+    const { session, calls } = mockHoldSession()
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'hold_at',
+        x: 120,
+        y: 45,
+        until: { kind: 'time', ms: 10 },
+      },
+      { session },
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(calls[0]).toMatchObject({ kind: 'holdAt' })
+    expect(calls[0]?.args.slice(0, 2)).toEqual([120, 45])
+    expect(calls[1]?.kind).toBe('release')
+  })
+})
+
+describe('act recover', () => {
+  it('retries a click that lost its element and reports the recovery', async () => {
+    const { session, calls, strategies } = mockHoldSession({
+      clickFailures: 1,
+    })
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'click',
+        ref: 'e5',
+        recover: { attempts: 2, strategy: ['resnapshot'] },
+      },
+      { session },
+    )
+
+    expect(result.isError).toBeFalsy()
+    expect(strategies).toEqual(['resnapshot'])
+    expect(calls.filter((c) => c.kind === 'click')).toHaveLength(1)
+    expect(result.structuredContent).toMatchObject({
+      recovered: true,
+      attempts: 2,
+    })
+  })
+
+  it('gives up with the stale-ref message once attempts run out', async () => {
+    const { session } = mockHoldSession({ clickFailures: 5 })
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'click',
+        ref: 'e5',
+        recover: { attempts: 1, strategy: ['settle'] },
+      },
+      { session },
+    )
+
+    expect(result.isError).toBe(true)
+    expect(noteOf(result)).toContain('stale reference')
+  })
+
+  it('does not retry errors that prove the click reached the page', async () => {
+    const { session } = mockHoldSession({
+      clickFailures: 1,
+      clickError: 'navigation blocked by the page',
+    })
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'click',
+        ref: 'e5',
+        recover: { attempts: 2, strategy: ['resnapshot'] },
+      },
+      { session },
+    )
+
+    expect(result.isError).toBe(true)
+    expect(noteOf(result)).toContain('navigation blocked by the page')
+  })
+
+  it('refuses to recover kinds whose partial effect may already have landed', async () => {
+    const { session, calls } = mockHoldSession()
+
+    const result = await executeTool(
+      act,
+      {
+        page: 1,
+        kind: 'type',
+        text: 'hello',
+        recover: { attempts: 1, strategy: ['resnapshot'] },
+      },
+      { session },
+    )
+
+    expect(result.isError).toBe(true)
+    expect(noteOf(result)).toContain('recover is not supported')
+    expect(calls).toEqual([])
+  })
+})

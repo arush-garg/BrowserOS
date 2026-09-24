@@ -52,6 +52,15 @@ export const evaluate = defineTool({
       DEFAULT_TIMEOUT_MS,
       MAX_TIMEOUT_MS,
     )
+    const timeoutClamp =
+      args.timeout !== undefined &&
+      Number.isFinite(args.timeout) &&
+      args.timeout > MAX_TIMEOUT_MS
+        ? {
+            requestedTimeoutMs: Math.round(args.timeout),
+            appliedTimeoutMs: timeout,
+          }
+        : undefined
     const result = await session.Runtime.evaluate({
       expression: wrapAsAsyncIife(args.code),
       returnByValue: true,
@@ -100,7 +109,7 @@ export const evaluate = defineTool({
         return textResult(
           [
             wrapUntrusted(excerpt, origin),
-            `Evaluate result truncated at ${inlineLimit} chars. Full result (${text.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+            `Evaluate result truncated at ${inlineLimit} chars. Failed to save full evaluate result to a BrowserOS output file: ${saveError}`,
           ].join('\n\n'),
           {
             page: args.page,
@@ -111,6 +120,13 @@ export const evaluate = defineTool({
           },
         )
       }
+    }
+
+    if (timeoutClamp) {
+      return textResult(
+        `${wrapUntrusted(text, origin)}\n\nrequested timeout ${timeoutClamp.requestedTimeoutMs}ms was clamped to ${timeoutClamp.appliedTimeoutMs}ms max`,
+        { page: args.page, value, ...timeoutClamp },
+      )
     }
 
     return textResult(wrapUntrusted(text, origin), {

@@ -92,12 +92,6 @@ struct CallFunctionResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct PushNodesResult {
-    #[serde(rename = "nodeIds")]
-    node_ids: Vec<i64>,
-}
-
-#[derive(Debug, Deserialize)]
 struct Bounds {
     x: f64,
     y: f64,
@@ -199,19 +193,16 @@ pub async fn focus_element(
     session: &ProtocolSession,
     backend_node_id: i64,
 ) -> Result<(), CoreError> {
-    let pushed: PushNodesResult = session
-        .send(
-            "DOM.pushNodesByBackendIdsToFrontend",
-            json!({ "backendNodeIds": [backend_node_id] }),
-        )
-        .await?;
-    let Some(node_id) = pushed.node_ids.first() else {
-        return Err(CoreError::Message(
-            "Element not found in DOM. Take a new snapshot.".to_string(),
-        ));
-    };
+    // Focus by resolved objectId (like js_click) rather than DOM.focus by nodeId:
+    // the nodeId path needs DOM.pushNodesByBackendIdsToFrontend, which fails with
+    // "Document needs to be requested first" unless DOM.getDocument ran on this
+    // session. resolveNode by backendNodeId has no such precondition.
+    let object_id = resolve_object_id(session, backend_node_id, None).await?;
     let _: Value = session
-        .send("DOM.focus", json!({ "nodeId": node_id }))
+        .send(
+            "Runtime.callFunctionOn",
+            json!({ "functionDeclaration": "function(){this.focus()}", "objectId": object_id }),
+        )
         .await?;
     Ok(())
 }

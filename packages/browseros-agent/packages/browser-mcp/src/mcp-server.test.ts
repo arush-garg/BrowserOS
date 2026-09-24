@@ -75,7 +75,9 @@ describe('createBrowserMcpServer', () => {
     expect(Object.keys(schema?.properties ?? {}).sort()).toEqual([
       'action',
       'background',
+      'field',
       'page',
+      'query',
       'url',
     ])
   })

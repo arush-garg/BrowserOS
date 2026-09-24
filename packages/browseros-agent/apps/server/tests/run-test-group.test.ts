@@ -4,6 +4,8 @@
  */
 
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   buildTestCommand,
   getAtomicGroupTargets,
@@ -54,5 +56,17 @@ describe('test groups', () => {
     const groups = listAllGroups()
 
     expect(new Set(groups).size).toBe(groups.length)
+  })
+})
+
+describe('test cleanup', () => {
+  it('kills only listeners on test ports, not connected clients', () => {
+    const cleanupScript = readFileSync(
+      resolve(import.meta.dir, '__helpers__', 'cleanup.sh'),
+      'utf8',
+    )
+
+    expect(cleanupScript).toContain('lsof -tiTCP:"$port" -sTCP:LISTEN')
+    expect(cleanupScript).not.toMatch(/lsof\s+-ti\s+:\$port/)
   })
 })

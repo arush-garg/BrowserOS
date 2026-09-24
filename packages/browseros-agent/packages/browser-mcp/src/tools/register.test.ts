@@ -80,7 +80,9 @@ describe('registerBrowserTools', () => {
     expect(Object.keys(tabsSchema?.shape ?? {}).sort()).toEqual([
       'action',
       'background',
+      'field',
       'page',
+      'query',
       'url',
     ])
     const windowsSchema = fake.configs.get('windows')?.inputSchema as

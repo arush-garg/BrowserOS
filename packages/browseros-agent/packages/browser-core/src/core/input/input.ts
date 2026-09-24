@@ -13,6 +13,7 @@ import { clearField, pressCombo, typeText } from './keyboard'
 import {
   dispatchClick,
   dispatchDrag,
+  dispatchHold,
   dispatchHover,
   dispatchScroll,
   type MouseButton,
@@ -78,6 +79,69 @@ export class Input {
         0,
       ),
     )
+  }
+
+  /**
+   * Long-press: presses on `ref` and keeps the button down until `hold` resolves.
+   *
+   * `hold` is supplied by the caller so the press can last a fixed duration or run until a
+   * page condition is met (a hold-to-confirm bar filling, a context menu appearing).
+   */
+  async hold(
+    ref: string,
+    hold: () => Promise<void>,
+    opts: ClickOptions = {},
+  ): Promise<{ x: number; y: number }> {
+    const { session, backendNodeId } = await this.observer.resolveRef(ref)
+    return this.holdNode(session, backendNodeId, hold, opts)
+  }
+
+  async holdBackendNode(
+    backendNodeId: number,
+    hold: () => Promise<void>,
+    opts: ClickOptions = {},
+  ): Promise<{ x: number; y: number }> {
+    return this.withPageSessionRetry((session) =>
+      this.holdNode(session, backendNodeId, hold, opts),
+    )
+  }
+
+  async holdAt(
+    x: number,
+    y: number,
+    hold: () => Promise<void>,
+    opts: ClickOptions = {},
+  ): Promise<void> {
+    await this.withPageSessionRetry((session) =>
+      dispatchHold(session, x, y, mouseButton(opts.button), hold),
+    )
+  }
+
+  // Unlike clickNode there is no synthetic-DOM fallback: a jsClick is instantaneous, so it
+  // would silently turn a long-press into a click. Without geometry a hold is meaningless.
+  private async holdNode(
+    session: ProtocolApi,
+    backendNodeId: number,
+    hold: () => Promise<void>,
+    opts: ClickOptions = {},
+  ): Promise<{ x: number; y: number }> {
+    await scrollIntoView(session, backendNodeId)
+    let center: { x: number; y: number }
+    try {
+      center = await getElementCenter(session, backendNodeId)
+    } catch {
+      throw new Error(
+        'cannot hold an element with no geometry (hidden or zero-size) — make it visible first',
+      )
+    }
+    await dispatchHold(
+      session,
+      center.x,
+      center.y,
+      mouseButton(opts.button),
+      hold,
+    )
+    return center
   }
 
   async hoverAt(x: number, y: number): Promise<void> {
