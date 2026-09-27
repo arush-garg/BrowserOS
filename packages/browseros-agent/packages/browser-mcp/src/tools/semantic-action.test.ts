@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import { RefMap } from '@browseros/browser-core/core/snapshot/refs'
-import type { LayaAnswer } from './laya-client'
+import type { OpenJevAnswer } from './openjev-client'
 import {
-  buildLayaRequest,
+  buildOpenJevRequest,
   candidatesFromSnapshot,
   decide,
 } from './semantic-action'
@@ -64,7 +64,7 @@ describe('semantic action Laya request construction', () => {
 
   it('builds shared compact state and Laya choice questions', () => {
     const snapshot = candidateSnapshot()
-    const request = buildLayaRequest(
+    const request = buildOpenJevRequest(
       'Search flights from SFO to LHR',
       'https://example.com/flights?injected=true#fragment',
       snapshot.text,
@@ -110,7 +110,7 @@ describe('semantic action Laya request construction', () => {
       name: 'Custom action',
     })
     const text = `- generic "Custom action" [ref=${customButton}] [cursor=pointer]`
-    const request = buildLayaRequest(
+    const request = buildOpenJevRequest(
       'Click custom action',
       'https://example.com',
       text,
@@ -130,7 +130,7 @@ describe('semantic action Laya request construction', () => {
       name: 'Destination',
     })
     const text = `- combobox "Destination" [ref=${combo}]`
-    const request = buildLayaRequest(
+    const request = buildOpenJevRequest(
       'Type destination',
       'https://example.com',
       text,
@@ -155,7 +155,7 @@ describe('semantic action Laya request construction', () => {
           ? 'button "Needle destination"'
           : `button "Other ${index}"`,
     }))
-    const request = buildLayaRequest(
+    const request = buildOpenJevRequest(
       'click needle destination',
       'https://example.com',
       '- button',
@@ -168,7 +168,7 @@ describe('semantic action Laya request construction', () => {
   })
 
   it('budgets page text for the browser checkpoint context', () => {
-    const request = buildLayaRequest(
+    const request = buildOpenJevRequest(
       'Search flights from SFO to LHR',
       'https://example.com/flights',
       'z'.repeat(20_000),
@@ -204,7 +204,7 @@ describe('semantic action Laya answer validation', () => {
   }
 
   it('uses selected target and multiplies operation and target confidence', () => {
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'CLICK',
@@ -228,7 +228,7 @@ describe('semantic action Laya answer validation', () => {
   })
 
   it('abstains when joint confidence is low', () => {
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'CLICK',
@@ -251,7 +251,7 @@ describe('semantic action Laya answer validation', () => {
         criteria: { BLOCKED: 'blocked', WAIT: 'wait', DONE: 'done' },
       },
     }
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'BLOCKED',
@@ -263,7 +263,7 @@ describe('semantic action Laya answer validation', () => {
 
   it('requires stronger confidence before accepting DONE', () => {
     const questions = { operation: request.questions.operation }
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'DONE',
@@ -274,7 +274,7 @@ describe('semantic action Laya answer validation', () => {
   })
 
   it('rejects a choice that is absent from its probability map', () => {
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'CLICK',
@@ -290,7 +290,7 @@ describe('semantic action Laya answer validation', () => {
   })
 
   it('rejects malformed probability maps', () => {
-    const answers: Record<string, LayaAnswer> = {
+    const answers: Record<string, OpenJevAnswer> = {
       operation: {
         type: 'choice',
         choice: 'CLICK',

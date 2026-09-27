@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { LayaClient, resolveLayaPython, validateRequest } from './laya-client'
+import {
+  OpenJevClient,
+  resolveOpenJevPython,
+  validateRequest,
+} from './openjev-client'
 
 const mockService = new URL(
-  '../../python/mock_laya_service.py',
+  '../../python/mock_openjev_service.py',
   import.meta.url,
 ).pathname
-const clients: LayaClient[] = []
+const clients: OpenJevClient[] = []
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.close()
@@ -30,26 +34,24 @@ const questions = {
   },
 }
 
-describe('LayaClient', () => {
+describe('OpenJevClient', () => {
   it('round-trips repeated predictions through one persistent JSONL process', async () => {
-    const client = new LayaClient({ command: ['python3', mockService] })
+    const client = new OpenJevClient({ command: ['python3', mockService] })
     clients.push(client)
 
     const state = { page: { text: 'one' } }
     const first = await client.predict(state, questions)
     const second = await client.predict(state, questions)
 
-    expect(first.usage).toEqual({ input_tokens: 2, output_tokens: 0 })
+    expect(first.usage).toEqual({ input_tokens: 1, output_tokens: 0 })
     expect(first.answers).toMatchObject({
       operation: {
         choice: 'CLICK',
         probabilities: { CLICK: 1, DONE: 0 },
-        confidence: 1,
       },
       click_target: {
         choice: 'e1',
         probabilities: { e1: 1, e2: 0 },
-        confidence: 1,
       },
     })
     expect(second).toEqual(first)
@@ -58,7 +60,7 @@ describe('LayaClient', () => {
   it('rejects responses missing a requested answer', async () => {
     const script =
       "import json,sys; r=json.loads(sys.stdin.readline()); print(json.dumps({'request_id':r['request_id'],'answers':{'operation':{'choice':'CLICK','probabilities':{'CLICK':1,'DONE':0}}},'usage':{'input_tokens':1}}), flush=True)"
-    const client = new LayaClient({ command: ['python3', '-c', script] })
+    const client = new OpenJevClient({ command: ['python3', '-c', script] })
     clients.push(client)
 
     await expect(
@@ -67,8 +69,8 @@ describe('LayaClient', () => {
   })
 
   it('surfaces child startup failures', async () => {
-    const client = new LayaClient({
-      command: ['/definitely/missing/laya'],
+    const client = new OpenJevClient({
+      command: ['/definitely/missing/openjev'],
       timeoutMs: 500,
     })
     clients.push(client)
@@ -133,10 +135,10 @@ describe('LayaClient', () => {
   })
 })
 
-describe('resolveLayaPython', () => {
+describe('resolveOpenJevPython', () => {
   it('prefers the explicit interpreter', () => {
     expect(
-      resolveLayaPython({
+      resolveOpenJevPython({
         explicitPython: '/custom/python',
         startDirectory: '/workspace/package',
         homeDirectory: '/home/test',
@@ -149,7 +151,7 @@ describe('resolveLayaPython', () => {
     const files = new Set(['/workspace/.venv/bin/python'])
 
     expect(
-      resolveLayaPython({
+      resolveOpenJevPython({
         startDirectory: '/workspace/package/src',
         homeDirectory: '/home/test',
         isFile: (path) => files.has(path),
@@ -161,7 +163,7 @@ describe('resolveLayaPython', () => {
     const developmentPython = '/home/test/Development/v_env/bin/python'
 
     expect(
-      resolveLayaPython({
+      resolveOpenJevPython({
         startDirectory: '/workspace/package/src',
         homeDirectory: '/home/test',
         isFile: (path) => path === developmentPython,
@@ -171,7 +173,7 @@ describe('resolveLayaPython', () => {
 
   it('falls back to python3 when no interpreter is found', () => {
     expect(
-      resolveLayaPython({
+      resolveOpenJevPython({
         startDirectory: '/workspace/package/src',
         homeDirectory: '/home/test',
         isFile: () => false,

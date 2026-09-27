@@ -19,7 +19,7 @@ The MCP server runs on `http://127.0.0.1:9105/mcp` by default.
 
 ## Semantic Action Tool
 
-See [semantic-action.md](./docs/semantic-action.md) for full documentation on the `semantic_action` tool, which uses the local Laya browser checkpoint to rank browser operations and targets.
+See [semantic-action.md](./docs/semantic-action.md) for full documentation on the `semantic_action` tool, which uses the local OpenJev browser checkpoint to rank browser operations and targets.
 
 ### Quick Example
 
@@ -53,11 +53,12 @@ Create `config.dev.json` in `packages/browseros-agent/`:
 }
 ```
 
-### Laya Configuration (Optional)
+### OpenJev Configuration (Optional)
 
 ```bash
-export BROWSEROS_LAYA_PYTHON="$HOME/Development/v_env/bin/python"
-export BROWSEROS_LAYA_DEVICE="mps" # optional
+export BROWSEROS_OPENJEV_PYTHON="$HOME/Development/v_env/bin/python"
+export BROWSEROS_OPENJEV_DEVICE="mps" # optional
+export BROWSEROS_OPENJEV_SUBFOLDER="qwen3.5-2b-nli-v5" # optional; 0.8b, 2b, or 4b variant
 ```
 
 ## Testing
@@ -68,10 +69,10 @@ bun run test
 
 # Semantic action unit tests
 bun test packages/browser-mcp/src/tools/semantic-action.test.ts
-bun test packages/browser-mcp/src/tools/laya-client.test.ts
+bun test packages/browser-mcp/src/tools/openjev-client.test.ts
 
-# Integration tests (harness starts BrowserOS and server; requires Laya runtime)
-BROWSEROS_LAYA_PYTHON=... bun test apps/server/tests/semantic-action.integration.test.ts
+# Integration tests (harness starts BrowserOS and server; requires OpenJev runtime)
+BROWSEROS_OPENJEV_PYTHON=... bun test apps/server/tests/semantic-action.integration.test.ts
 ```
 
 ## Development

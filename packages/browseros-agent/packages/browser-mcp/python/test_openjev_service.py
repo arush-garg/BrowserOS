@@ -9,16 +9,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-MODULE_PATH = Path(__file__).with_name("laya_service.py")
-SPEC = importlib.util.spec_from_file_location("laya_service", MODULE_PATH)
+MODULE_PATH = Path(__file__).with_name("openjev_service.py")
+SPEC = importlib.util.spec_from_file_location("openjev_service", MODULE_PATH)
 assert SPEC and SPEC.loader
 SERVICE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SERVICE)
 
 
-class LayaServiceTests(unittest.TestCase):
+class OpenJevServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         setattr(SERVICE, "_agent", None)
+        setattr(SERVICE, "_tokenizer", None)
 
     def test_validation_rejects_bad_request_shapes(self) -> None:
         with self.assertRaisesRegex(ValueError, "request must"):
@@ -112,7 +113,7 @@ class LayaServiceTests(unittest.TestCase):
                 }
             )
 
-    def test_protocol_emits_laya_answers_and_usage(self) -> None:
+    def test_protocol_emits_openjev_answers_and_usage(self) -> None:
         request = {
             "request_id": "one",
             "state": "page",
@@ -129,7 +130,6 @@ class LayaServiceTests(unittest.TestCase):
                 "operation": {
                     "type": "choice",
                     "choice": "WAIT",
-                    "confidence": 0.8,
                     "probabilities": {"WAIT": 0.8, "DONE": 0.2},
                 }
             },
@@ -205,7 +205,7 @@ class MockServiceTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             SERVICE.stop(15, None)
 
-    def test_mock_returns_valid_laya_response(self) -> None:
+    def test_mock_returns_valid_openjev_response(self) -> None:
         request = {
             "request_id": "mock-one",
             "state": "page",
@@ -223,7 +223,7 @@ class MockServiceTests(unittest.TestCase):
             },
         }
         completed = subprocess.run(
-            [sys.executable, str(Path(__file__).with_name("mock_laya_service.py"))],
+            [sys.executable, str(Path(__file__).with_name("mock_openjev_service.py"))],
             input=json.dumps(request) + "\n",
             capture_output=True,
             check=True,
@@ -240,14 +240,19 @@ class MockServiceTests(unittest.TestCase):
 class ModelLoadingTests(unittest.TestCase):
     def setUp(self) -> None:
         setattr(SERVICE, "_agent", None)
+        setattr(SERVICE, "_tokenizer", None)
 
-    def test_load_downloads_pinned_v10s_snapshot_once(self) -> None:
+    def test_load_downloads_pinned_snapshot_once(self) -> None:
         loaded = SimpleNamespace(cfg={"head_max_len_train": 144})
         fake_hub = SimpleNamespace(snapshot_download=Mock(return_value="/cache/model"))
-        fake_laya = SimpleNamespace(load=Mock(return_value=loaded))
+        fake_transformers = SimpleNamespace(
+            AutoModelForSequenceClassification=Mock(return_value=loaded),
+            AutoTokenizer=Mock(return_value="tokenizer"),
+        )
 
         with patch.dict(
-            "sys.modules", {"huggingface_hub": fake_hub, "laya": fake_laya}
+            "sys.modules",
+            {"huggingface_hub": fake_hub, "transformers": fake_transformers},
         ):
             first = SERVICE.load()
             second = SERVICE.load()
@@ -255,25 +260,12 @@ class ModelLoadingTests(unittest.TestCase):
         self.assertIs(first, loaded)
         self.assertIs(second, loaded)
         fake_hub.snapshot_download.assert_called_once_with(
-            repo_id=SERVICE.MODEL,
+            repo_id=SERVICE.MODEL_REPO,
             revision=SERVICE.REVISION,
-            allow_patterns=["v10s/*"],
+            allow_patterns=[f"{SERVICE.MODEL_SUBFOLDER}/*"],
         )
-        fake_laya.load.assert_called_once_with(
-            "/cache/model", subfolder="v10s", device=SERVICE.DEVICE
-        )
-        self.assertEqual(loaded.cfg["head_max_len"], 144)
-
-    def test_load_requires_positive_head_max_len_train(self) -> None:
-        fake_hub = SimpleNamespace(snapshot_download=Mock(return_value="/cache/model"))
-        fake_laya = SimpleNamespace(
-            load=Mock(return_value=SimpleNamespace(cfg={"head_max_len_train": 0}))
-        )
-
-        with patch.dict(
-            "sys.modules", {"huggingface_hub": fake_hub, "laya": fake_laya}
-        ), self.assertRaisesRegex(RuntimeError, "head_max_len_train"):
-            SERVICE.load()
+        fake_transformers.AutoModelForSequenceClassification.assert_called_once()
+        fake_transformers.AutoTokenizer.assert_called_once()
 
 
 if __name__ == "__main__":

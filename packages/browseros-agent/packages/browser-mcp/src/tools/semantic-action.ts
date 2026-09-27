@@ -8,11 +8,11 @@ import {
   throwIfAborted,
 } from './framework'
 import {
-  getLayaClient,
-  type LayaAnswer,
-  type LayaQuestions,
-  type LayaState,
-} from './laya-client'
+  getOpenJevClient,
+  type OpenJevAnswer,
+  type OpenJevQuestions,
+  type OpenJevState,
+} from './openjev-client'
 import { awaitPredicate } from './predicate'
 import { selectRelevantLines } from './snapshot-relevance'
 
@@ -29,7 +29,7 @@ const TARGET_RULES =
   'Choose the best observed target for the specified operation. Use the complete goal, current page, and recent actions. Choose only an offered element ref.'
 const LOW_CONFIDENCE = 0.4
 const DONE_CONFIDENCE = 0.65
-// Autonomous loop: Laya drives snapshot→predict→act→repeat in-process. Capped so
+// OpenJev drives snapshot→predict→act→repeat in-process. Capped so
 // a mis-scoring model cannot churn the page indefinitely.
 const DEFAULT_MAX_STEPS = 6
 const MAX_MAX_STEPS = 12
@@ -120,7 +120,7 @@ type LoopStatus =
 export const semantic_action = defineTool({
   name: 'semantic_action',
   description:
-    'Autonomously drive the browser toward a goal with the local Laya browser model. On each step Laya evaluates a fresh accessibility snapshot to choose one operation and target, then this tool executes it (click, type, scroll, wait) and re-snapshots, looping until the goal is DONE, no progress is possible (BLOCKED), confidence drops too low, or maxSteps is reached. Laya cannot generate text: for TYPE_TEXT/SELECT steps pass the literal `text`, otherwise the loop pauses and reports the field that needs input. Set execute=false for a single advisory decision without touching the page. Falls back with an actionable setup error when the local model is unavailable.',
+    'Autonomously drive the browser toward a goal with the local OpenJev browser model. On each step OpenJev evaluates a fresh accessibility snapshot to choose one operation and target, then this tool executes it (click, type, scroll, wait) and re-snapshots, looping until the goal is DONE, no progress is possible (BLOCKED), confidence drops too low, or maxSteps is reached. OpenJev cannot generate text: for TYPE_TEXT/SELECT steps pass the literal `text`, otherwise the loop pauses and reports the field that needs input. Set execute=false for a single advisory decision without touching the page. Falls back with an actionable setup error when the local model is unavailable.',
   input: z
     .object({
       page: z.number().int().describe('Page id from `tabs`.'),
@@ -207,7 +207,7 @@ export const semantic_action = defineTool({
         snapshot.refs.byRef,
       )
       finalCandidates = candidates
-      const request = buildLayaRequest(
+      const request = buildOpenJevRequest(
         args.goal,
         snapshot.url,
         snapshot.text,
@@ -215,16 +215,16 @@ export const semantic_action = defineTool({
         history,
       )
 
-      let answers: Record<string, LayaAnswer>
+      let answers: Record<string, OpenJevAnswer>
       try {
-        ;({ answers } = await getLayaClient().predict(
+        ;({ answers } = await getOpenJevClient().predict(
           request.state,
           request.questions,
           ctx.signal,
         ))
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
-        return errorResult(`Local Laya model unavailable: ${detail}`)
+        return errorResult(`Local OpenJev model unavailable: ${detail}`)
       }
 
       const decision = decide(request.questions, answers)
@@ -323,23 +323,23 @@ async function advise(
 ): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> {
   const snapshot = await ctx.session.observe(args.page).snapshot()
   const candidates = candidatesFromSnapshot(snapshot.text, snapshot.refs.byRef)
-  const request = buildLayaRequest(
+  const request = buildOpenJevRequest(
     args.goal,
     snapshot.url,
     snapshot.text,
     candidates,
     args.history ?? [],
   )
-  let answers: Record<string, LayaAnswer>
+  let answers: Record<string, OpenJevAnswer>
   try {
-    ;({ answers } = await getLayaClient().predict(
+    ;({ answers } = await getOpenJevClient().predict(
       request.state,
       request.questions,
       ctx.signal,
     ))
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    return errorResult(`Local Laya model unavailable: ${detail}`)
+    return errorResult(`Local OpenJev model unavailable: ${detail}`)
   }
   const decision = decide(request.questions, answers)
   return textResult(formatDecision(decision, candidates), {
@@ -383,7 +383,11 @@ async function executeStep(
         }
       // Focus then type (not fill): fill blurs the field, which collapses and
       // clears focus-sensitive inputs such as Wikipedia's header search.
+      // Select-all before typing so repeated TYPE_TEXT steps replace rather
+      // than append — the loop can revisit the same field after autocomplete
+      // changes the page signature.
       await ctx.input.focus(ref)
+      await ctx.input.press('Control+a')
       await ctx.input.type(ctx.text)
       return {
         ok: true,
@@ -555,18 +559,18 @@ export function candidatesFromSnapshot(
   })
 }
 
-export interface LayaRequest {
-  state: LayaState
-  questions: LayaQuestions
+export interface OpenJevRequest {
+  state: OpenJevState
+  questions: OpenJevQuestions
 }
 
-export function buildLayaRequest(
+export function buildOpenJevRequest(
   goal: string,
   url: string,
   snapshotText: string,
   candidates: Candidate[],
   history: { operation: string; targetRef?: string; result?: string }[],
-): LayaRequest {
+): OpenJevRequest {
   const goalTokens = goalTokenSet(goal)
   const targets = new Map<Operation, Candidate[]>([
     [
@@ -605,7 +609,7 @@ export function buildLayaRequest(
     'BLOCKED',
   )
 
-  const state: LayaState = {
+  const state: OpenJevState = {
     page: {
       url: sanitizeUrl(url),
       text: selectRelevantLines(snapshotText, {
@@ -615,7 +619,7 @@ export function buildLayaRequest(
     },
     recent_actions: history.slice(-10),
   }
-  const questions: LayaQuestions = {
+  const questions: OpenJevQuestions = {
     operation: {
       type: 'choice',
       instructions: { goal, rules: DECISION_RULES },
@@ -647,8 +651,8 @@ export function buildLayaRequest(
 }
 
 export function decide(
-  questions: LayaQuestions,
-  answers: Record<string, LayaAnswer>,
+  questions: OpenJevQuestions,
+  answers: Record<string, OpenJevAnswer>,
 ): Decision {
   const operationAnswer = requireAnswer(
     'operation',
@@ -701,20 +705,20 @@ export function decide(
 
 function requireAnswer(
   id: string,
-  question: LayaQuestions[string] | undefined,
-  answer: LayaAnswer | undefined,
-): LayaAnswer {
+  question: OpenJevQuestions[string] | undefined,
+  answer: OpenJevAnswer | undefined,
+): OpenJevAnswer {
   if (!question || !answer)
-    throw new Error(`Laya response missing ${id} answer`)
+    throw new Error(`OpenJev response missing ${id} answer`)
   const expected = new Set(Object.keys(question.criteria))
   if (
     !expected.has(answer.choice) ||
     !(answer.choice in answer.probabilities)
   ) {
-    throw new Error(`Laya response for ${id} has an invalid choice`)
+    throw new Error(`OpenJev response for ${id} has an invalid choice`)
   }
   if (Object.keys(answer.probabilities).length !== expected.size) {
-    throw new Error(`Laya response for ${id} has the wrong option count`)
+    throw new Error(`OpenJev response for ${id} has the wrong option count`)
   }
   let sum = 0
   for (const [optionId, probability] of Object.entries(answer.probabilities)) {
@@ -724,12 +728,12 @@ function requireAnswer(
       probability < 0 ||
       probability > 1
     ) {
-      throw new Error(`Laya response for ${id} is invalid`)
+      throw new Error(`OpenJev response for ${id} is invalid`)
     }
     sum += probability
   }
   if (Math.abs(sum - 1) > 0.02)
-    throw new Error(`Laya probabilities for ${id} do not sum to one`)
+    throw new Error(`OpenJev probabilities for ${id} do not sum to one`)
   return answer
 }
 

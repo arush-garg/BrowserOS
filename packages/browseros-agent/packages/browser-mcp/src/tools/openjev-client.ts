@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, parse } from 'node:path'
-import layaServiceSource from '../../python/laya_service.py' with {
+import openjevServiceSource from '../../python/openjev_service.py' with {
   type: 'text',
 }
 
-export interface LayaState {
+export interface OpenJevState {
   page: {
     url?: string
     text: string
@@ -14,32 +14,32 @@ export interface LayaState {
   [key: string]: unknown
 }
 
-export interface LayaQuestion {
+export interface OpenJevQuestion {
   type: 'choice'
   instructions: string | Record<string, unknown> | unknown[]
   criteria: Record<string, string>
 }
 
-export type LayaQuestions = Record<string, LayaQuestion>
+export type OpenJevQuestions = Record<string, OpenJevQuestion>
 
-export interface LayaAnswer {
+export interface OpenJevAnswer {
   type?: 'choice'
   choice: string
   probabilities: Record<string, number>
   confidence?: number
 }
 
-export type LayaChoiceAnswer = LayaAnswer
+export type OpenJevChoiceAnswer = OpenJevAnswer
 
-export interface LayaUsage {
+export interface OpenJevUsage {
   input_tokens: number
   output_tokens?: number
   total_seconds?: number
 }
 
-export interface LayaResponse {
-  answers: Record<string, LayaAnswer>
-  usage?: LayaUsage
+export interface OpenJevResponse {
+  answers: Record<string, OpenJevAnswer>
+  usage?: OpenJevUsage
 }
 
 interface PendingRequest {
@@ -51,8 +51,8 @@ interface PendingRequest {
 
 interface ServiceResponse {
   request_id: string
-  answers?: Record<string, LayaChoiceAnswer>
-  usage?: LayaUsage
+  answers?: Record<string, OpenJevChoiceAnswer>
+  usage?: OpenJevUsage
   error?: string
   error_kind?: string
 }
@@ -64,7 +64,7 @@ interface PythonResolutionOptions {
   isFile?: (path: string) => boolean
 }
 
-interface LayaClientOptions {
+interface OpenJevClientOptions {
   command?: string[]
   timeoutMs?: number
   env?: Record<string, string | undefined>
@@ -74,28 +74,28 @@ const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_CHOICE_CRITERIA = 1
 const MAX_CHOICE_CRITERIA = 64
 
-export class LayaClient {
+export class OpenJevClient {
   private process?: ReturnType<typeof Bun.spawn>
   private nextRequestId = 1
   private readonly pending = new Map<string, PendingRequest>()
   private stderrTask?: Promise<string>
 
-  constructor(private readonly options: LayaClientOptions = {}) {}
+  constructor(private readonly options: OpenJevClientOptions = {}) {}
 
   async predict(
-    state: LayaState,
-    questions: LayaQuestions,
+    state: OpenJevState,
+    questions: OpenJevQuestions,
     signal?: AbortSignal,
-  ): Promise<LayaResponse> {
+  ): Promise<OpenJevResponse> {
     validateRequest(state, questions)
     return this.request(
       (requestId) => ({ request_id: requestId, state, questions }),
       (response) => {
         if (!response.answers)
-          return new Error('Laya response is missing answers')
+          return new Error('OpenJev response is missing answers')
         for (const questionId of Object.keys(questions)) {
           if (!response.answers[questionId])
-            return new Error(`Laya response is missing ${questionId} answer`)
+            return new Error(`OpenJev response is missing ${questionId} answer`)
         }
         return {
           answers: response.answers,
@@ -107,7 +107,7 @@ export class LayaClient {
   }
 
   close(): void {
-    this.resetProcess(new Error('Laya service closed'))
+    this.resetProcess(new Error('OpenJev service closed'))
   }
 
   private request<T>(
@@ -128,7 +128,9 @@ export class LayaClient {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(() => {
-        const error = new Error(`Laya request timed out after ${timeoutMs}ms`)
+        const error = new Error(
+          `OpenJev request timed out after ${timeoutMs}ms`,
+        )
         this.rejectRequest(requestId, error)
         this.resetProcess(error)
       }, timeoutMs)
@@ -147,7 +149,7 @@ export class LayaClient {
       if (!stdin || typeof stdin === 'number') {
         this.rejectRequest(
           requestId,
-          new Error('Laya service stdin is unavailable'),
+          new Error('OpenJev service stdin is unavailable'),
         )
         return
       }
@@ -182,7 +184,7 @@ export class LayaClient {
       const stderr = (await this.stderrTask?.catch(() => ''))?.trim()
       this.resetProcess(
         new Error(
-          `Laya service exited with code ${code}${stderr ? `: ${stderr.slice(-1_000)}` : ''}`,
+          `OpenJev service exited with code ${code}${stderr ? `: ${stderr.slice(-1_000)}` : ''}`,
         ),
       )
     })
@@ -220,12 +222,12 @@ export class LayaClient {
       response = JSON.parse(line) as ServiceResponse
     } catch {
       this.resetProcess(
-        new Error('Laya service emitted invalid JSON on stdout'),
+        new Error('OpenJev service emitted invalid JSON on stdout'),
       )
       return
     }
     if (!response.request_id) {
-      this.resetProcess(new Error('Laya response is missing request_id'))
+      this.resetProcess(new Error('OpenJev response is missing request_id'))
       return
     }
     const pending = this.pending.get(response.request_id)
@@ -262,46 +264,46 @@ export class LayaClient {
   }
 }
 
-let defaultClient: LayaClient | undefined
+let defaultClient: OpenJevClient | undefined
 
-export function getLayaClient(): LayaClient {
-  defaultClient ??= new LayaClient()
+export function getOpenJevClient(): OpenJevClient {
+  defaultClient ??= new OpenJevClient()
   return defaultClient
 }
 
-export function setLayaClientForTests(client?: LayaClient): void {
+export function setOpenJevClientForTests(client?: OpenJevClient): void {
   defaultClient?.close()
   defaultClient = client
 }
 
 export function validateRequest(
-  state: LayaState,
-  questions: LayaQuestions,
+  state: OpenJevState,
+  questions: OpenJevQuestions,
 ): void {
   if (state === null || state === undefined)
-    throw new Error('Laya state is required')
+    throw new Error('OpenJev state is required')
   const entries = Object.entries(questions)
   if (entries.length === 0)
-    throw new Error('Laya requires at least one question')
+    throw new Error('OpenJev requires at least one question')
 
   for (const [name, question] of entries) {
     if (!name.trim() || !hasInstructions(question.instructions))
-      throw new Error('Laya question name and instructions must be nonempty')
+      throw new Error('OpenJev question name and instructions must be nonempty')
     const criteria = Object.entries(question.criteria)
     if (
       criteria.length < MIN_CHOICE_CRITERIA ||
       criteria.length > MAX_CHOICE_CRITERIA
     ) {
-      throw new Error(`Laya question ${name} must contain 1-64 criteria`)
+      throw new Error(`OpenJev question ${name} must contain 1-64 criteria`)
     }
     const normalizedNames = new Set<string>()
     for (const [criterion, description] of criteria) {
       const normalizedName = criterion.trim()
       if (!normalizedName || !description.trim())
-        throw new Error(`Laya question ${name} has an invalid criterion`)
+        throw new Error(`OpenJev question ${name} has an invalid criterion`)
       if (normalizedNames.has(normalizedName))
         throw new Error(
-          `Laya question ${name} has duplicate criterion ${normalizedName}`,
+          `OpenJev question ${name} has duplicate criterion ${normalizedName}`,
         )
       normalizedNames.add(normalizedName)
     }
@@ -316,7 +318,7 @@ function hasInstructions(
   return Object.keys(instructions).length > 0
 }
 
-export function resolveLayaPython(
+export function resolveOpenJevPython(
   options: PythonResolutionOptions = {},
 ): string {
   const explicitPython = options.explicitPython?.trim()
@@ -345,10 +347,10 @@ export function resolveLayaPython(
 }
 
 function defaultCommand(env: Record<string, string>): string[] {
-  const python = resolveLayaPython({
-    explicitPython: env.BROWSEROS_LAYA_PYTHON,
+  const python = resolveOpenJevPython({
+    explicitPython: env.BROWSEROS_OPENJEV_PYTHON,
   })
-  return [python, '-u', '-c', layaServiceSource]
+  return [python, '-u', '-c', openjevServiceSource]
 }
 
 async function consumeStderr(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persistent JSONL adapter for the local Laya browser decision model."""
+"""Persistent JSONL adapter for the local OpenJev decision model (Qwen3.5 NLI)."""
 
 from __future__ import annotations
 
@@ -11,15 +11,16 @@ import time
 from contextlib import redirect_stdout
 from typing import Any
 
-MODEL = "cklxx/laya-browser"
-REVISION = "4219958196e2c566c141688c773e08da10c1ff3b"
-MODEL_SUBFOLDER = "v10s"
-DEVICE = os.environ.get("BROWSEROS_LAYA_DEVICE") or None
+MODEL_REPO = "AlexWortega/openjev"
+MODEL_SUBFOLDER = os.environ.get("BROWSEROS_OPENJEV_SUBFOLDER") or "qwen3.5-2b-nli-v5"
+REVISION = os.environ.get("BROWSEROS_OPENJEV_REVISION") or "main"
+DEVICE = os.environ.get("BROWSEROS_OPENJEV_DEVICE") or None
 MAX_STATE_CHARS = 50_000
-MAX_QUESTIONS = 4
+MAX_QUESTIONS = 8
 MAX_OPTIONS = 64
 
 _agent: Any = None
+_tokenizer: Any = None
 _stopping = False
 
 
@@ -31,48 +32,49 @@ def log(event: str, **fields: Any) -> None:
     )
 
 
-def load() -> Any:
-    global _agent
-    if _agent is not None:
-        return _agent
+def load() -> tuple[Any, Any]:
+    global _agent, _tokenizer
+    if _agent is not None and _tokenizer is not None:
+        return _agent, _tokenizer
 
     started = time.perf_counter()
     try:
         from huggingface_hub import snapshot_download
-        import laya
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        import torch
     except ImportError as error:
         raise RuntimeError(
-            "Laya dependencies are not installed. Install requirements-laya.txt in "
-            "the Python environment used by BrowserOS."
+            "OpenJev dependencies are not installed. Install transformers, torch, huggingface_hub."
         ) from error
 
     with redirect_stdout(sys.stderr):
         snapshot_path = snapshot_download(
-            repo_id=MODEL,
+            repo_id=MODEL_REPO,
             revision=REVISION,
             allow_patterns=[f"{MODEL_SUBFOLDER}/*"],
         )
-        loaded_agent = laya.load(
-            snapshot_path, subfolder=MODEL_SUBFOLDER, device=DEVICE
+        _tokenizer = AutoTokenizer.from_pretrained(snapshot_path, subfolder=MODEL_SUBFOLDER)
+        _agent = AutoModelForSequenceClassification.from_pretrained(
+            snapshot_path,
+            subfolder=MODEL_SUBFOLDER,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
         )
+        if DEVICE:
+            _agent = _agent.to(DEVICE)
+        elif torch.backends.mps.is_available():
+            _agent = _agent.to("mps")
+        _agent.eval()
 
-    head_max_len = loaded_agent.cfg.get("head_max_len_train")
-    if not isinstance(head_max_len, int) or isinstance(head_max_len, bool) or head_max_len < 1:
-        raise RuntimeError(
-            "Laya model config must contain a positive integer head_max_len_train"
-        )
-
-    loaded_agent.cfg["head_max_len"] = head_max_len
-    _agent = loaded_agent
     log(
         "model_loaded",
-        model=MODEL,
+        model=MODEL_REPO,
         revision=REVISION,
-        device=DEVICE,
-        head_max_len=head_max_len,
+        subfolder=MODEL_SUBFOLDER,
+        device=DEVICE or ("mps" if torch.backends.mps.is_available() else "cpu"),
         elapsed_seconds=round(time.perf_counter() - started, 3),
     )
-    return _agent
+    return _agent, _tokenizer
 
 
 def _validate_options(question_id: str, criteria: Any) -> None:
@@ -135,41 +137,116 @@ def validate_request(message: Any) -> tuple[str, str | dict[str, Any] | list[Any
 
 def _validate_answers(answers: Any, questions: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(answers, dict):
-        raise RuntimeError("Laya result is missing answers")
+        raise RuntimeError("OpenJev result is missing answers")
     for question_id in questions:
         answer = answers.get(question_id)
         if not isinstance(answer, dict) or answer.get("type") != "choice":
-            raise RuntimeError(f"Laya answer {question_id!r} must be a choice object")
+            raise RuntimeError(f"OpenJev answer {question_id!r} must be a choice object")
         if not isinstance(answer.get("choice"), str):
-            raise RuntimeError(f"Laya answer {question_id!r} choice must be a string")
+            raise RuntimeError(f"OpenJev answer {question_id!r} choice must be a string")
         probabilities = answer.get("probabilities")
         if not isinstance(probabilities, dict) or any(
             not isinstance(value, (int, float)) or isinstance(value, bool)
             for value in probabilities.values()
         ):
             raise RuntimeError(
-                f"Laya answer {question_id!r} must contain numeric probabilities"
+                f"OpenJev answer {question_id!r} must contain numeric probabilities"
             )
     return answers
 
 
-def predict(state: str | dict[str, Any] | list[Any], questions: dict[str, Any]) -> dict[str, Any]:
-    agent = load()
-    with redirect_stdout(sys.stderr):
-        result = agent.predict(state, questions)
-    if not isinstance(result, dict):
-        raise RuntimeError("Laya returned a non-object result")
+def _build_premise(state: str | dict[str, Any] | list[Any]) -> str:
+    """Convert Laya state to premise text for NLI."""
+    if isinstance(state, dict):
+        page = state.get("page", {})
+        url = page.get("url", "")
+        text = page.get("text", "")
+        recent_actions = state.get("recent_actions", [])
+        action_str = "; ".join(
+            f"{a.get('operation', '')}:{a.get('targetRef', '')}" for a in recent_actions[-5:]
+        )
+        return f"Page: {url}\nContent: {text}\nRecent: {action_str}"
+    return str(state)
 
-    # Laya 0.3.20 returns an envelope, while some compatible runners return the
-    # answers mapping directly. Preserve the model's answer fields either way.
-    raw_answers = result.get("answers", result)
-    answers = _validate_answers(raw_answers, questions)
+
+def _hypothesis_from_criterion(criterion: str, description: str, context: str = "") -> str:
+    """Convert a criterion (operation or target) to an NLI hypothesis."""
+    return f"{context} {criterion}: {description}".strip()
+
+
+def predict(state: str | dict[str, Any] | list[Any], questions: dict[str, Any]) -> dict[str, Any]:
+    import torch
+    import numpy as np
+
+    agent, tokenizer = load()
+    premise = _build_premise(state)
+
+    # Build all premise-hypothesis pairs
+    pairs = []
+    pair_meta = []  # (question_id, criterion_key)
+    
+    for question_id, question in questions.items():
+        criteria = question.get("criteria", {})
+        context = ""
+        if isinstance(question.get("instructions"), dict):
+            context = question["instructions"].get("goal", "")
+        elif isinstance(question.get("instructions"), str):
+            context = question["instructions"]
+        elif isinstance(question.get("instructions"), list):
+            context = " ".join(str(x) for x in question["instructions"])
+
+        for criterion_key, criterion_desc in criteria.items():
+            hypothesis = _hypothesis_from_criterion(criterion_key, criterion_desc, context)
+            pairs.append((premise, hypothesis))
+            pair_meta.append((question_id, criterion_key))
+
+    if not pairs:
+        raise RuntimeError("No valid premise-hypothesis pairs generated")
+
+    # Batch inference
+    with redirect_stdout(sys.stderr):
+        inputs = tokenizer(
+            [p[0] for p in pairs],
+            [p[1] for p in pairs],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        )
+        device = next(agent.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = agent(**inputs)
+            logits = outputs.logits  # [batch, 3] for entailment/contradiction/neutral
+            probs = torch.softmax(logits, dim=-1).cpu().numpy()
+
+    # Laya expects choice probabilities. Map NLI: entailment=positive, contradiction=negative, neutral=neutral
+    # For operation choice: higher entailment = more likely correct operation
+    # For target choice: higher entailment = better target match
+    answers = {}
+    for (question_id, criterion_key), prob in zip(pair_meta, probs):
+        # prob[0]=entailment, prob[1]=neutral, prob[2]=contradiction (verify label order)
+        # Use entailment probability as the "choice" score
+        entailment_score = float(prob[0])
+        
+        if question_id not in answers:
+            answers[question_id] = {"type": "choice", "choice": "", "probabilities": {}}
+        
+        answers[question_id]["probabilities"][criterion_key] = entailment_score
+
+    # Pick the highest entailment as the choice for each question
+    for question_id, answer in answers.items():
+        if answer["probabilities"]:
+            best = max(answer["probabilities"].items(), key=lambda x: x[1])
+            answer["choice"] = best[0]
+            # Normalize probabilities to sum to 1
+            total = sum(answer["probabilities"].values())
+            if total > 0:
+                for k in answer["probabilities"]:
+                    answer["probabilities"][k] /= total
+
     response = {"answers": answers}
-    usage = result.get("usage")
-    if usage is not None:
-        if not isinstance(usage, dict):
-            raise RuntimeError("Laya usage must be an object")
-        response["usage"] = usage
     return response
 
 

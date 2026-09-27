@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { RefMap } from '@browseros/browser-core/core/snapshot/refs'
 import { executeTool } from './framework'
-import type { LayaAnswer, LayaQuestions } from './laya-client'
-import { setLayaClientForTests } from './laya-client'
+import type { OpenJevAnswer, OpenJevQuestions } from './openjev-client'
+import { setOpenJevClientForTests } from './openjev-client'
 import { semantic_action } from './semantic-action'
 
-afterEach(() => setLayaClientForTests(undefined))
+afterEach(() => setOpenJevClientForTests(undefined))
 
 function oneHot(ids: string[], winner: string): Record<string, number> {
   const chosen = ids.includes(winner) ? winner : (ids[0] ?? winner)
@@ -18,9 +18,9 @@ type Choice = { operation: string; targetRef?: string }
 function installClient(choices: Choice[]): void {
   let call = 0
   const client = {
-    predict: async (_state: unknown, questions: LayaQuestions) => {
+    predict: async (_state: unknown, questions: OpenJevQuestions) => {
       const choice = choices[Math.min(call, choices.length - 1)]
-      if (!choice) throw new Error('scripted Laya client needs a choice')
+      if (!choice) throw new Error('scripted OpenJev client needs a choice')
       call += 1
       const answers = Object.fromEntries(
         Object.entries(questions).map(([id, question]) => {
@@ -31,7 +31,7 @@ function installClient(choices: Choice[]): void {
             id === 'operation'
               ? choice.operation
               : (choice.targetRef ?? fallback)
-          const answer: LayaAnswer = {
+          const answer: OpenJevAnswer = {
             type: 'choice',
             choice: ids.includes(winner) ? winner : fallback,
             probabilities: oneHot(ids, winner),
@@ -43,7 +43,7 @@ function installClient(choices: Choice[]): void {
     },
     close: () => {},
   }
-  setLayaClientForTests(client as never)
+  setOpenJevClientForTests(client as never)
 }
 
 interface MockPage {
@@ -97,6 +97,7 @@ function mockSession(page: MockPage): {
   const input = {
     click: async (ref: string) => void actions.push(['click', ref]),
     focus: async (ref: string) => void actions.push(['focus', ref]),
+    press: async (key: string) => void actions.push(['press', key]),
     type: async (text: string) => void actions.push(['type', text]),
     selectOption: async (ref: string, value: string) => {
       actions.push(['select', ref, value])
@@ -177,6 +178,7 @@ describe('semantic_action MCP handler with Laya', () => {
     expect(result.structuredContent).toMatchObject({ status: 'done' })
     expect(actions).toEqual([
       ['focus', 'e1'],
+      ['press', 'Control+a'],
       ['type', 'q-learning algorithm'],
     ])
   })

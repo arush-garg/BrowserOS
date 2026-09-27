@@ -1,16 +1,16 @@
 # `semantic_action`
 
-`semantic_action` uses local Laya browser checkpoint to choose and optionally execute browser operations from fresh accessibility snapshots.
+`semantic_action` uses local OpenJev browser checkpoint to choose and optionally execute browser operations from fresh accessibility snapshots.
 
 ## Setup
 
 Install pinned runtime into preferred Python environment:
 
 ```sh
-~/Development/v_env/bin/python -m pip install -r packages/browseros-agent/packages/browser-mcp/python/requirements-laya.txt
+~/Development/v_env/bin/python -m pip install -r packages/browseros-agent/packages/browser-mcp/python/requirements-openjev.txt
 ```
 
-Interpreter discovery: `BROWSEROS_LAYA_PYTHON`, nearest BrowserOS `.venv`/`venv`, `~/Development/v_env`, then `python3`. Optional `BROWSEROS_LAYA_DEVICE` selects Torch device. First request downloads pinned `cklxx/laya-browser/v10s` checkpoint (~614 MiB).
+Interpreter discovery: `BROWSEROS_OPENJEV_PYTHON`, nearest BrowserOS `.venv`/`venv`, `~/Development/v_env`, then `python3`. Optional `BROWSEROS_OPENJEV_DEVICE` selects Torch device. Optional `BROWSEROS_OPENJEV_SUBFOLDER` selects model variant (e.g., `qwen3.5-0.8b-nli-v5`, `qwen3.5-2b-nli-v5`, `qwen3.5-4b-nli-v5`). First request downloads pinned `AlexWortega/openjev` checkpoint (size varies by variant).
 
 ## Input
 
@@ -29,7 +29,7 @@ Interpreter discovery: `BROWSEROS_LAYA_PYTHON`, nearest BrowserOS `.venv`/`venv`
 }
 ```
 
-Laya cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before that text/select step mutates the page.
+OpenJev cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before that text/select step mutates the page.
 
 ## Operations
 
@@ -53,10 +53,10 @@ Laya cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` 
 
 1. Capture fresh accessibility snapshot and BrowserOS refs.
 2. Filter goal-relevant page text to 1,500 characters.
-3. Build Laya choice questions for operation and each available target kind, with up to 64 target criteria.
-4. Send one request to persistent `laya_service.py` subprocess.
+3. Build OpenJev choice questions for operation and each available target kind, with up to 64 target criteria.
+4. Send one request to persistent `openjev_service.py` subprocess.
 5. Validate answer IDs and probability distributions.
-6. Multiply operation and target probabilities for effective confidence.
+6. Multiply operation and target entailment probabilities for effective confidence.
 7. Execute safe BrowserOS input primitive, settle, and repeat.
 
 URLs omit query/fragment. Labels are capped. Page content and labels are explicitly untrusted. Existing stale-ref handling remains authoritative.
@@ -65,9 +65,9 @@ URLs omit query/fragment. Labels are capped. Page content and labels are explici
 
 ```sh
 cd packages/browseros-agent
-~/Development/v_env/bin/python -m unittest packages/browser-mcp/python/test_laya_service.py
-bun test packages/browser-mcp/src/tools/laya-client.test.ts   packages/browser-mcp/src/tools/semantic-action.test.ts   packages/browser-mcp/src/tools/semantic-action.integration.test.ts
+~/Development/v_env/bin/python -m unittest packages/browser-mcp/python/test_openjev_service.py
+bun test packages/browser-mcp/src/tools/openjev-client.test.ts   packages/browser-mcp/src/tools/semantic-action.test.ts   packages/browser-mcp/src/tools/semantic-action.integration.test.ts
 bun run --filter @browseros/browser-mcp typecheck
 ```
 
-See [`docs/laya-scorer-service.md`](../../../../../docs/laya-scorer-service.md) for model/protocol details.
+See [`docs/openjev-scorer-service.md`](../../../../../docs/openjev-scorer-service.md) for model/protocol details.
