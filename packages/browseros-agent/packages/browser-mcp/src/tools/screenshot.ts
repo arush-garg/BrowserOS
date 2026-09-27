@@ -24,7 +24,7 @@ function screenshotQuality(format: ScreenshotFormat, quality?: number) {
 }
 
 /** Builds a viewport clip that fits the capture within the requested target size. */
-async function buildScreenshotClip(
+export async function buildScreenshotClip(
   session: ProtocolApi,
   target: ScreenshotSize,
 ): Promise<Viewport> {

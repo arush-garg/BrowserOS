@@ -59,6 +59,7 @@ Create `config.dev.json` in `packages/browseros-agent/`:
 export BROWSEROS_OPENJEV_PYTHON="$HOME/Development/v_env/bin/python"
 export BROWSEROS_OPENJEV_DEVICE="mps" # optional
 export BROWSEROS_OPENJEV_SUBFOLDER="qwen3.5-2b-nli-v5" # optional; 0.8b, 2b, or 4b variant
+export BROWSEROS_OPENJEV_IMAGE_MAX_PIXELS=401408 # optional; screenshot pixel budget
 ```
 
 ## Testing

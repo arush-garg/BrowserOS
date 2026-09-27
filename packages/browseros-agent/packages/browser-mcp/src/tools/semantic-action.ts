@@ -10,10 +10,13 @@ import {
 import {
   getOpenJevClient,
   type OpenJevAnswer,
+  type OpenJevImage,
+  type OpenJevImageReport,
   type OpenJevQuestions,
   type OpenJevState,
 } from './openjev-client'
 import { awaitPredicate } from './predicate'
+import { buildScreenshotClip } from './screenshot'
 import { selectRelevantLines } from './snapshot-relevance'
 
 type InputApi = ReturnType<BrowserSession['input']>
@@ -42,6 +45,10 @@ const SETTLE_MS = 350
 const WAIT_POLL_MS = 150
 const WAIT_QUIET_MS = 500
 const WAIT_CEILING_MS = 5_000
+// The service downscales further to its own pixel budget; this only keeps the
+// JSONL payload small.
+const SCREENSHOT_SIZE = { width: 1024, height: 768 } as const
+const SCREENSHOT_QUALITY = 70
 // Dropped from goal-relevance ranking: verbs and generic nouns that appear in
 // most goals and would not discriminate between candidate targets.
 const GOAL_STOPWORDS = new Set([
@@ -164,6 +171,12 @@ export const semantic_action = defineTool({
         .max(10)
         .optional()
         .describe('Recent semantic actions, oldest first.'),
+      screenshot: z
+        .boolean()
+        .optional()
+        .describe(
+          'Attach a viewport screenshot to every OpenJev decision so the multimodal checkpoint sees the rendered page alongside the snapshot. Defaults to true; set false for text-only scoring.',
+        ),
     })
     .strict(),
   annotations: {
@@ -173,7 +186,8 @@ export const semantic_action = defineTool({
   },
   handler: async (args, ctx) => {
     const execute = args.execute ?? true
-    if (!execute) return advise(args, ctx)
+    const useScreenshot = args.screenshot ?? true
+    if (!execute) return advise(args, ctx, useScreenshot)
 
     const input = ctx.session.input(args.page)
     const observe = ctx.session.observe(args.page)
@@ -196,6 +210,7 @@ export const semantic_action = defineTool({
     let lastActionSignature: string | undefined
     let lastActionKey: string | undefined
     let lastWaitReason: SettleReason | undefined
+    let vision: OpenJevImageReport | undefined
 
     for (let step = 1; step <= maxSteps; step++) {
       throwIfAborted(ctx.signal)
@@ -215,19 +230,16 @@ export const semantic_action = defineTool({
         history,
       )
 
-      let answers: Record<string, OpenJevAnswer>
-      try {
-        ;({ answers } = await getOpenJevClient().predict(
-          request.state,
-          request.questions,
-          ctx.signal,
-        ))
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        return errorResult(`Local OpenJev model unavailable: ${detail}`)
-      }
+      const prediction = await predictDecision(
+        ctx,
+        args.page,
+        request,
+        useScreenshot,
+      )
+      if ('error' in prediction) return errorResult(prediction.error)
+      vision = prediction.vision
 
-      const decision = decide(request.questions, answers)
+      const decision = decide(request.questions, prediction.answers)
       finalDecision = decision
 
       if (decision.status === 'done') {
@@ -302,11 +314,12 @@ export const semantic_action = defineTool({
       finalDecision,
       finalCandidates,
     )
-    return textResult(summary, {
+    return textResult(withVisionNote(summary, vision), {
       page: args.page,
       url: sanitizeUrl(lastUrl),
       status,
       steps: transcript,
+      ...(vision && { screenshot: vision }),
       ...(errorNote && { error: errorNote }),
       ...(finalDecision && { finalDecision }),
     })
@@ -320,6 +333,7 @@ async function advise(
     history?: { operation: string; targetRef?: string; result?: string }[]
   },
   ctx: { session: BrowserSession; signal?: AbortSignal },
+  useScreenshot: boolean,
 ): Promise<ReturnType<typeof textResult> | ReturnType<typeof errorResult>> {
   const snapshot = await ctx.session.observe(args.page).snapshot()
   const candidates = candidatesFromSnapshot(snapshot.text, snapshot.refs.byRef)
@@ -330,23 +344,98 @@ async function advise(
     candidates,
     args.history ?? [],
   )
-  let answers: Record<string, OpenJevAnswer>
+  const prediction = await predictDecision(
+    ctx,
+    args.page,
+    request,
+    useScreenshot,
+  )
+  if ('error' in prediction) return errorResult(prediction.error)
+  const { vision } = prediction
+  const decision = decide(request.questions, prediction.answers)
+  return textResult(
+    withVisionNote(formatDecision(decision, candidates), vision),
+    {
+      page: args.page,
+      url: sanitizeUrl(snapshot.url),
+      ...decision,
+      ...(vision && { screenshot: vision }),
+    },
+  )
+}
+
+type DecisionCapture = { image: OpenJevImage } | { error: string }
+
+type Prediction =
+  | { answers: Record<string, OpenJevAnswer>; vision?: OpenJevImageReport }
+  | { error: string }
+
+/** Scores one decision, attaching a fresh viewport screenshot when requested. */
+async function predictDecision(
+  ctx: { session: BrowserSession; signal?: AbortSignal },
+  pageId: number,
+  request: OpenJevRequest,
+  useScreenshot: boolean,
+): Promise<Prediction> {
+  const capture = useScreenshot
+    ? await captureDecisionImage(ctx.session, pageId)
+    : undefined
   try {
-    ;({ answers } = await getOpenJevClient().predict(
+    const response = await getOpenJevClient().predict(
       request.state,
       request.questions,
-      ctx.signal,
-    ))
+      {
+        signal: ctx.signal,
+        ...(capture && 'image' in capture && { image: capture.image }),
+      },
+    )
+    return {
+      answers: response.answers,
+      ...(capture && { vision: visionStatus(capture, response.image) }),
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    return errorResult(`Local OpenJev model unavailable: ${detail}`)
+    return { error: `Local OpenJev model unavailable: ${detail}` }
   }
-  const decision = decide(request.questions, answers)
-  return textResult(formatDecision(decision, candidates), {
-    page: args.page,
-    url: sanitizeUrl(snapshot.url),
-    ...decision,
-  })
+}
+
+/**
+ * Viewport JPEG for the multimodal checkpoint. A failed capture degrades the
+ * decision to text-only rather than failing the step.
+ */
+async function captureDecisionImage(
+  browser: BrowserSession,
+  pageId: number,
+): Promise<DecisionCapture> {
+  try {
+    const { session } = await browser.pages.getSession(pageId)
+    const clip = await buildScreenshotClip(session, SCREENSHOT_SIZE)
+    const result = await browser.screenshot(pageId, {
+      format: 'jpeg',
+      quality: SCREENSHOT_QUALITY,
+      clip,
+    })
+    return { image: { data: result.data, mimeType: 'image/jpeg' } }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function visionStatus(
+  capture: DecisionCapture,
+  report: OpenJevImageReport | undefined,
+): OpenJevImageReport {
+  if ('error' in capture)
+    return {
+      used: false,
+      reason: `screenshot capture failed: ${capture.error}`,
+    }
+  return report ?? { used: false, reason: 'service did not report image use' }
+}
+
+function withVisionNote(text: string, vision: OpenJevImageReport | undefined) {
+  if (!vision || vision.used) return text
+  return `${text}\nScreenshot not used (text-only decision): ${vision.reason ?? 'unknown reason'}.`
 }
 
 type StepOutcome =

@@ -37,9 +37,28 @@ export interface OpenJevUsage {
   total_seconds?: number
 }
 
+/** Base64 page screenshot scored alongside the state by the multimodal checkpoint. */
+export interface OpenJevImage {
+  data: string
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
+}
+
+/** Whether the service actually fed the image to the model, and why not if it did not. */
+export interface OpenJevImageReport {
+  used: boolean
+  tokens?: number
+  reason?: string
+}
+
+export interface OpenJevPredictOptions {
+  signal?: AbortSignal
+  image?: OpenJevImage
+}
+
 export interface OpenJevResponse {
   answers: Record<string, OpenJevAnswer>
   usage?: OpenJevUsage
+  image?: OpenJevImageReport
 }
 
 interface PendingRequest {
@@ -53,6 +72,7 @@ interface ServiceResponse {
   request_id: string
   answers?: Record<string, OpenJevChoiceAnswer>
   usage?: OpenJevUsage
+  image?: OpenJevImageReport
   error?: string
   error_kind?: string
 }
@@ -73,6 +93,8 @@ interface OpenJevClientOptions {
 const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_CHOICE_CRITERIA = 1
 const MAX_CHOICE_CRITERIA = 64
+// Mirrors MAX_IMAGE_BASE64_CHARS in openjev_service.py.
+const MAX_IMAGE_BASE64_CHARS = 8_000_000
 
 export class OpenJevClient {
   private process?: ReturnType<typeof Bun.spawn>
@@ -85,11 +107,19 @@ export class OpenJevClient {
   async predict(
     state: OpenJevState,
     questions: OpenJevQuestions,
-    signal?: AbortSignal,
+    { signal, image }: OpenJevPredictOptions = {},
   ): Promise<OpenJevResponse> {
     validateRequest(state, questions)
+    if (image) validateImage(image)
     return this.request(
-      (requestId) => ({ request_id: requestId, state, questions }),
+      (requestId) => ({
+        request_id: requestId,
+        state,
+        questions,
+        ...(image && {
+          image: { data: image.data, mime_type: image.mimeType },
+        }),
+      }),
       (response) => {
         if (!response.answers)
           return new Error('OpenJev response is missing answers')
@@ -100,6 +130,7 @@ export class OpenJevClient {
         return {
           answers: response.answers,
           ...(response.usage && { usage: response.usage }),
+          ...(response.image && { image: response.image }),
         }
       },
       signal,
@@ -308,6 +339,14 @@ export function validateRequest(
       normalizedNames.add(normalizedName)
     }
   }
+}
+
+function validateImage(image: OpenJevImage): void {
+  if (!image.data) throw new Error('OpenJev image data must be nonempty')
+  if (image.data.length > MAX_IMAGE_BASE64_CHARS)
+    throw new Error(
+      `OpenJev image must be at most ${MAX_IMAGE_BASE64_CHARS} base64 characters`,
+    )
 }
 
 function hasInstructions(

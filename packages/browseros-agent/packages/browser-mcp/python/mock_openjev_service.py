@@ -36,11 +36,15 @@ def main() -> int:
                 "probabilities": probabilities,
             }
 
-        print(json.dumps({
+        response = {
             "request_id": request_id,
             "answers": answers,
             "usage": {"input_tokens": 1, "output_tokens": 0},
-        }), flush=True)
+        }
+        image = request.get("image")
+        if isinstance(image, dict):
+            response["image"] = {"used": True, "tokens": len(image.get("data", ""))}
+        print(json.dumps(response), flush=True)
 
     return 0
 

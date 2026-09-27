@@ -57,6 +57,36 @@ describe('OpenJevClient', () => {
     expect(second).toEqual(first)
   })
 
+  it('forwards a screenshot and returns the service image report', async () => {
+    const script =
+      "import json,sys; r=json.loads(sys.stdin.readline()); print(json.dumps({'request_id':r['request_id'],'answers':{'operation':{'choice':'CLICK','probabilities':{'CLICK':1,'DONE':0}}},'image':{'used':True,'tokens':len(r['image']['data']),'reason':r['image']['mime_type']}}), flush=True)"
+    const client = new OpenJevClient({ command: ['python3', '-c', script] })
+    clients.push(client)
+
+    const response = await client.predict(
+      { page: { text: 'page' } },
+      { operation: questions.operation },
+      { image: { data: 'aGVsbG8=', mimeType: 'image/jpeg' } },
+    )
+    expect(response.image).toEqual({
+      used: true,
+      tokens: 8,
+      reason: 'image/jpeg',
+    })
+  })
+
+  it('rejects an empty screenshot before spawning the service', async () => {
+    const client = new OpenJevClient({ command: ['/definitely/missing'] })
+    clients.push(client)
+    await expect(
+      client.predict(
+        { page: { text: 'page' } },
+        { operation: questions.operation },
+        { image: { data: '', mimeType: 'image/png' } },
+      ),
+    ).rejects.toThrow('image data must be nonempty')
+  })
+
   it('rejects responses missing a requested answer', async () => {
     const script =
       "import json,sys; r=json.loads(sys.stdin.readline()); print(json.dumps({'request_id':r['request_id'],'answers':{'operation':{'choice':'CLICK','probabilities':{'CLICK':1,'DONE':0}}},'usage':{'input_tokens':1}}), flush=True)"

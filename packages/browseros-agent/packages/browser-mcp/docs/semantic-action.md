@@ -1,6 +1,6 @@
 # `semantic_action`
 
-`semantic_action` uses local OpenJev browser checkpoint to choose and optionally execute browser operations from fresh accessibility snapshots.
+`semantic_action` uses local OpenJev browser checkpoint (Qwen3.5 NLI) to choose and optionally execute browser operations from fresh accessibility snapshots plus a viewport screenshot.
 
 ## Setup
 
@@ -11,6 +11,8 @@ Install pinned runtime into preferred Python environment:
 ```
 
 Interpreter discovery: `BROWSEROS_OPENJEV_PYTHON`, nearest BrowserOS `.venv`/`venv`, `~/Development/v_env`, then `python3`. Optional `BROWSEROS_OPENJEV_DEVICE` selects Torch device. Optional `BROWSEROS_OPENJEV_SUBFOLDER` selects model variant (e.g., `qwen3.5-0.8b-nli-v5`, `qwen3.5-2b-nli-v5`, `qwen3.5-4b-nli-v5`). First request downloads pinned `AlexWortega/openjev` checkpoint (size varies by variant).
+
+Screenshot knobs: `BROWSEROS_OPENJEV_IMAGE_MAX_PIXELS` (default `401408`, ≈400–512 image tokens) caps screenshot resolution; `BROWSEROS_OPENJEV_IMAGE_BATCH_SIZE` (default `16`) caps premise/hypothesis pairs per forward pass when an image is attached; `BROWSEROS_OPENJEV_PROCESSOR_REPO` (default `Qwen/Qwen3.5-2B`) supplies the Qwen image processor when the NLI subfolder ships none.
 
 ## Input
 
@@ -26,8 +28,11 @@ Interpreter discovery: `BROWSEROS_OPENJEV_PYTHON`, nearest BrowserOS `.venv`/`ve
     targetRef?: string
     result?: string
   }>
+  screenshot?: boolean    // default true
 }
 ```
+
+With `screenshot` on, every decision attaches a fresh 1024x768-bounded JPEG of the viewport. Result `screenshot` reports `{ used, tokens?, reason? }`. Capture failures and checkpoints whose classification head cannot take `pixel_values` fall back to text-only scoring, and the summary says why.
 
 OpenJev cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before that text/select step mutates the page.
 
@@ -51,10 +56,10 @@ OpenJev cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEX
 
 ## Architecture
 
-1. Capture fresh accessibility snapshot and BrowserOS refs.
+1. Capture fresh accessibility snapshot and BrowserOS refs, plus a viewport JPEG.
 2. Filter goal-relevant page text to 1,500 characters.
 3. Build OpenJev choice questions for operation and each available target kind, with up to 64 target criteria.
-4. Send one request to persistent `openjev_service.py` subprocess.
+4. Send one request (with base64 `image`) to persistent `openjev_service.py` subprocess. Service runs screenshot through the Qwen image processor, prefixes each premise with `<|vision_start|><|image_pad|>…<|vision_end|>`, and passes `pixel_values`/`image_grid_thw` to the model.
 5. Validate answer IDs and probability distributions.
 6. Multiply operation and target entailment probabilities for effective confidence.
 7. Execute safe BrowserOS input primitive, settle, and repeat.

@@ -1,6 +1,6 @@
 # Local OpenJev semantic actions
 
-The `semantic_action` browser MCP tool uses OpenJev's browser-tuned checkpoint to choose the next operation and target from a fresh BrowserOS accessibility snapshot. It can execute a bounded snapshot-predict-act loop or return one advisory decision with `execute: false`.
+The `semantic_action` browser MCP tool uses OpenJev's browser-tuned checkpoint to choose the next operation and target from a fresh BrowserOS accessibility snapshot and viewport screenshot (the Qwen3.5 checkpoint is multimodal). It can execute a bounded snapshot-predict-act loop or return one advisory decision with `execute: false`.
 
 ## Setup
 
@@ -23,6 +23,7 @@ First request downloads `AlexWortega/openjev` checkpoint `qwen3.5-2b-nli-v5` at 
 ## Behavior
 
 - State contains sanitized URL, recent actions, and goal-relevant page characters.
+- A viewport JPEG rides along as `image` unless the caller passes `screenshot: false`. Image tokens are prepended to every premise; the text budget (512 tokens) is unchanged. If the checkpoint's classification class does not accept `pixel_values`, or the goal is so long that truncation would cut into image tokens, the service scores text-only and reports why.
 - Element descriptions live in OpenJev choice criteria, matching NLI cross-encoder format.
 - One inference evaluates operation and target questions together via NLI entailment scoring.
 - Effective confidence is operation entailment probability multiplied by target entailment probability.
@@ -35,16 +36,16 @@ First request downloads `AlexWortega/openjev` checkpoint `qwen3.5-2b-nli-v5` at 
 Request:
 
 ```json
-{"request_id":"request-1","state":{"page":{"url":"https://example.com","text":"..."}},"questions":{"operation":{"type":"choice","instructions":{"goal":"Submit form","rules":"..."},"criteria":{"CLICK":"Click a visible control","DONE":"Goal satisfied"}}}}
+{"request_id":"request-1","state":{"page":{"url":"https://example.com","text":"..."}},"questions":{"operation":{"type":"choice","instructions":{"goal":"Submit form","rules":"..."},"criteria":{"CLICK":"Click a visible control","DONE":"Goal satisfied"}}},"image":{"data":"<base64>","mime_type":"image/jpeg"}}
 ```
 
 Response:
 
 ```json
-{"request_id":"request-1","answers":{"operation":{"type":"choice","choice":"CLICK","probabilities":{"CLICK":0.8,"DONE":0.2}}}}
+{"request_id":"request-1","answers":{"operation":{"type":"choice","choice":"CLICK","probabilities":{"CLICK":0.8,"DONE":0.2}}},"image":{"used":true,"tokens":391}}
 ```
 
-Stdout is protocol-only. Diagnostics go to stderr.
+`image` is optional in both directions; `image.used: false` comes with a `reason`. Stdout is protocol-only. Diagnostics go to stderr.
 
 ## Tests
 

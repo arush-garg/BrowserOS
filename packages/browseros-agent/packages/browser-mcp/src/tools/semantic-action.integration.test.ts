@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { RefMap } from '@browseros/browser-core/core/snapshot/refs'
 import { executeTool } from './framework'
-import type { OpenJevAnswer, OpenJevQuestions } from './openjev-client'
+import type {
+  OpenJevAnswer,
+  OpenJevImageReport,
+  OpenJevPredictOptions,
+  OpenJevQuestions,
+} from './openjev-client'
 import { setOpenJevClientForTests } from './openjev-client'
 import { semantic_action } from './semantic-action'
 
@@ -15,10 +20,19 @@ function oneHot(ids: string[], winner: string): Record<string, number> {
 
 type Choice = { operation: string; targetRef?: string }
 
-function installClient(choices: Choice[]): void {
+function installClient(
+  choices: Choice[],
+  imageReport: OpenJevImageReport = { used: true, tokens: 256 },
+): OpenJevPredictOptions[] {
   let call = 0
+  const calls: OpenJevPredictOptions[] = []
   const client = {
-    predict: async (_state: unknown, questions: OpenJevQuestions) => {
+    predict: async (
+      _state: unknown,
+      questions: OpenJevQuestions,
+      options: OpenJevPredictOptions = {},
+    ) => {
+      calls.push(options)
       const choice = choices[Math.min(call, choices.length - 1)]
       if (!choice) throw new Error('scripted OpenJev client needs a choice')
       call += 1
@@ -39,11 +53,16 @@ function installClient(choices: Choice[]): void {
           return [id, answer]
         }),
       )
-      return { answers, usage: { input_tokens: 10, output_tokens: 0 } }
+      return {
+        answers,
+        usage: { input_tokens: 10, output_tokens: 0 },
+        ...(options.image && { image: imageReport }),
+      }
     },
     close: () => {},
   }
   setOpenJevClientForTests(client as never)
+  return calls
 }
 
 interface MockPage {
@@ -89,7 +108,10 @@ function oneSelect(): MockPage {
 
 type Action = [string, ...string[]]
 
-function mockSession(page: MockPage): {
+function mockSession(
+  page: MockPage,
+  { screenshotFails = false }: { screenshotFails?: boolean } = {},
+): {
   session: BrowserSession
   actions: Action[]
 } {
@@ -114,8 +136,22 @@ function mockSession(page: MockPage): {
           Runtime: {
             evaluate: async () => ({ result: { value: 'complete:2' } }),
           },
+          Page: {
+            getLayoutMetrics: async () => ({
+              cssLayoutViewport: {
+                pageX: 0,
+                pageY: 0,
+                clientWidth: 1280,
+                clientHeight: 800,
+              },
+            }),
+          },
         },
       }),
+    },
+    screenshot: async () => {
+      if (screenshotFails) throw new Error('target closed')
+      return { data: 'c2NyZWVu', mimeType: 'image/jpeg', annotations: [] }
     },
     input: () => input,
     observe: () => ({
@@ -257,5 +293,79 @@ describe('semantic_action MCP handler with Laya', () => {
     expect(actions).toEqual([['click', 'e1']])
     const steps = (result.structuredContent as { steps: unknown[] }).steps
     expect(steps).toHaveLength(2)
+  })
+
+  it('attaches a viewport screenshot to every decision by default', async () => {
+    const calls = installClient([
+      { operation: 'CLICK', targetRef: 'e1' },
+      { operation: 'DONE' },
+    ])
+    const { session } = mockSession(twoButtons())
+    const result = await executeTool(
+      semantic_action,
+      { page: 1, goal: 'Click First' },
+      { session, signal: undefined },
+    )
+    expect(calls).toHaveLength(2)
+    for (const options of calls)
+      expect(options.image).toEqual({
+        data: 'c2NyZWVu',
+        mimeType: 'image/jpeg',
+      })
+    expect(result.structuredContent).toMatchObject({
+      status: 'done',
+      screenshot: { used: true, tokens: 256 },
+    })
+  })
+
+  it('scores text-only when screenshot is false', async () => {
+    const calls = installClient([{ operation: 'DONE' }])
+    const { session } = mockSession(twoButtons())
+    const result = await executeTool(
+      semantic_action,
+      { page: 1, goal: 'Done', screenshot: false, execute: false },
+      { session, signal: undefined },
+    )
+    expect(calls[0]?.image).toBeUndefined()
+    expect(result.structuredContent).not.toHaveProperty('screenshot')
+  })
+
+  it('falls back to text-only and says why when capture fails', async () => {
+    const calls = installClient([{ operation: 'DONE' }])
+    const { session } = mockSession(twoButtons(), { screenshotFails: true })
+    const result = await executeTool(
+      semantic_action,
+      { page: 1, goal: 'Done' },
+      { session, signal: undefined },
+    )
+    expect(calls[0]?.image).toBeUndefined()
+    expect(result.structuredContent).toMatchObject({
+      status: 'done',
+      screenshot: {
+        used: false,
+        reason: 'screenshot capture failed: target closed',
+      },
+    })
+    const text = result.content.find((item) => item.type === 'text')
+    expect(text && 'text' in text ? text.text : '').toContain(
+      'Screenshot not used (text-only decision)',
+    )
+  })
+
+  it('surfaces when the checkpoint cannot consume the screenshot', async () => {
+    installClient([{ operation: 'DONE' }], {
+      used: false,
+      reason:
+        'Qwen3_5ForSequenceClassification.forward does not accept pixel_values/image_grid_thw',
+    })
+    const { session } = mockSession(twoButtons())
+    const result = await executeTool(
+      semantic_action,
+      { page: 1, goal: 'Done', execute: false },
+      { session, signal: undefined },
+    )
+    expect(result.structuredContent).toMatchObject({
+      screenshot: { used: false },
+    })
   })
 })
