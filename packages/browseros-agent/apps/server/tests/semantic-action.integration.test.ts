@@ -67,6 +67,7 @@ describe('semantic_action integration test', () => {
       name: 'tabs',
       arguments: { action: 'list' },
     })
+    console.log('tabsResult:', JSON.stringify(tabsResult, null, 2))
     const pageMatch = JSON.stringify(tabsResult).match(/\[(\d+)\]/)
     assert.ok(pageMatch?.[1], 'tabs should return a page id')
 
@@ -82,6 +83,7 @@ describe('semantic_action integration test', () => {
       undefined,
       { timeout: 180000 },
     )
+    console.log('semanticResult:', JSON.stringify(semanticResult, null, 2))
     assert.equal(semanticResult.isError, undefined)
     const text = semanticResult.content.find((item) => item.type === 'text')
     assert.ok(text && 'text' in text, 'semantic_action should return text')

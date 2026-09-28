@@ -177,6 +177,8 @@ export async function spawnServer(config: ServerConfig): Promise<ServerState> {
         ...globalThis.process.env,
         NODE_ENV: 'test',
         BROWSEROS_USE_MOCK_LLM: 'true',
+        BROWSEROS_OPENJEV_SUBFOLDER: 'qwen3.5-2b-nli-v5',
+        BROWSEROS_OPENJEV_PYTHON: '/Users/ag/Development/v_env/bin/python',
       },
     },
   )
