@@ -7,10 +7,20 @@ import {
 import { ChatHeader } from '@/screens/sidepanel/index/ChatHeader'
 
 const ChatLayoutContent: FC = () => {
-  const { selectedProvider, resetConversation, messages, isLoading } =
-    useChatSessionContext()
+  const {
+    providers,
+    selectedProvider,
+    handleSelectProvider,
+    resetConversation,
+    messages,
+    isLoading,
+    isSettled,
+    hasAnyTarget,
+  } = useChatSessionContext()
 
-  if (isLoading || !selectedProvider) {
+  // Only the loading case spins. Having nothing connected is a settled answer,
+  // not a pending one, and the panel has to say so rather than spin forever.
+  if (isLoading || (!selectedProvider && !(isSettled && !hasAnyTarget))) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-background px-6 text-center">
         <div className="space-y-3">
@@ -31,7 +41,9 @@ const ChatLayoutContent: FC = () => {
   return (
     <div className="mx-auto flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <ChatHeader
-        selectedProvider={selectedProvider}
+        selectedProvider={selectedProvider ?? null}
+        onSelectProvider={handleSelectProvider}
+        providers={providers}
         onNewConversation={resetConversation}
         hasMessages={messages.length > 0}
       />

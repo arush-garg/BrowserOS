@@ -16,14 +16,14 @@ const testToolOptions: ToolExecutionOptions = {
 
 /**
  * Creates a minimal ResolvedAgentConfig for testing.
- * Uses provider='browseros' which triggers the mock LLM path
- * when BROWSEROS_USE_MOCK_LLM=true is set.
+ * The mock LLM is selected by BROWSEROS_USE_MOCK_LLM=true, not by provider,
+ * so any real provider id works here.
  */
 function createTestConfig(
   overrides?: Partial<ResolvedAgentConfig>,
 ): ResolvedAgentConfig {
   return {
-    provider: 'browseros',
+    provider: 'openai',
     model: 'browseros-test-mock',
     apiKey: 'test-key',
     conversationId: 'test-conversation',
@@ -112,7 +112,7 @@ describe('Subagent Tools', () => {
   it('sync spawn with provider/model override uses session defaults when not specified', async () => {
     const { createSubagentSpawnTool } = await import('../subagent')
     const config = createTestConfig({
-      provider: 'browseros',
+      provider: 'openai',
       model: 'browseros-test-mock',
     })
     const spawnTool = createSubagentSpawnTool(config)

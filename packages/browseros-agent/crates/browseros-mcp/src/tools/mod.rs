@@ -50,6 +50,10 @@ fn open_world_annotations() -> ToolAnnotations {
     ToolAnnotations::new().open_world(true)
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn def<T>(
     name: &'static str,
     description: &'static str,
