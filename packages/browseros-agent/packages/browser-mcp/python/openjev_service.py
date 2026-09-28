@@ -24,6 +24,7 @@ MAX_STATE_CHARS = 50_000
 MAX_QUESTIONS = 8
 MAX_OPTIONS = 64
 TEXT_MAX_TOKENS = 512
+MAX_GOAL_CHARS = 600
 # Screenshots are downscaled to this pixel budget before the Qwen image processor
 # sees them. Every premise/hypothesis pair carries its own copy of the image
 # tokens, so this bounds both latency and memory (401_408 px ≈ 400-512 image
@@ -319,8 +320,22 @@ def _build_premise(state: str | dict[str, Any] | list[Any]) -> str:
     return str(state)
 
 
+def _entailment_index(agent: Any) -> int:
+    # OpenJev NLI checkpoints order labels contradiction/entailment/neutral, so
+    # the entailment column must come from the config rather than position 0.
+    label2id = getattr(getattr(agent, "config", None), "label2id", None) or {}
+    for label, index in label2id.items():
+        if str(label).lower() == "entailment":
+            return int(index)
+    return 0
+
+
 def _hypothesis_from_criterion(criterion: str, description: str, context: str = "") -> str:
     """Convert a criterion (operation or target) to an NLI hypothesis."""
+    # Every hypothesis repeats the goal; an uncapped goal crowds the
+    # criterion itself out of the pair and flattens every option's score.
+    if len(context) > MAX_GOAL_CHARS:
+        context = f"{context[: MAX_GOAL_CHARS - 1]}…"
     return f"{context} {criterion}: {description}".strip()
 
 
@@ -354,7 +369,9 @@ def _score_pairs(
                 hypotheses[offset : offset + batch_size],
                 return_tensors="pt",
                 padding=True,
-                truncation=True,
+                # Trim page text, never the hypothesis: it carries the option
+                # being scored. Image tokens lead the premise and survive.
+                truncation="only_first",
                 max_length=max_length,
             )
             if visual is not None:
@@ -432,14 +449,11 @@ def predict(
     if probs is None:
         probs = _score_pairs(agent, tokenizer, premises, hypotheses)
 
-    # Laya expects choice probabilities. Map NLI: entailment=positive, contradiction=negative, neutral=neutral
-    # For operation choice: higher entailment = more likely correct operation
-    # For target choice: higher entailment = better target match
+    # Each criterion is scored by its entailment probability.
+    entailment = _entailment_index(agent)
     answers = {}
     for (question_id, criterion_key), prob in zip(pair_meta, probs):
-        # prob[0]=entailment, prob[1]=neutral, prob[2]=contradiction (verify label order)
-        # Use entailment probability as the "choice" score
-        entailment_score = float(prob[0])
+        entailment_score = float(prob[entailment])
         
         if question_id not in answers:
             answers[question_id] = {"type": "choice", "choice": "", "probabilities": {}}

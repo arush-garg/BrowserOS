@@ -168,6 +168,30 @@ class OpenJevServiceTests(unittest.TestCase):
         self.assertAlmostEqual(answer["probabilities"]["WAIT"], 0.25)
         self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.75)
 
+    def test_predict_reads_entailment_column_from_label2id(self) -> None:
+        questions = {
+            "operation": {
+                "type": "choice",
+                "instructions": {"goal": "Finish"},
+                "criteria": {"WAIT": "wait", "DONE": "done"},
+            }
+        }
+        # OpenJev checkpoints: contradiction=0, entailment=1, neutral=2.
+        agent = SimpleNamespace(
+            config=SimpleNamespace(
+                label2id={"contradiction": 0, "entailment": 1, "neutral": 2}
+            )
+        )
+        scores = [[0.9, 0.05, 0.05], [0.1, 0.8, 0.1]]
+        with patch.object(SERVICE, "load", return_value=(agent, "tokenizer")), patch.object(
+            SERVICE, "_score_pairs", return_value=scores
+        ):
+            result = SERVICE.predict({"page": {"text": "page"}}, questions)
+
+        answer = result["answers"]["operation"]
+        self.assertEqual(answer["choice"], "DONE")
+        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.8 / 0.85)
+
     def test_errors_stay_in_protocol_and_diagnostics_use_stderr(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()

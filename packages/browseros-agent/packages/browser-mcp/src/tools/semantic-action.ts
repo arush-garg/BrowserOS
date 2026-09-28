@@ -898,7 +898,9 @@ function supportsSelect(role: string): boolean {
 function sanitizeUrl(value: string): string {
   try {
     const url = new URL(value)
-    return `${url.origin}${url.pathname}`
+    // data:/blob: URLs have no origin and carry the whole document in the path.
+    if (url.origin === 'null') return `${url.protocol}…`
+    return truncate(`${url.origin}${url.pathname}`, 500)
   } catch {
     return truncate(value.split(/[?#]/, 1)[0] ?? '', 500)
   }
