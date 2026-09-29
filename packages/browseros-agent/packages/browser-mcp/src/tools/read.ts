@@ -8,12 +8,21 @@ import { wrapUntrusted } from './trust-boundary'
 function expressionFor(
   format: 'markdown' | 'text' | 'links',
   selector?: string,
+  project?: Array<'text' | 'href'>,
 ): string {
   if (format === 'markdown') return buildContentMarkdownExpression({ selector })
   const root = selector
     ? `document.querySelector(${JSON.stringify(selector)})`
     : 'document.body'
   if (format === 'text') return `((${root})?.innerText ?? '')`
+  if (project?.length) {
+    const fields = project
+      .map((field) =>
+        field === 'href' ? 'href:a.href' : "text:(a.textContent||'').trim()",
+      )
+      .join(',')
+    return `JSON.stringify([...(${root}?.querySelectorAll('a[href]') ?? [])].map(function(a){return {${fields}}}))`
+  }
   return `[...(${root}?.querySelectorAll('a[href]') ?? [])].map(function(a){return '[' + (a.textContent||'').trim() + '](' + a.href + ')'}).join('\\n')`
 }
 
@@ -38,6 +47,24 @@ export const read = defineTool({
         .boolean()
         .optional()
         .describe('For markdown reads, include image references.'),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe('Character offset for paginated extraction.'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100_000)
+        .optional()
+        .describe('Maximum characters returned inline for this page.'),
+      project: z
+        .array(z.enum(['text', 'href']))
+        .max(2)
+        .optional()
+        .describe('For format=links, reserved projection fields: text, href.'),
     })
     .strict(),
   annotations: { title: 'Read page content', readOnlyHint: true },
@@ -51,7 +78,7 @@ export const read = defineTool({
             includeLinks: args.includeLinks,
             includeImages: args.includeImages,
           })
-        : expressionFor(args.format, args.selector)
+        : expressionFor(args.format, args.selector, args.project)
     const result = await session.Runtime.evaluate({
       expression: code,
       returnByValue: true,
@@ -67,12 +94,20 @@ export const read = defineTool({
 
     const text = (result.result?.value as string) ?? ''
     const origin = ctx.session.pages.getInfo(args.page)?.url ?? 'unknown'
+    const pageLimit = args.limit ?? TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS
+    const pageText = text.slice(args.offset, args.offset + pageLimit)
+    const nextOffset =
+      args.offset + pageText.length < text.length
+        ? args.offset + pageText.length
+        : undefined
 
-    if (text.length <= TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS) {
+    if (text.length <= pageLimit && args.offset === 0) {
       return textResult(wrapUntrusted(text || '(empty)', origin), {
         page: args.page,
         format: args.format,
         contentLength: text.length,
+        offset: 0,
+        nextOffset,
         writtenToFile: false,
       })
     }
@@ -82,17 +117,22 @@ export const read = defineTool({
       extension: args.format === 'markdown' ? 'md' : 'txt',
       content: wrapUntrusted(text, origin),
     })
-    const truncated = text.slice(0, TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS)
+    const truncated = pageText
     return textResult(
       [
-        wrapUntrusted(truncated, origin),
-        `Content truncated at ${TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full content (${text.length} chars) saved to: ${path}`,
+        wrapUntrusted(truncated || '(empty page)', origin),
+        nextOffset !== undefined
+          ? `Content page ${args.offset}-${args.offset + truncated.length} of ${text.length} chars. Continue with offset=${nextOffset}. Full content saved to: ${path}`
+          : `Content page ${args.offset}-${args.offset + truncated.length} of ${text.length} chars. Full content saved to: ${path}`,
       ].join('\n\n'),
       {
         page: args.page,
         format: args.format,
         path,
         contentLength: text.length,
+        offset: args.offset,
+        returnedLength: truncated.length,
+        nextOffset,
         writtenToFile: true,
       },
     )
