@@ -391,7 +391,7 @@ def _score_pairs(
                     ).int()
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 logits = agent(**inputs).logits  # [batch, 3] NLI classes
                 chunks.append(torch.softmax(logits.float(), dim=-1).cpu().numpy())
     return np.concatenate(chunks)
@@ -506,6 +506,21 @@ def handle_line(line: str) -> None:
 
 
 def stop(_signum: int, _frame: Any) -> None:
+    # Release accelerator allocations before the process exits. This matters on
+    # macOS where MPS allocations can otherwise remain resident briefly.
+    global _agent, _tokenizer, _vision
+    try:
+        import torch
+
+        if _agent is not None:
+            _agent.to("cpu")
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:  # noqa: BLE001 - shutdown must always complete
+        pass
+    _agent = None
+    _tokenizer = None
+    _vision = None
     raise SystemExit(0)
 
 

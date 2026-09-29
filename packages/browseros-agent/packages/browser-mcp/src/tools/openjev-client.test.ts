@@ -115,6 +115,44 @@ describe('OpenJevClient', () => {
     ).rejects.toThrow()
   })
 
+  it('aborting one request does not tear down the warm shared service', async () => {
+    const script =
+      "import json,sys,time; r=json.loads(sys.stdin.readline()); time.sleep(.05); print(json.dumps({'request_id':r['request_id'],'answers':{'operation':{'choice':'CLICK','probabilities':{'CLICK':1}}}}), flush=True); r=json.loads(sys.stdin.readline()); print(json.dumps({'request_id':r['request_id'],'answers':{'operation':{'choice':'CLICK','probabilities':{'CLICK':1}}}}), flush=True)"
+    const client = new OpenJevClient({ command: ['python3', '-c', script] })
+    clients.push(client)
+    const controller = new AbortController()
+    const first = client.predict(
+      { page: { text: 'page' } },
+      { operation: questions.operation },
+      { signal: controller.signal },
+    )
+    controller.abort()
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(
+      client.predict(
+        { page: { text: 'page' } },
+        { operation: questions.operation },
+      ),
+    ).resolves.toBeDefined()
+  })
+
+  it('reports typed diagnostics when the service exits', async () => {
+    const client = new OpenJevClient({
+      command: ['python3', '-c', 'import os; os._exit(137)'],
+    })
+    clients.push(client)
+    await expect(
+      client.predict(
+        { page: { text: 'page' } },
+        { operation: questions.operation },
+      ),
+    ).rejects.toMatchObject({
+      name: 'OpenJevError',
+      code: 'service_exited',
+      details: { exitCode: 137, retryable: false },
+    })
+  })
+
   it('accepts one criterion and object or array instructions', () => {
     expect(() =>
       validateRequest(

@@ -90,6 +90,29 @@ interface OpenJevClientOptions {
   env?: Record<string, string | undefined>
 }
 
+export type OpenJevErrorCode =
+  | 'startup_failed'
+  | 'service_exited'
+  | 'service_unavailable'
+  | 'request_timeout'
+  | 'request_aborted'
+  | 'protocol_error'
+
+export class OpenJevError extends Error {
+  constructor(
+    message: string,
+    readonly code: OpenJevErrorCode,
+    readonly details: {
+      exitCode?: number
+      stderr?: string
+      retryable?: boolean
+    } = {},
+  ) {
+    super(message)
+    this.name = 'OpenJevError'
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 120_000
 const MIN_CHOICE_CRITERIA = 1
 const MAX_CHOICE_CRITERIA = 64
@@ -101,6 +124,10 @@ export class OpenJevClient {
   private nextRequestId = 1
   private readonly pending = new Map<string, PendingRequest>()
   private stderrTask?: Promise<string>
+  private consecutiveFailures = 0
+  private circuitOpenedAt = 0
+  private static readonly MAX_CONSECUTIVE_FAILURES = 3
+  private static readonly CIRCUIT_COOLDOWN_MS = 30_000
 
   constructor(private readonly options: OpenJevClientOptions = {}) {}
 
@@ -147,7 +174,12 @@ export class OpenJevClient {
     signal?: AbortSignal,
   ): Promise<T> {
     if (signal?.aborted) return Promise.reject(abortError(signal.reason))
-    const child = this.ensureProcess()
+    let child: ReturnType<typeof Bun.spawn>
+    try {
+      child = this.ensureProcess()
+    } catch (error) {
+      return Promise.reject(asError(error))
+    }
     const requestId = `request-${this.nextRequestId++}`
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
@@ -155,12 +187,13 @@ export class OpenJevClient {
       const onAbort = () => {
         const error = abortError(signal?.reason)
         this.rejectRequest(requestId, error)
-        this.resetProcess(error)
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       const timer = setTimeout(() => {
-        const error = new Error(
+        const error = new OpenJevError(
           `OpenJev request timed out after ${timeoutMs}ms`,
+          'request_timeout',
+          { retryable: true },
         )
         this.rejectRequest(requestId, error)
         this.resetProcess(error)
@@ -194,6 +227,24 @@ export class OpenJevClient {
   }
 
   private ensureProcess(): ReturnType<typeof Bun.spawn> {
+    const now = Date.now()
+    if (
+      this.consecutiveFailures >= OpenJevClient.MAX_CONSECUTIVE_FAILURES &&
+      now - this.circuitOpenedAt < OpenJevClient.CIRCUIT_COOLDOWN_MS
+    ) {
+      throw new OpenJevError(
+        'OpenJev service circuit breaker is open',
+        'service_unavailable',
+        { retryable: true },
+      )
+    }
+    if (
+      this.circuitOpenedAt &&
+      now - this.circuitOpenedAt >= OpenJevClient.CIRCUIT_COOLDOWN_MS
+    ) {
+      this.consecutiveFailures = 0
+      this.circuitOpenedAt = 0
+    }
     if (this.process && this.process.exitCode === null) return this.process
     const env = Object.fromEntries(
       Object.entries({ ...process.env, ...this.options.env }).filter(
@@ -213,11 +264,15 @@ export class OpenJevClient {
     void child.exited.then(async (code) => {
       if (this.process !== child) return
       const stderr = (await this.stderrTask?.catch(() => ''))?.trim()
-      this.resetProcess(
-        new Error(
-          `OpenJev service exited with code ${code}${stderr ? `: ${stderr.slice(-1_000)}` : ''}`,
-        ),
+      const error = new OpenJevError(
+        `OpenJev service exited with code ${code}${stderr ? `: ${stderr.slice(-1_000)}` : ''}`,
+        'service_exited',
+        { exitCode: code, stderr, retryable: code !== 137 },
       )
+      this.consecutiveFailures += 1
+      if (this.consecutiveFailures >= OpenJevClient.MAX_CONSECUTIVE_FAILURES)
+        this.circuitOpenedAt = Date.now()
+      this.resetProcess(error)
     })
     return child
   }
@@ -253,12 +308,20 @@ export class OpenJevClient {
       response = JSON.parse(line) as ServiceResponse
     } catch {
       this.resetProcess(
-        new Error('OpenJev service emitted invalid JSON on stdout'),
+        new OpenJevError(
+          'OpenJev service emitted invalid JSON on stdout',
+          'protocol_error',
+        ),
       )
       return
     }
     if (!response.request_id) {
-      this.resetProcess(new Error('OpenJev response is missing request_id'))
+      this.resetProcess(
+        new OpenJevError(
+          'OpenJev response is missing request_id',
+          'protocol_error',
+        ),
+      )
       return
     }
     const pending = this.pending.get(response.request_id)
@@ -407,8 +470,10 @@ async function consumeStderr(
 }
 
 function abortError(reason?: unknown): Error {
-  const error = new Error(
+  const error = new OpenJevError(
     typeof reason === 'string' ? reason : 'Operation aborted',
+    'request_aborted',
+    { retryable: false },
   )
   error.name = 'AbortError'
   return error
