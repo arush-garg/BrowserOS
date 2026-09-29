@@ -81,6 +81,7 @@ describe('registerBrowserTools', () => {
       'action',
       'background',
       'field',
+      'owner',
       'page',
       'query',
       'url',
