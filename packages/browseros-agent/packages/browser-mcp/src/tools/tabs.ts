@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
+import { acquirePageLease, getPageLease, releasePageLease } from './page-lease'
 
 export const tabs = defineTool({
   name: 'tabs',
@@ -8,7 +9,16 @@ export const tabs = defineTool({
   input: z
     .object({
       action: z
-        .enum(['list', 'active', 'new', 'close', 'match'])
+        .enum([
+          'list',
+          'active',
+          'new',
+          'close',
+          'match',
+          'acquire',
+          'release',
+          'lease',
+        ])
         .default('list'),
       url: z
         .string()
@@ -18,7 +28,16 @@ export const tabs = defineTool({
         .boolean()
         .default(true)
         .describe('Open without stealing focus for action="new".'),
-      page: z.number().int().optional().describe('Page id for action="close".'),
+      page: z
+        .number()
+        .int()
+        .optional()
+        .describe('Page id for close/acquire/release/lease.'),
+      owner: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('Lease owner id for acquire/release.'),
       field: z
         .enum(['title', 'url', 'content'])
         .optional()
@@ -75,6 +94,42 @@ export const tabs = defineTool({
         }
         await ctx.session.pages.close(args.page)
         return textResult(`closed page ${args.page}`, { page: args.page })
+      }
+      case 'acquire': {
+        if (args.page === undefined || !args.owner)
+          return errorResult('tabs acquire: page and owner are required.')
+        const lease = acquirePageLease(args.page, args.owner)
+        return lease.ok
+          ? textResult(`leased page ${args.page} to ${args.owner}`, {
+              page: args.page,
+              lease,
+            })
+          : errorResult(
+              `tabs acquire: page ${args.page} is already leased by ${lease.owner}.`,
+            )
+      }
+      case 'release': {
+        if (args.page === undefined || !args.owner)
+          return errorResult('tabs release: page and owner are required.')
+        return releasePageLease(args.page, args.owner)
+          ? textResult(`released page ${args.page}`, {
+              page: args.page,
+              owner: args.owner,
+            })
+          : errorResult(
+              `tabs release: ${args.owner} does not own page ${args.page}.`,
+            )
+      }
+      case 'lease': {
+        if (args.page === undefined)
+          return errorResult('tabs lease: page is required.')
+        const lease = getPageLease(args.page)
+        return textResult(
+          lease
+            ? `page ${args.page} leased by ${lease.owner}`
+            : `page ${args.page} is unleased`,
+          { page: args.page, lease: lease ?? null },
+        )
       }
       case 'match': {
         const field = args.field ?? 'title'
