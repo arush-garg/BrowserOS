@@ -3,6 +3,7 @@ import { assert } from './assert'
 import { diff } from './diff'
 import { download } from './download'
 import { evaluate } from './evaluate'
+import { fill_form, inspect_form } from './form'
 import type { ToolDefinition } from './framework'
 import { grep } from './grep'
 import { history } from './history'
@@ -33,6 +34,8 @@ export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   assert,
   download,
   upload,
+  inspect_form,
+  fill_form,
   read,
   grep,
   screenshot,
