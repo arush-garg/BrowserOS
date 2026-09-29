@@ -15,7 +15,14 @@ import {
   type OpenJevQuestions,
   type OpenJevState,
 } from './openjev-client'
-import { awaitPredicate } from './predicate'
+import {
+  awaitPredicate,
+  describePredicate,
+  type Predicate,
+  PredicateError,
+  predicateSchema,
+  validatePredicate,
+} from './predicate'
 import { buildScreenshotClip } from './screenshot'
 import { selectRelevantLines } from './snapshot-relevance'
 
@@ -121,6 +128,7 @@ type LoopStatus =
   | 'uncertain'
   | 'needs_text'
   | 'no_progress'
+  | 'assertion_failed'
   | 'max_steps'
   | 'error'
 
@@ -158,6 +166,17 @@ export const semantic_action = defineTool({
         .describe(
           'When false, return a single advisory decision without acting. Defaults to true (autonomous execution).',
         ),
+      success: predicateSchema
+        .optional()
+        .describe(
+          'Optional explicit postcondition for the complete goal. A model DONE decision is accepted only when this predicate matches; otherwise the loop continues or returns assertion_failed.',
+        ),
+      assertTimeout: z
+        .number()
+        .optional()
+        .describe(
+          'How long, in ms, to wait for `success` after a DONE decision (default 5000, max 60000).',
+        ),
       history: z
         .array(
           z
@@ -175,7 +194,7 @@ export const semantic_action = defineTool({
         .boolean()
         .optional()
         .describe(
-          'Attach a viewport screenshot to every OpenJev decision so the multimodal checkpoint sees the rendered page alongside the snapshot. Defaults to true; set false for text-only scoring.',
+          'Attach a viewport screenshot to every OpenJev decision when visual context is needed. Defaults to false; normal decisions use the accessibility snapshot only.',
         ),
     })
     .strict(),
@@ -186,7 +205,20 @@ export const semantic_action = defineTool({
   },
   handler: async (args, ctx) => {
     const execute = args.execute ?? true
-    const useScreenshot = args.screenshot ?? true
+    const useScreenshot = args.screenshot ?? false
+    const success = args.success as Predicate | undefined
+    const assertTimeout = Math.min(
+      Math.max(0, args.assertTimeout ?? 5_000),
+      60_000,
+    )
+    if (success) {
+      try {
+        validatePredicate(success)
+      } catch (error) {
+        if (error instanceof PredicateError) return errorResult(error.message)
+        throw error
+      }
+    }
     if (!execute) return advise(args, ctx, useScreenshot)
 
     const input = ctx.session.input(args.page)
@@ -243,8 +275,29 @@ export const semantic_action = defineTool({
       finalDecision = decision
 
       if (decision.status === 'done') {
+        if (success) {
+          const { session } = await ctx.session.pages.getSession(args.page)
+          const assertion = await awaitPredicate(session, success, {
+            timeout: assertTimeout,
+            signal: ctx.signal,
+          })
+          if (!assertion.matched) {
+            status = 'assertion_failed'
+            errorNote = `DONE rejected: ${describePredicate(success)} (${assertion.detail})`
+            transcript.push(recordFor(step, decision, errorNote))
+            break
+          }
+          transcript.push(
+            recordFor(
+              step,
+              decision,
+              `goal satisfied; verified ${describePredicate(success)} (${assertion.detail})`,
+            ),
+          )
+        } else {
+          transcript.push(recordFor(step, decision, 'goal satisfied'))
+        }
         status = 'done'
-        transcript.push(recordFor(step, decision, 'goal satisfied'))
         break
       }
       if (decision.status === 'blocked') {
@@ -619,6 +672,8 @@ function loopHeader(
     }
     case 'no_progress':
       return `STOPPED after ${steps} step(s): the same action repeated without changing the page. Inspect a snapshot or refine the goal.`
+    case 'assertion_failed':
+      return `STOPPED after ${steps} step(s): the model reported DONE, but the explicit success assertion did not hold.`
     case 'error':
       return `STOPPED after ${steps} step(s): an operation failed.`
     default:

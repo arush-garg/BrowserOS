@@ -28,11 +28,13 @@ Screenshot knobs: `BROWSEROS_OPENJEV_IMAGE_MAX_PIXELS` (default `401408`, ≈400
     targetRef?: string
     result?: string
   }>
-  screenshot?: boolean    // default true
+  screenshot?: boolean    // default false; enable when visual context is needed
+  success?: Predicate       // optional explicit postcondition for the complete goal. A model DONE decision is accepted only when this predicate matches; otherwise the loop continues or returns assertion_failed.
+  assertTimeout?: number    // How long, in ms, to wait for `success` after a DONE decision (default 5000, max 30000)
 }
 ```
 
-With `screenshot` on, every decision attaches a fresh 1024x768-bounded JPEG of the viewport. Result `screenshot` reports `{ used, tokens?, reason? }`. Capture failures and checkpoints whose classification head cannot take `pixel_values` fall back to text-only scoring, and the summary says why.
+By default, decisions use only the fresh accessibility snapshot and refs. Set `screenshot: true` when the goal depends on rendered visual context; then every decision attaches a fresh 1024x768-bounded JPEG of the viewport. Result `screenshot` reports `{ used, tokens?, reason? }`. Capture failures and checkpoints whose classification head cannot take `pixel_values` fall back to text-only scoring, and the summary says why.
 
 OpenJev cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEXT` or `SELECT`. Without it, tool pauses with `needs_text` before that text/select step mutates the page.
 
@@ -56,10 +58,10 @@ OpenJev cannot generate arbitrary text. Pass `text` when goal may need `TYPE_TEX
 
 ## Architecture
 
-1. Capture fresh accessibility snapshot and BrowserOS refs, plus a viewport JPEG.
+1. Capture a fresh accessibility snapshot and BrowserOS refs. Capture a viewport JPEG only when `screenshot: true`.
 2. Filter goal-relevant page text to 1,500 characters.
 3. Build OpenJev choice questions for operation and each available target kind, with up to 64 target criteria.
-4. Send one request (with base64 `image`) to persistent `openjev_service.py` subprocess. Service runs screenshot through the Qwen image processor, prefixes each premise with `<|vision_start|><|image_pad|>…<|vision_end|>`, and passes `pixel_values`/`image_grid_thw` to the model.
+4. Send one request to the persistent `openjev_service.py` subprocess. When an image is present, the service runs it through the Qwen image processor, prefixes each premise with `<|vision_start|><|image_pad|>…<|vision_end|>`, and passes `pixel_values`/`image_grid_thw` to the model.
 5. Validate answer IDs and probability distributions.
 6. Multiply operation and target entailment probabilities for effective confidence.
 7. Execute safe BrowserOS input primitive, settle, and repeat.

@@ -110,7 +110,10 @@ type Action = [string, ...string[]]
 
 function mockSession(
   page: MockPage,
-  { screenshotFails = false }: { screenshotFails?: boolean } = {},
+  {
+    screenshotFails = false,
+    predicateValue = 'complete:2',
+  }: { screenshotFails?: boolean; predicateValue?: unknown } = {},
 ): {
   session: BrowserSession
   actions: Action[]
@@ -134,7 +137,7 @@ function mockSession(
       getSession: async () => ({
         session: {
           Runtime: {
-            evaluate: async () => ({ result: { value: 'complete:2' } }),
+            evaluate: async () => ({ result: { value: predicateValue } }),
           },
           Page: {
             getLayoutMetrics: async () => ({
@@ -163,6 +166,22 @@ function mockSession(
     }),
   } as unknown as BrowserSession
   return { session, actions }
+}
+
+function resultText(result: { content?: unknown }): string {
+  if (!Array.isArray(result.content)) return ''
+  return result.content
+    .filter(
+      (item): item is { type: 'text'; text: string } =>
+        typeof item === 'object' &&
+        item !== null &&
+        'type' in item &&
+        item.type === 'text' &&
+        'text' in item &&
+        typeof item.text === 'string',
+    )
+    .map((item) => item.text)
+    .join('\n')
 }
 
 describe('semantic_action MCP handler with Laya', () => {
@@ -198,6 +217,45 @@ describe('semantic_action MCP handler with Laya', () => {
     )
     expect(result.structuredContent).toMatchObject({ status: 'done' })
     expect(actions).toEqual([['click', 'e1']])
+  })
+
+  it('accepts DONE only when the explicit success assertion holds', async () => {
+    installClient([{ operation: 'DONE' }])
+    const { session } = mockSession(twoButtons(), { predicateValue: true })
+    const result = await executeTool(
+      semantic_action,
+      {
+        page: 1,
+        goal: 'Finish the task',
+        success: { kind: 'js', value: 'window.taskComplete === true' },
+      },
+      { session, signal: undefined },
+    )
+    expect(result.structuredContent).toMatchObject({ status: 'done' })
+    expect(resultText(result)).toContain(
+      'verified js "window.taskComplete === true"',
+    )
+  })
+
+  it('rejects DONE when the explicit success assertion is false', async () => {
+    installClient([{ operation: 'DONE' }])
+    const { session } = mockSession(twoButtons(), { predicateValue: false })
+    const result = await executeTool(
+      semantic_action,
+      {
+        page: 1,
+        goal: 'Finish the task',
+        success: { kind: 'js', value: 'window.taskComplete === true' },
+        assertTimeout: 1,
+      },
+      { session, signal: undefined },
+    )
+    expect(result.structuredContent).toMatchObject({
+      status: 'assertion_failed',
+    })
+    expect(resultText(result)).toContain(
+      'explicit success assertion did not hold',
+    )
   })
 
   it('fills TYPE_TEXT only from caller-provided text', async () => {
@@ -295,7 +353,19 @@ describe('semantic_action MCP handler with Laya', () => {
     expect(steps).toHaveLength(2)
   })
 
-  it('attaches a viewport screenshot to every decision by default', async () => {
+  it('scores the accessibility snapshot without a screenshot by default', async () => {
+    const calls = installClient([{ operation: 'DONE' }])
+    const { session } = mockSession(twoButtons())
+    const result = await executeTool(
+      semantic_action,
+      { page: 1, goal: 'Done', execute: false },
+      { session, signal: undefined },
+    )
+    expect(calls[0]?.image).toBeUndefined()
+    expect(result.structuredContent).not.toHaveProperty('screenshot')
+  })
+
+  it('attaches a viewport screenshot to every decision when requested', async () => {
     const calls = installClient([
       { operation: 'CLICK', targetRef: 'e1' },
       { operation: 'DONE' },
@@ -303,7 +373,7 @@ describe('semantic_action MCP handler with Laya', () => {
     const { session } = mockSession(twoButtons())
     const result = await executeTool(
       semantic_action,
-      { page: 1, goal: 'Click First' },
+      { page: 1, goal: 'Click First', screenshot: true },
       { session, signal: undefined },
     )
     expect(calls).toHaveLength(2)
@@ -318,24 +388,12 @@ describe('semantic_action MCP handler with Laya', () => {
     })
   })
 
-  it('scores text-only when screenshot is false', async () => {
-    const calls = installClient([{ operation: 'DONE' }])
-    const { session } = mockSession(twoButtons())
-    const result = await executeTool(
-      semantic_action,
-      { page: 1, goal: 'Done', screenshot: false, execute: false },
-      { session, signal: undefined },
-    )
-    expect(calls[0]?.image).toBeUndefined()
-    expect(result.structuredContent).not.toHaveProperty('screenshot')
-  })
-
   it('falls back to text-only and says why when capture fails', async () => {
     const calls = installClient([{ operation: 'DONE' }])
     const { session } = mockSession(twoButtons(), { screenshotFails: true })
     const result = await executeTool(
       semantic_action,
-      { page: 1, goal: 'Done' },
+      { page: 1, goal: 'Done', screenshot: true },
       { session, signal: undefined },
     )
     expect(calls[0]?.image).toBeUndefined()
@@ -361,7 +419,7 @@ describe('semantic_action MCP handler with Laya', () => {
     const { session } = mockSession(twoButtons())
     const result = await executeTool(
       semantic_action,
-      { page: 1, goal: 'Done', execute: false },
+      { page: 1, goal: 'Done', execute: false, screenshot: true },
       { session, signal: undefined },
     )
     expect(result.structuredContent).toMatchObject({
