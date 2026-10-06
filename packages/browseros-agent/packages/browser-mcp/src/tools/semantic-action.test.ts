@@ -72,32 +72,44 @@ describe('semantic action Laya request construction', () => {
       [],
     )
 
-    expect(Object.keys(request.questions)).toEqual([
-      'operation',
-      'click_target',
-      'type_text_target',
-    ])
-    expect(Object.keys(request.questions.operation?.criteria)).toEqual([
-      'CLICK',
-      'TYPE_TEXT',
+    expect(Object.keys(request.questions)).toEqual(['action'])
+    expect(Object.keys(request.questions.action?.criteria)).toEqual([
+      `CLICK:${snapshot.button}`,
+      `TYPE_TEXT:${snapshot.textbox}`,
+      `TYPE_TEXT:${snapshot.secondTextbox}`,
       'SCROLL_UP',
       'SCROLL_DOWN',
       'WAIT',
       'DONE',
       'BLOCKED',
     ])
-    expect(Object.keys(request.questions.click_target?.criteria)).toEqual([
-      snapshot.button,
-    ])
-    expect(Object.keys(request.questions.type_text_target?.criteria)).toEqual([
-      snapshot.textbox,
-      snapshot.secondTextbox,
+    expect(request.actions).toEqual([
+      expect.objectContaining({
+        id: `CLICK:${snapshot.button}`,
+        operation: 'CLICK',
+        targetRef: snapshot.button,
+      }),
+      expect.objectContaining({
+        id: `TYPE_TEXT:${snapshot.textbox}`,
+        operation: 'TYPE_TEXT',
+        targetRef: snapshot.textbox,
+      }),
+      expect.objectContaining({
+        id: `TYPE_TEXT:${snapshot.secondTextbox}`,
+        operation: 'TYPE_TEXT',
+        targetRef: snapshot.secondTextbox,
+      }),
+      expect.objectContaining({ id: 'SCROLL_UP' }),
+      expect.objectContaining({ id: 'SCROLL_DOWN' }),
+      expect.objectContaining({ id: 'WAIT' }),
+      expect.objectContaining({ id: 'DONE' }),
+      expect.objectContaining({ id: 'BLOCKED' }),
     ])
     expect(request.state).toMatchObject({
       page: { url: 'https://example.com/flights' },
       recent_actions: [],
     })
-    expect(JSON.stringify(request.questions.operation?.instructions)).toContain(
+    expect(JSON.stringify(request.questions.action?.instructions)).toContain(
       'Search flights from SFO to LHR',
     )
   })
@@ -117,8 +129,8 @@ describe('semantic action Laya request construction', () => {
       candidatesFromSnapshot(text, refs.byRef),
       [],
     )
-    expect(Object.keys(request.questions.click_target?.criteria ?? {})).toEqual(
-      [customButton],
+    expect(Object.keys(request.questions.action?.criteria ?? {})).toContain(
+      `CLICK:${customButton}`,
     )
   })
 
@@ -137,15 +149,12 @@ describe('semantic action Laya request construction', () => {
       candidatesFromSnapshot(text, refs.byRef),
       [],
     )
-    expect(
-      Object.keys(request.questions.type_text_target?.criteria ?? {}),
-    ).toEqual([combo])
-    expect(
-      Object.keys(request.questions.select_target?.criteria ?? {}),
-    ).toEqual([combo])
+    const actionIds = Object.keys(request.questions.action?.criteria ?? {})
+    expect(actionIds).toContain(`TYPE_TEXT:${combo}`)
+    expect(actionIds).toContain(`SELECT:${combo}`)
   })
 
-  it('caps target choices at 64 while prioritizing goal-relevant candidates', () => {
+  it('caps joint action choices at 64 while prioritizing goal-relevant targets', () => {
     const candidates = Array.from({ length: 70 }, (_, index) => ({
       ref: `e${index + 1}`,
       role: 'button',
@@ -162,9 +171,9 @@ describe('semantic action Laya request construction', () => {
       candidates,
       [],
     )
-    const refs = Object.keys(request.questions.click_target?.criteria)
-    expect(refs).toHaveLength(64)
-    expect(refs[0]).toBe('e70')
+    const actionIds = Object.keys(request.questions.action?.criteria ?? {})
+    expect(actionIds).toHaveLength(64)
+    expect(actionIds[0]).toBe('CLICK:e70')
   })
 
   it('budgets page text for the browser checkpoint context', () => {
@@ -190,120 +199,141 @@ describe('semantic action Laya answer validation', () => {
       recent_actions: [],
     },
     questions: {
-      operation: {
+      action: {
         type: 'choice' as const,
         instructions: { goal: 'click second' },
-        criteria: { CLICK: 'click', DONE: 'done' },
-      },
-      click_target: {
-        type: 'choice' as const,
-        instructions: { goal: 'click second', operation: 'CLICK' },
-        criteria: { e1: 'first', e2: 'second' },
+        criteria: {
+          'CLICK:e1': 'click first',
+          'CLICK:e2': 'click second',
+          DONE: 'done',
+        },
       },
     },
+    actions: [
+      {
+        id: 'CLICK:e1',
+        operation: 'CLICK' as const,
+        targetRef: 'e1',
+        description: 'click first',
+      },
+      {
+        id: 'CLICK:e2',
+        operation: 'CLICK' as const,
+        targetRef: 'e2',
+        description: 'click second',
+      },
+      { id: 'DONE', operation: 'DONE' as const, description: 'done' },
+    ],
   }
 
-  it('uses selected target and multiplies operation and target confidence', () => {
+  it('uses one joint action distribution without multiplying separate confidences', () => {
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
-        choice: 'CLICK',
-        probabilities: { CLICK: 0.8, DONE: 0.2 },
-      },
-      click_target: {
-        type: 'choice',
-        choice: 'e2',
-        probabilities: { e1: 0.25, e2: 0.75 },
+        choice: 'CLICK:e2',
+        probabilities: { 'CLICK:e1': 0.1, 'CLICK:e2': 0.7, DONE: 0.2 },
       },
     }
-    const decision = decide(request.questions, answers)
+    const decision = decide(request, answers)
     expect(decision).toMatchObject({
       status: 'ready',
       operation: 'CLICK',
       targetRef: 'e2',
-      operationConfidence: 0.8,
-      targetConfidence: 0.75,
+      operationConfidence: 0.7,
+      effectiveConfidence: 0.7,
     })
-    expect(decision.effectiveConfidence).toBeCloseTo(0.6)
   })
 
-  it('abstains when joint confidence is low', () => {
+  it('abstains when joint action confidence is low', () => {
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
-        choice: 'CLICK',
-        probabilities: { CLICK: 0.6, DONE: 0.4 },
-      },
-      click_target: {
-        type: 'choice',
-        choice: 'e1',
-        probabilities: { e1: 0.5, e2: 0.5 },
+        choice: 'CLICK:e1',
+        probabilities: { 'CLICK:e1': 0.35, 'CLICK:e2': 0.35, DONE: 0.3 },
       },
     }
-    expect(decide(request.questions, answers).status).toBe('uncertain')
+    expect(decide(request, answers).status).toBe('uncertain')
   })
 
   it('treats low-confidence BLOCKED as uncertain', () => {
-    const questions = {
-      operation: {
-        type: 'choice' as const,
-        instructions: { goal: 'continue' },
-        criteria: { BLOCKED: 'blocked', WAIT: 'wait', DONE: 'done' },
+    const blockedRequest = {
+      ...request,
+      questions: {
+        action: {
+          type: 'choice' as const,
+          instructions: { goal: 'continue' },
+          criteria: { BLOCKED: 'blocked', WAIT: 'wait', DONE: 'done' },
+        },
       },
+      actions: [
+        {
+          id: 'BLOCKED',
+          operation: 'BLOCKED' as const,
+          description: 'blocked',
+        },
+        { id: 'WAIT', operation: 'WAIT' as const, description: 'wait' },
+        { id: 'DONE', operation: 'DONE' as const, description: 'done' },
+      ],
     }
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
         choice: 'BLOCKED',
         probabilities: { BLOCKED: 0.36, WAIT: 0.34, DONE: 0.3 },
       },
     }
-    expect(decide(questions, answers).status).toBe('uncertain')
+    expect(decide(blockedRequest, answers).status).toBe('uncertain')
   })
 
   it('requires stronger confidence before accepting DONE', () => {
-    const questions = { operation: request.questions.operation }
+    const doneRequest = {
+      ...request,
+      questions: {
+        action: {
+          type: 'choice' as const,
+          instructions: { goal: 'finish' },
+          criteria: { 'CLICK:e1': 'click', DONE: 'done' },
+        },
+      },
+      actions: [
+        {
+          id: 'CLICK:e1',
+          operation: 'CLICK' as const,
+          targetRef: 'e1',
+          description: 'click',
+        },
+        { id: 'DONE', operation: 'DONE' as const, description: 'done' },
+      ],
+    }
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
         choice: 'DONE',
-        probabilities: { CLICK: 0.4, DONE: 0.6 },
+        probabilities: { 'CLICK:e1': 0.4, DONE: 0.6 },
       },
     }
-    expect(decide(questions, answers).status).toBe('uncertain_done')
+    expect(decide(doneRequest, answers).status).toBe('uncertain_done')
   })
 
-  it('rejects a choice that is absent from its probability map', () => {
+  it('rejects a choice absent from the action distribution', () => {
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
-        choice: 'CLICK',
-        probabilities: { CLICK: 0.8, DONE: 0.2 },
-      },
-      click_target: {
-        type: 'choice',
-        choice: 'e3',
-        probabilities: { e1: 0.5, e2: 0.5 },
+        choice: 'CLICK:e3',
+        probabilities: { 'CLICK:e1': 0.5, 'CLICK:e2': 0.5, DONE: 0 },
       },
     }
-    expect(() => decide(request.questions, answers)).toThrow('invalid choice')
+    expect(() => decide(request, answers)).toThrow('invalid choice')
   })
 
-  it('rejects malformed probability maps', () => {
+  it('accepts independently calibrated action scores', () => {
     const answers: Record<string, OpenJevAnswer> = {
-      operation: {
+      action: {
         type: 'choice',
-        choice: 'CLICK',
-        probabilities: { CLICK: 0.9, DONE: 0.9 },
-      },
-      click_target: {
-        type: 'choice',
-        choice: 'e1',
-        probabilities: { e1: 0.5, e2: 0.5 },
+        choice: 'CLICK:e1',
+        probabilities: { 'CLICK:e1': 0.98, 'CLICK:e2': 0.67, DONE: 0.55 },
       },
     }
-    expect(() => decide(request.questions, answers)).toThrow(
-      'do not sum to one',
-    )
+    expect(decide(request, answers).effectiveConfidence).toBeCloseTo(0.98)
   })
 })

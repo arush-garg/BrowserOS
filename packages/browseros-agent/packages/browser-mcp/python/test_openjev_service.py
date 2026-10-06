@@ -147,7 +147,7 @@ class OpenJevServiceTests(unittest.TestCase):
             {"request_id": "one", "answers": result["answers"]},
         )
 
-    def test_predict_normalizes_entailment_into_choice_probabilities(self) -> None:
+    def test_predict_preserves_independent_entailment_scores(self) -> None:
         questions = {
             "operation": {
                 "type": "choice",
@@ -165,8 +165,8 @@ class OpenJevServiceTests(unittest.TestCase):
         self.assertEqual(hypotheses, ["Finish WAIT: wait", "Finish DONE: done"])
         answer = result["answers"]["operation"]
         self.assertEqual(answer["choice"], "DONE")
-        self.assertAlmostEqual(answer["probabilities"]["WAIT"], 0.25)
-        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.75)
+        self.assertAlmostEqual(answer["probabilities"]["WAIT"], 0.2)
+        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.6)
 
     def test_predict_reads_entailment_column_from_label2id(self) -> None:
         questions = {
@@ -190,7 +190,7 @@ class OpenJevServiceTests(unittest.TestCase):
 
         answer = result["answers"]["operation"]
         self.assertEqual(answer["choice"], "DONE")
-        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.8 / 0.85)
+        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.8)
 
     def test_errors_stay_in_protocol_and_diagnostics_use_stderr(self) -> None:
         stdout = io.StringIO()
