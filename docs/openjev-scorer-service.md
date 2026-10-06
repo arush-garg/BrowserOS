@@ -25,8 +25,8 @@ First request downloads `AlexWortega/openjev` checkpoint `qwen3.5-2b-nli-v5` at 
 - State contains sanitized URL, recent actions, and goal-relevant page characters.
 - A viewport JPEG rides along as `image` unless the caller passes `screenshot: false`. Image tokens are prepended to every premise; the text budget (512 tokens) is unchanged. If the checkpoint's classification class does not accept `pixel_values`, or the goal is so long that truncation would cut into image tokens, the service scores text-only and reports why.
 - Element descriptions live in OpenJev choice criteria, matching NLI cross-encoder format.
-- One inference evaluates operation and target questions together via NLI entailment scoring.
-- Effective confidence is operation entailment probability multiplied by target entailment probability.
+- One inference scores one joint action choice (operation plus target) at a time; this avoids treating independently scored operation and target decisions as probabilities that can be multiplied.
+- Each option's score is its raw NLI entailment probability, not a categorical distribution. Effective confidence is the selected joint action's raw entailment probability.
 - Page text and labels remain untrusted data; only caller goal controls behavior.
 - OpenJev makes finite choices and cannot generate text. Pass `text` when a goal can require `TYPE_TEXT` or `SELECT`; otherwise loop pauses with `needs_text` before that text/select step mutates the page.
 - Loop stops on DONE, BLOCKED, low confidence, repeated no-progress action, error, or step limit.

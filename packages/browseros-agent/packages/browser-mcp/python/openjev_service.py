@@ -449,7 +449,9 @@ def predict(
     if probs is None:
         probs = _score_pairs(agent, tokenizer, premises, hypotheses)
 
-    # Each criterion is scored by its entailment probability.
+    # Each criterion is independently scored by its entailment probability.
+    # They are not a categorical distribution: two candidate actions may both be
+    # entailed to different degrees, so normalizing them destroys calibration.
     entailment = _entailment_index(agent)
     answers = {}
     for (question_id, criterion_key), prob in zip(pair_meta, probs):
@@ -460,16 +462,11 @@ def predict(
         
         answers[question_id]["probabilities"][criterion_key] = entailment_score
 
-    # Pick the highest entailment as the choice for each question
+    # Pick the highest raw entailment as the choice for each question.
     for question_id, answer in answers.items():
         if answer["probabilities"]:
             best = max(answer["probabilities"].items(), key=lambda x: x[1])
             answer["choice"] = best[0]
-            # Normalize probabilities to sum to 1
-            total = sum(answer["probabilities"].values())
-            if total > 0:
-                for k in answer["probabilities"]:
-                    answer["probabilities"][k] /= total
 
     response: dict[str, Any] = {"answers": answers}
     if image_report is not None:
