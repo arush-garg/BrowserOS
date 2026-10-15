@@ -187,7 +187,7 @@ describe('semantic action Laya request construction', () => {
       ),
       [],
     )
-    expect(request.state.page.text).toHaveLength(1_500)
+    expect(request.state.page.text).toHaveLength(4_000)
     expect(request.state.page.text.endsWith('…')).toBe(true)
   })
 })

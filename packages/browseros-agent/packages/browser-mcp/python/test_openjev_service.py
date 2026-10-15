@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import math
 import subprocess
 import sys
 import unittest
@@ -15,25 +16,49 @@ assert SPEC and SPEC.loader
 SERVICE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SERVICE)
 
+QUESTIONS = {
+    "operation": {
+        "type": "choice",
+        "instructions": "Choose the next action",
+        "criteria": {"WAIT": "wait", "DONE": "done"},
+    }
+}
 
-class OpenJevServiceTests(unittest.TestCase):
-    def setUp(self) -> None:
-        setattr(SERVICE, "_agent", None)
-        setattr(SERVICE, "_tokenizer", None)
 
+class FakeTokenizer:
+    """Whitespace 'tokenizer': one token per word, ids are positions in a growing vocab."""
+
+    def __init__(self) -> None:
+        self.vocab: dict[str, int] = {}
+        self.words: list[str] = []
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
+        ids = []
+        for word in text.split():
+            if word not in self.vocab:
+                self.vocab[word] = len(self.words)
+                self.words.append(word)
+            ids.append(self.vocab[word])
+        return ids
+
+    def decode(self, ids: list[int]) -> str:
+        return " ".join(self.words[i] for i in ids)
+
+    def apply_chat_template(self, messages, add_generation_prompt, tokenize, **kwargs) -> str:
+        assert add_generation_prompt and not tokenize
+        return "\n".join(f"{m['role']}: {m['content']}" for m in messages) + "\nassistant:"
+
+
+class ValidationTests(unittest.TestCase):
     def test_validation_rejects_bad_request_shapes(self) -> None:
         with self.assertRaisesRegex(ValueError, "request must"):
             SERVICE.validate_request([])
         with self.assertRaisesRegex(ValueError, "request_id must"):
             SERVICE.validate_request({"state": "page", "questions": {}})
         with self.assertRaisesRegex(ValueError, "state must"):
-            SERVICE.validate_request(
-                {"request_id": "one", "state": None, "questions": {}}
-            )
+            SERVICE.validate_request({"request_id": "one", "state": None, "questions": {}})
         with self.assertRaisesRegex(ValueError, "questions must"):
-            SERVICE.validate_request(
-                {"request_id": "one", "state": "page", "questions": []}
-            )
+            SERVICE.validate_request({"request_id": "one", "state": "page", "questions": []})
 
     def test_validation_accepts_structured_instructions(self) -> None:
         for instructions in ({"goal": "Choose"}, ["Choose", "carefully"]):
@@ -89,11 +114,7 @@ class OpenJevServiceTests(unittest.TestCase):
             )
 
     def test_validation_rejects_oversized_state_and_invalid_criteria(self) -> None:
-        question = {
-            "type": "choice",
-            "instructions": "Choose",
-            "criteria": {"WAIT": "wait"},
-        }
+        question = QUESTIONS["operation"]
         with self.assertRaisesRegex(ValueError, "serialized state"):
             SERVICE.validate_request(
                 {
@@ -107,128 +128,14 @@ class OpenJevServiceTests(unittest.TestCase):
                 {
                     "request_id": "one",
                     "state": "page",
-                    "questions": {
-                        "operation": {**question, "criteria": {"WAIT": 1}}
-                    },
+                    "questions": {"operation": {**question, "criteria": {"WAIT": 1}}},
                 }
             )
 
-    def test_protocol_emits_openjev_answers(self) -> None:
-        request = {
-            "request_id": "one",
-            "state": "page",
-            "questions": {
-                "operation": {
-                    "type": "choice",
-                    "instructions": "Choose the next action",
-                    "criteria": {"WAIT": "wait", "DONE": "done"},
-                }
-            },
-        }
-        result = {
-            "answers": {
-                "operation": {
-                    "type": "choice",
-                    "choice": "WAIT",
-                    "probabilities": {"WAIT": 0.8, "DONE": 0.2},
-                }
-            },
-        }
-        output = io.StringIO()
-
-        with patch.object(SERVICE, "predict", return_value=result) as predict, redirect_stdout(
-            output
-        ):
-            SERVICE.handle_line(json.dumps(request))
-
-        predict.assert_called_once_with("page", request["questions"])
-        self.assertEqual(
-            json.loads(output.getvalue()),
-            {"request_id": "one", "answers": result["answers"]},
-        )
-
-    def test_predict_preserves_independent_entailment_scores(self) -> None:
-        questions = {
-            "operation": {
-                "type": "choice",
-                "instructions": {"goal": "Finish"},
-                "criteria": {"WAIT": "wait", "DONE": "done"},
-            }
-        }
-        with patch.object(SERVICE, "load", return_value=("agent", "tokenizer")), patch.object(
-            SERVICE, "_score_pairs", return_value=[[0.2, 0.4, 0.4], [0.6, 0.2, 0.2]]
-        ) as score:
-            result = SERVICE.predict({"page": {"text": "page"}}, questions)
-
-        premises, hypotheses = score.call_args.args[2:4]
-        self.assertEqual(premises, ["Page: \nContent: page\nRecent: "] * 2)
-        self.assertEqual(hypotheses, ["Finish WAIT: wait", "Finish DONE: done"])
-        answer = result["answers"]["operation"]
-        self.assertEqual(answer["choice"], "DONE")
-        self.assertAlmostEqual(answer["probabilities"]["WAIT"], 0.2)
-        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.6)
-
-    def test_predict_reads_entailment_column_from_label2id(self) -> None:
-        questions = {
-            "operation": {
-                "type": "choice",
-                "instructions": {"goal": "Finish"},
-                "criteria": {"WAIT": "wait", "DONE": "done"},
-            }
-        }
-        # OpenJev checkpoints: contradiction=0, entailment=1, neutral=2.
-        agent = SimpleNamespace(
-            config=SimpleNamespace(
-                label2id={"contradiction": 0, "entailment": 1, "neutral": 2}
-            )
-        )
-        scores = [[0.9, 0.05, 0.05], [0.1, 0.8, 0.1]]
-        with patch.object(SERVICE, "load", return_value=(agent, "tokenizer")), patch.object(
-            SERVICE, "_score_pairs", return_value=scores
-        ):
-            result = SERVICE.predict({"page": {"text": "page"}}, questions)
-
-        answer = result["answers"]["operation"]
-        self.assertEqual(answer["choice"], "DONE")
-        self.assertAlmostEqual(answer["probabilities"]["DONE"], 0.8)
-
-    def test_errors_stay_in_protocol_and_diagnostics_use_stderr(self) -> None:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            SERVICE.handle_line("not-json")
-
-        response = json.loads(stdout.getvalue())
-        diagnostic = json.loads(stderr.getvalue())
-        self.assertEqual(response["request_id"], "unknown")
-        self.assertEqual(response["error_kind"], "JSONDecodeError")
-        self.assertEqual(diagnostic["event"], "request_error")
-
-
-class VisionTests(unittest.TestCase):
-    QUESTIONS = {
-        "operation": {
-            "type": "choice",
-            "instructions": {"goal": "Click First"},
-            "criteria": {"CLICK": "click", "DONE": "done"},
-        }
-    }
-
-    def setUp(self) -> None:
-        setattr(SERVICE, "_vision", None)
-
-    def tearDown(self) -> None:
-        setattr(SERVICE, "_vision", None)
-
-    def test_validate_image_accepts_supported_screenshots(self) -> None:
+    def test_validate_image_accepts_and_rejects(self) -> None:
         self.assertIsNone(SERVICE.validate_image({}))
-        self.assertEqual(
-            SERVICE.validate_image({"image": {"data": "aGk=", "mime_type": "image/jpeg"}}),
-            {"data": "aGk=", "mime_type": "image/jpeg"},
-        )
-
-    def test_validate_image_rejects_bad_shapes(self) -> None:
+        image = {"data": "aGk=", "mime_type": "image/jpeg"}
+        self.assertEqual(SERVICE.validate_image({"image": image}), image)
         with self.assertRaisesRegex(ValueError, "image must be an object"):
             SERVICE.validate_image({"image": "aGk="})
         with self.assertRaisesRegex(ValueError, "nonempty base64"):
@@ -245,151 +152,54 @@ class VisionTests(unittest.TestCase):
                 }
             )
 
-    def test_handle_line_forwards_the_screenshot(self) -> None:
-        request = {
-            "request_id": "one",
-            "state": "page",
-            "questions": self.QUESTIONS,
-            "image": {"data": "aGk=", "mime_type": "image/png"},
+
+class ProtocolTests(unittest.TestCase):
+    def test_protocol_emits_openjev_answers(self) -> None:
+        request = {"request_id": "one", "state": "page", "questions": QUESTIONS}
+        result = {
+            "answers": {
+                "operation": {
+                    "type": "choice",
+                    "choice": "WAIT",
+                    "probabilities": {"WAIT": 0.8, "DONE": 0.2},
+                }
+            },
+            "usage": {"input_tokens": 3, "total_seconds": 0.1},
         }
-        result = {"answers": {}, "image": {"used": True, "tokens": 4}}
         output = io.StringIO()
         with patch.object(SERVICE, "predict", return_value=result) as predict, redirect_stdout(
             output
         ):
             SERVICE.handle_line(json.dumps(request))
 
-        predict.assert_called_once_with(
-            "page", self.QUESTIONS, {"data": "aGk=", "mime_type": "image/png"}
-        )
+        predict.assert_called_once_with("page", QUESTIONS)
+        self.assertEqual(json.loads(output.getvalue()), {"request_id": "one", **result})
+
+    def test_handle_line_forwards_the_screenshot(self) -> None:
+        image = {"data": "aGk=", "mime_type": "image/png"}
+        request = {"request_id": "one", "state": "page", "questions": QUESTIONS, "image": image}
+        result = {"answers": {}, "image": {"used": False, "reason": "no"}}
+        output = io.StringIO()
+        with patch.object(SERVICE, "predict", return_value=result) as predict, redirect_stdout(
+            output
+        ):
+            SERVICE.handle_line(json.dumps(request))
+
+        predict.assert_called_once_with("page", QUESTIONS, image)
         self.assertEqual(json.loads(output.getvalue())["image"], result["image"])
 
-    def test_accepts_pixels_requires_vision_inputs(self) -> None:
-        class TextOnly:
-            def forward(self, input_ids=None, attention_mask=None):
-                pass
+    def test_errors_stay_in_protocol_and_diagnostics_use_stderr(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            SERVICE.handle_line("not-json")
 
-        class Vision:
-            def forward(self, input_ids=None, pixel_values=None, image_grid_thw=None):
-                pass
+        response = json.loads(stdout.getvalue())
+        diagnostic = json.loads(stderr.getvalue())
+        self.assertEqual(response["request_id"], "unknown")
+        self.assertEqual(response["error_kind"], "JSONDecodeError")
+        self.assertEqual(diagnostic["event"], "request_error")
 
-        class KwargsWithVisionConfig:
-            config = SimpleNamespace(vision_config={"depth": 1})
-
-            def forward(self, input_ids=None, **kwargs):
-                pass
-
-        self.assertFalse(SERVICE._accepts_pixels(TextOnly()))
-        self.assertTrue(SERVICE._accepts_pixels(Vision()))
-        self.assertTrue(SERVICE._accepts_pixels(KwargsWithVisionConfig()))
-
-    def test_load_vision_reports_and_caches_text_only_checkpoints(self) -> None:
-        class TextOnly:
-            def forward(self, input_ids=None):
-                pass
-
-        with redirect_stderr(io.StringIO()) as stderr:
-            first = SERVICE.load_vision(TextOnly(), Mock())
-            second = SERVICE.load_vision(TextOnly(), Mock())
-
-        self.assertIsNone(first[0])
-        self.assertIn("pixel_values", first[1])
-        self.assertIs(first, second)
-        self.assertEqual(json.loads(stderr.getvalue())["event"], "vision_unavailable")
-
-    def test_load_vision_expands_qwen_image_tokens(self) -> None:
-        class Vision:
-            def forward(self, input_ids=None, pixel_values=None, image_grid_thw=None):
-                pass
-
-        vocab = {"<|vision_start|>": 10, "<|image_pad|>": 11, "<|vision_end|>": 12}
-        tokenizer = SimpleNamespace(unk_token_id=0, convert_tokens_to_ids=vocab.get)
-        image_processor = Mock(merge_size=2)
-        image_processor.return_value = {
-            "pixel_values": "pixels",
-            "image_grid_thw": SimpleNamespace(prod=lambda: 1 * 4 * 6),
-        }
-        with patch.object(
-            SERVICE, "_load_image_processor", return_value=image_processor
-        ), patch.object(SERVICE, "_decode_image", return_value="decoded"), redirect_stderr(
-            io.StringIO()
-        ):
-            vision, reason = SERVICE.load_vision(Vision(), tokenizer)
-            visual = SERVICE._prepare_vision(vision, {"data": "", "mime_type": "image/png"})
-
-        self.assertEqual(reason, "")
-        self.assertEqual(vision.pad_token_id, 11)
-        self.assertFalse(vision.wants_type_ids)
-        self.assertEqual(visual["image_tokens"], 6)
-        self.assertEqual(
-            visual["prefix"], "<|vision_start|>" + "<|image_pad|>" * 6 + "<|vision_end|>"
-        )
-        image_processor.assert_called_once_with(images=["decoded"], return_tensors="pt")
-
-    def test_predict_falls_back_to_text_when_vision_is_unsupported(self) -> None:
-        scores = [[0.9, 0.05, 0.05], [0.1, 0.45, 0.45]]
-        with patch.object(SERVICE, "load", return_value=("agent", "tokenizer")), patch.object(
-            SERVICE, "load_vision", return_value=(None, "no pixels")
-        ), patch.object(SERVICE, "_score_pairs", return_value=scores) as score:
-            result = SERVICE.predict(
-                {"page": {"text": "page"}},
-                self.QUESTIONS,
-                {"data": "aGk=", "mime_type": "image/png"},
-            )
-
-        score.assert_called_once()
-        self.assertEqual(len(score.call_args.args), 4)
-        self.assertEqual(result["answers"]["operation"]["choice"], "CLICK")
-        self.assertEqual(result["image"], {"used": False, "reason": "no pixels"})
-
-    def test_predict_scores_with_the_screenshot_when_supported(self) -> None:
-        scores = [[0.2, 0.4, 0.4], [0.8, 0.1, 0.1]]
-        visual = {"image_tokens": 6, "prefix": "<img>"}
-        with patch.object(SERVICE, "load", return_value=("agent", "tokenizer")), patch.object(
-            SERVICE, "load_vision", return_value=("vision", "")
-        ), patch.object(SERVICE, "_prepare_vision", return_value=visual), patch.object(
-            SERVICE, "_score_pairs", return_value=scores
-        ) as score:
-            result = SERVICE.predict(
-                {"page": {"text": "page"}},
-                self.QUESTIONS,
-                {"data": "aGk=", "mime_type": "image/png"},
-            )
-
-        self.assertEqual(score.call_args.args[4:], ("vision", visual))
-        self.assertEqual(result["answers"]["operation"]["choice"], "DONE")
-        self.assertEqual(result["image"], {"used": True, "tokens": 6})
-
-    def test_predict_falls_back_to_text_when_the_screenshot_is_corrupt(self) -> None:
-        scores = [[0.9, 0.05, 0.05], [0.1, 0.45, 0.45]]
-        with patch.object(SERVICE, "load", return_value=("agent", "tokenizer")), patch.object(
-            SERVICE, "load_vision", return_value=("vision", "")
-        ), patch.object(
-            SERVICE, "_prepare_vision", side_effect=OSError("cannot identify image file")
-        ), patch.object(SERVICE, "_score_pairs", return_value=scores) as score, redirect_stderr(
-            io.StringIO()
-        ):
-            result = SERVICE.predict(
-                {"page": {"text": "page"}},
-                self.QUESTIONS,
-                {"data": "aGk=", "mime_type": "image/png"},
-            )
-
-        self.assertEqual(len(score.call_args.args), 4)
-        self.assertEqual(
-            result["image"],
-            {"used": False, "reason": "screenshot could not be processed: cannot identify image file"},
-        )
-
-    def test_predict_without_image_reports_nothing(self) -> None:
-        with patch.object(SERVICE, "load", return_value=("agent", "tokenizer")), patch.object(
-            SERVICE, "_score_pairs", return_value=[[0.5, 0.25, 0.25], [0.5, 0.25, 0.25]]
-        ):
-            result = SERVICE.predict({"page": {"text": "page"}}, self.QUESTIONS)
-        self.assertNotIn("image", result)
-
-
-class MockServiceTests(unittest.TestCase):
     def test_signal_handler_exits_instead_of_blocking_on_stdin(self) -> None:
         with self.assertRaises(SystemExit):
             SERVICE.stop(15, None)
@@ -418,7 +228,6 @@ class MockServiceTests(unittest.TestCase):
             check=True,
             text=True,
         )
-
         response = json.loads(completed.stdout)
         self.assertEqual(response["request_id"], "mock-one")
         self.assertEqual(response["answers"]["operation"]["choice"], "CLICK")
@@ -426,47 +235,246 @@ class MockServiceTests(unittest.TestCase):
         self.assertEqual(response["usage"]["output_tokens"], 0)
 
 
+class PredictTests(unittest.TestCase):
+    def test_predict_scores_each_question_and_picks_the_most_probable_id(self) -> None:
+        tokenizer = FakeTokenizer()
+        with patch.object(SERVICE, "load", return_value=("model", tokenizer)), patch.object(
+            SERVICE, "score_choices", return_value={"WAIT": 0.25, "DONE": 0.75}
+        ) as score:
+            result = SERVICE.predict({"page": {"url": "u", "text": "hello"}}, QUESTIONS)
+
+        answer = result["answers"]["operation"]
+        self.assertEqual(answer["type"], "choice")
+        self.assertEqual(answer["choice"], "DONE")
+        self.assertEqual(answer["probabilities"], {"WAIT": 0.25, "DONE": 0.75})
+        self.assertGreater(result["usage"]["input_tokens"], 0)
+        self.assertIn("total_seconds", result["usage"])
+        self.assertNotIn("image", result)
+        self.assertEqual(score.call_args.args[3], ["WAIT", "DONE"])
+
+    def test_predict_reports_image_unused(self) -> None:
+        with patch.object(SERVICE, "load", return_value=("model", FakeTokenizer())), patch.object(
+            SERVICE, "score_choices", return_value={"WAIT": 0.5, "DONE": 0.5}
+        ):
+            result = SERVICE.predict(
+                "page", QUESTIONS, {"data": "aGk=", "mime_type": "image/png"}
+            )
+        self.assertEqual(
+            result["image"],
+            {"used": False, "reason": "vision not supported by mlx text backend"},
+        )
+
+
+class PromptTests(unittest.TestCase):
+    CRITERIA = {"CLICK:e1": "Click link one", "DONE": "finished"}
+
+    def test_prompt_layout_follows_the_documented_format(self) -> None:
+        tokenizer = FakeTokenizer()
+        state = {
+            "page": {"url": "https://x.test", "text": "Header"},
+            "recent_actions": [{"operation": "CLICK"}],
+        }
+        ids = SERVICE.build_prompt_ids(tokenizer, "RULES goal", state, self.CRITERIA)
+        prompt = tokenizer.decode(ids)
+        self.assertIn("system: RULES goal Reply with only the id of the chosen action.", prompt)
+        self.assertIn('URL: https://x.test RECENT ACTIONS: [{"operation": "CLICK"}]', prompt)
+        self.assertIn("PAGE TEXT: Header", prompt)
+        self.assertIn("CLICK:e1: Click link one DONE: finished Answer with exactly one id.", prompt)
+
+    def test_missing_recent_actions_render_as_none(self) -> None:
+        tokenizer = FakeTokenizer()
+        ids = SERVICE.build_prompt_ids(
+            tokenizer, {"goal": "g"}, {"page": {"text": "t"}}, self.CRITERIA
+        )
+        self.assertIn("RECENT ACTIONS: none", tokenizer.decode(ids))
+
+    def test_page_text_is_truncated_to_the_token_budget_but_candidates_survive(self) -> None:
+        tokenizer = FakeTokenizer()
+        text = " ".join(f"word{i}" for i in range(500))
+        state = {"page": {"url": "u", "text": text}}
+        ids = SERVICE.build_prompt_ids(tokenizer, "goal", state, self.CRITERIA, max_tokens=120)
+        prompt = tokenizer.decode(ids)
+        self.assertLessEqual(len(ids), 120)
+        self.assertIn("word0", prompt)
+        self.assertNotIn("word499", prompt)
+        self.assertTrue(prompt.endswith("Answer with exactly one id. assistant:"))
+        self.assertIn("CLICK:e1: Click link one", prompt)
+
+    def test_prompt_larger_than_budget_without_page_text_is_an_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "limit is 5"):
+            SERVICE.build_prompt_ids(
+                FakeTokenizer(), "goal", {"page": {"text": "t"}}, self.CRITERIA, max_tokens=5
+            )
+
+    def test_chat_template_without_enable_thinking_falls_back(self) -> None:
+        calls: list[dict] = []
+
+        class OldTemplate:
+            def apply_chat_template(self, messages, add_generation_prompt, tokenize, **kwargs):
+                calls.append(kwargs)
+                if kwargs:
+                    raise TypeError("unexpected keyword")
+                return "prompt"
+
+        self.assertEqual(SERVICE._chat_prompt(OldTemplate(), "s", "u"), "prompt")
+        self.assertEqual(calls, [{"enable_thinking": False}, {}])
+
+
+class TrieTests(unittest.TestCase):
+    # Token ids: CLICK=1 ':'=2 digits 11/12 END=99 ; DONE=3.
+    SEQUENCES = {
+        "CLICK:e1": [1, 2, 11, 99],
+        "CLICK:e12": [1, 2, 11, 12, 99],
+        "CLICK:e2": [1, 2, 12, 99],
+        "DONE": [3, 99],
+    }
+
+    @staticmethod
+    def run_trie(sequences, distributions):
+        """Drive trie_probabilities; the 'state' is the token path fed so far."""
+        advances: list[tuple[int, ...]] = []
+        clones: list[tuple[int, ...]] = []
+
+        def weigh(path, tokens):
+            raw = [distributions[tuple(path)][t] for t in tokens]
+            total = sum(raw)
+            return [value / total for value in raw]
+
+        def advance(path, tokens):
+            advances.append((*path, *tokens))
+            return [*path, *tokens]
+
+        def clone(path):
+            clones.append(tuple(path))
+            return list(path)
+
+        root = SERVICE.build_trie(sequences)
+        result = SERVICE.trie_probabilities(root, [], weigh, advance, clone)
+        return result, advances, clones
+
+    def test_probabilities_are_a_distribution_over_every_id(self) -> None:
+        distributions = {
+            (): {1: 3.0, 3: 1.0, 7: 100.0},  # token 7 is not a candidate: never offered
+            (1, 2): {11: 2.0, 12: 2.0},
+            (1, 2, 11): {99: 1.0, 12: 3.0},
+        }
+        probabilities, _, _ = self.run_trie(self.SEQUENCES, distributions)
+
+        self.assertEqual(set(probabilities), set(self.SEQUENCES))
+        self.assertAlmostEqual(sum(probabilities.values()), 1.0)
+        self.assertAlmostEqual(probabilities["DONE"], 0.25)
+        self.assertAlmostEqual(probabilities["CLICK:e2"], 0.75 * 0.5)
+        self.assertAlmostEqual(probabilities["CLICK:e1"], 0.75 * 0.5 * 0.25)
+        self.assertAlmostEqual(probabilities["CLICK:e12"], 0.75 * 0.5 * 0.75)
+        self.assertEqual(max(probabilities, key=probabilities.get), "CLICK:e2")
+
+    def test_model_only_runs_at_branch_points_and_forced_edges_are_batched(self) -> None:
+        distributions = {
+            (): {1: 1.0, 3: 1.0},
+            (1, 2): {11: 1.0, 12: 1.0},
+            (1, 2, 11): {99: 1.0, 12: 1.0},
+        }
+        _, advances, clones = self.run_trie(self.SEQUENCES, distributions)
+        # CLICK and ':' are forced, so they are fed together before the digit branch.
+        self.assertEqual(advances, [(1, 2), (1, 2, 11)])
+        # Only one subtree ever branches again, so no state copy is needed at all.
+        self.assertEqual(clones, [])
+
+    def test_state_is_copied_only_for_earlier_branching_siblings(self) -> None:
+        sequences = {"A1": [5, 1, 99], "A2": [5, 2, 99], "B1": [6, 1, 99], "B2": [6, 2, 99]}
+        distributions = {(): {5: 1.0, 6: 1.0}, (5,): {1: 1.0, 2: 1.0}, (6,): {1: 1.0, 2: 1.0}}
+        probabilities, advances, clones = self.run_trie(sequences, distributions)
+        self.assertEqual(clones, [()])
+        self.assertEqual(advances, [(5,), (6,)])
+        self.assertTrue(all(abs(v - 0.25) < 1e-9 for v in probabilities.values()))
+
+    def test_single_candidate_needs_no_model_call(self) -> None:
+        probabilities, advances, clones = self.run_trie({"DONE": [3, 99]}, {})
+        self.assertEqual(probabilities, {"DONE": 1.0})
+        self.assertEqual((advances, clones), ([], []))
+
+    def test_prefix_ids_are_distinguished_by_the_end_token(self) -> None:
+        sequences = {"A": [5, 99], "AB": [5, 6, 99]}
+        probabilities, _, _ = self.run_trie(sequences, {(): {5: 1.0}, (5,): {99: 3.0, 6: 1.0}})
+        self.assertAlmostEqual(probabilities["A"], 0.75)
+        self.assertAlmostEqual(probabilities["AB"], 0.25)
+
+
+@unittest.skipUnless(importlib.util.find_spec("mlx"), "mlx is not installed")
+class ScoreChoicesTests(unittest.TestCase):
+    """score_choices with real mlx arrays and a fake uniform model (no weights loaded)."""
+
+    END = 127
+
+    class UniformModel:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def make_cache(self) -> list:
+            return []
+
+        def __call__(self, tokens, cache):
+            import mlx.core as mx
+
+            self.calls.append(tokens.shape[1])
+            cache.append(tokens.shape[1])
+            return mx.zeros((1, tokens.shape[1], 128))
+
+    def tokenizer(self):
+        tokenizer = FakeTokenizer()
+        tokenizer.encode = lambda text, add_special_tokens=True: (
+            [self.END] if text == "<|im_end|>" else [ord(char) for char in text]
+        )
+        return tokenizer
+
+    def test_uniform_model_gives_uniform_branch_probabilities(self) -> None:
+        model = self.UniformModel()
+        probabilities = SERVICE.score_choices(
+            model, self.tokenizer(), [1, 2, 3], ["ab", "ac", "b"]
+        )
+        self.assertAlmostEqual(sum(probabilities.values()), 1.0, places=5)
+        self.assertAlmostEqual(probabilities["b"], 0.5, places=5)
+        self.assertAlmostEqual(probabilities["ab"], 0.25, places=5)
+        self.assertAlmostEqual(probabilities["ac"], 0.25, places=5)
+        # One prefill over the prompt, then a single step feeding 'a' to reach its branch.
+        self.assertEqual(model.calls, [3, 1])
+
+
 class ModelLoadingTests(unittest.TestCase):
     def setUp(self) -> None:
-        setattr(SERVICE, "_agent", None)
+        setattr(SERVICE, "_model", None)
         setattr(SERVICE, "_tokenizer", None)
 
-    def test_load_downloads_pinned_snapshot_once(self) -> None:
-        loaded = Mock()
-        loaded.eval.return_value = loaded
-        fake_hub = SimpleNamespace(snapshot_download=Mock(return_value="/cache/model"))
-        fake_transformers = SimpleNamespace(
-            AutoModelForSequenceClassification=SimpleNamespace(
-                from_pretrained=Mock(return_value=loaded)
-            ),
-            AutoTokenizer=SimpleNamespace(from_pretrained=Mock(return_value="tokenizer")),
-        )
-        fake_torch = SimpleNamespace(
-            float16="float16",
-            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
-        )
+    tearDown = setUp
 
-        with patch.dict(
-            "sys.modules",
-            {
-                "huggingface_hub": fake_hub,
-                "transformers": fake_transformers,
-                "torch": fake_torch,
-            },
-        ), patch.object(SERVICE, "DEVICE", None), redirect_stderr(io.StringIO()):
+    def test_load_uses_mlx_lm_once_and_limits_memory(self) -> None:
+        fake_mx = SimpleNamespace(
+            set_memory_limit=Mock(), get_active_memory=lambda: 2 * 1024**3
+        )
+        mlx_load = Mock(return_value=("model", "tokenizer"))
+        modules = {
+            "mlx": SimpleNamespace(core=fake_mx),
+            "mlx.core": fake_mx,
+            "mlx_lm": SimpleNamespace(load=mlx_load),
+        }
+        stderr = io.StringIO()
+        with patch.dict(sys.modules, modules), redirect_stderr(stderr):
             first = SERVICE.load()
             second = SERVICE.load()
 
-        self.assertEqual(first, (loaded, "tokenizer"))
+        self.assertEqual(first, ("model", "tokenizer"))
         self.assertEqual(second, first)
-        fake_hub.snapshot_download.assert_called_once_with(
-            repo_id=SERVICE.MODEL_REPO,
-            revision=SERVICE.REVISION,
-            allow_patterns=[f"{SERVICE.MODEL_SUBFOLDER}/*"],
-        )
-        fake_transformers.AutoModelForSequenceClassification.from_pretrained.assert_called_once()
-        fake_transformers.AutoTokenizer.from_pretrained.assert_called_once()
-        self.assertEqual(SERVICE._model_path, "/cache/model")
+        mlx_load.assert_called_once_with(SERVICE.MODEL_PATH)
+        fake_mx.set_memory_limit.assert_called_once_with(SERVICE.MEMORY_LIMIT_BYTES)
+        event = json.loads(stderr.getvalue())
+        self.assertEqual(event["event"], "model_loaded")
+        self.assertEqual(event["backend"], "mlx_lm")
+
+    def test_missing_dependencies_raise_a_clear_error(self) -> None:
+        with patch.dict(sys.modules, {"mlx": None, "mlx.core": None}):
+            with self.assertRaisesRegex(RuntimeError, "mlx-lm"):
+                SERVICE.load()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,45 +1,59 @@
 #!/usr/bin/env python3
-"""Persistent JSONL adapter for the local OpenJev decision model (Qwen3.5 NLI)."""
+"""Persistent JSONL adapter for the local OpenJev decision model (MLX).
+
+Protocol (one JSON object per line on stdin/stdout, JSON log events on stderr):
+  request:  {request_id, state: {page: {url, text}, recent_actions: [...]},
+             questions: {<name>: {type: "choice", instructions, criteria: {<id>: <description>}}},
+             image?: {data, mime_type}}
+  response: {request_id, answers: {<name>: {type: "choice", choice, probabilities}},
+             usage: {input_tokens, total_seconds}, image?: {used, reason}}
+            or {request_id, error, error_kind}
+
+Backend: an mlx_lm chat model (default Qwen3.5-4B 4-bit, override with
+BROWSEROS_OPENJEV_MODEL). Each question costs ONE prefill over the prompt (goal
+rules + page text + candidate list). The answer is then read out of the model
+by walking the token trie of the candidate ids: at every trie node the next-token
+logits are restricted to the tokens that continue some candidate id and
+renormalised, so the model can only ever "say" a valid id. The probability of an
+id is the product of those restricted probabilities along its token path, which
+makes the probabilities a true distribution over the candidates (sum to 1).
+Screenshots are accepted but not used: the text backend reports image.used=false.
+"""
 
 from __future__ import annotations
 
-import base64
-import binascii
-import inspect
-import io
+import copy
 import json
 import os
 import signal
 import sys
 import time
 from contextlib import redirect_stdout
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
-MODEL_REPO = "AlexWortega/openjev"
-MODEL_SUBFOLDER = os.environ.get("BROWSEROS_OPENJEV_SUBFOLDER") or "qwen3.5-2b-nli-v5"
-REVISION = os.environ.get("BROWSEROS_OPENJEV_REVISION") or "main"
-DEVICE = os.environ.get("BROWSEROS_OPENJEV_DEVICE") or None
+MODEL_PATH = os.path.expanduser(
+    os.environ.get("BROWSEROS_OPENJEV_MODEL")
+    or "~/.cache/huggingface/hub/mlx--Qwen3.5-4B-4bit"
+)
+MAX_PROMPT_TOKENS = int(os.environ.get("BROWSEROS_OPENJEV_MAX_TOKENS") or 3072)
+MEMORY_LIMIT_BYTES = 6 * 1024**3
+# Prefill runs in slices so activation memory stays bounded; a 2.4k-token prompt
+# peaks ~1.2 GB lower at 512 than in one pass, with no measurable slowdown.
+PREFILL_CHUNK_TOKENS = int(os.environ.get("BROWSEROS_OPENJEV_PREFILL_CHUNK") or 512)
 MAX_STATE_CHARS = 50_000
 MAX_QUESTIONS = 8
 MAX_OPTIONS = 64
-TEXT_MAX_TOKENS = 512
-MAX_GOAL_CHARS = 600
-# Screenshots are downscaled to this pixel budget before the Qwen image processor
-# sees them. Every premise/hypothesis pair carries its own copy of the image
-# tokens, so this bounds both latency and memory (401_408 px ≈ 400-512 image
-# tokens, depending on the processor's patch size).
-IMAGE_MAX_PIXELS = int(os.environ.get("BROWSEROS_OPENJEV_IMAGE_MAX_PIXELS") or 401_408)
-IMAGE_BATCH_SIZE = int(os.environ.get("BROWSEROS_OPENJEV_IMAGE_BATCH_SIZE") or 16)
 MAX_IMAGE_BASE64_CHARS = 8_000_000
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
-# Used only when the NLI subfolder ships no preprocessor config of its own.
-PROCESSOR_REPO = os.environ.get("BROWSEROS_OPENJEV_PROCESSOR_REPO") or "Qwen/Qwen3.5-2B"
+IMAGE_UNSUPPORTED_REASON = "vision not supported by mlx text backend"
+END_OF_TURN = "<|im_end|>"
+# Page text is cut by tokens until the whole prompt fits; each pass overshoots a
+# little so the loop converges even when decoding changes token boundaries.
+TRUNCATION_MARGIN_TOKENS = 16
+TRUNCATION_MAX_PASSES = 4
 
-_agent: Any = None
+_model: Any = None
 _tokenizer: Any = None
-_model_path: str | None = None
-_vision: tuple[Any, str] | None = None
 _stopping = False
 
 
@@ -52,131 +66,41 @@ def log(event: str, **fields: Any) -> None:
 
 
 def load() -> tuple[Any, Any]:
-    global _agent, _tokenizer, _model_path
-    if _agent is not None and _tokenizer is not None:
-        return _agent, _tokenizer
+    global _model, _tokenizer
+    if _model is not None and _tokenizer is not None:
+        return _model, _tokenizer
 
     started = time.perf_counter()
     try:
-        from huggingface_hub import snapshot_download
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-        import torch
+        import mlx.core as mx
+        from mlx_lm import load as mlx_load
     except ImportError as error:
         raise RuntimeError(
-            "OpenJev dependencies are not installed. Install transformers, torch, huggingface_hub."
+            "OpenJev dependencies are not installed. Install mlx and mlx-lm."
         ) from error
 
+    mx.set_memory_limit(MEMORY_LIMIT_BYTES)
     with redirect_stdout(sys.stderr):
-        snapshot_path = snapshot_download(
-            repo_id=MODEL_REPO,
-            revision=REVISION,
-            allow_patterns=[f"{MODEL_SUBFOLDER}/*"],
-        )
-        _model_path = snapshot_path
-        _tokenizer = AutoTokenizer.from_pretrained(snapshot_path, subfolder=MODEL_SUBFOLDER)
-        _agent = AutoModelForSequenceClassification.from_pretrained(
-            snapshot_path,
-            subfolder=MODEL_SUBFOLDER,
-            torch_dtype=torch.float16,
-            low_cpu_mem_usage=True,
-        )
-        if DEVICE:
-            _agent = _agent.to(DEVICE)
-        elif torch.backends.mps.is_available():
-            _agent = _agent.to("mps")
-        _agent.eval()
+        loaded = mlx_load(MODEL_PATH)
+    _model, _tokenizer = loaded[0], loaded[1]
 
     log(
         "model_loaded",
-        model=MODEL_REPO,
-        revision=REVISION,
-        subfolder=MODEL_SUBFOLDER,
-        device=DEVICE or ("mps" if torch.backends.mps.is_available() else "cpu"),
+        model=MODEL_PATH,
+        backend="mlx_lm",
         elapsed_seconds=round(time.perf_counter() - started, 3),
+        active_memory_gb=round(mx.get_active_memory() / 1024**3, 2),
     )
-    return _agent, _tokenizer
+    return _model, _tokenizer
 
 
-def _forward_parameters(agent: Any) -> Any:
+def release_memory() -> None:
     try:
-        return inspect.signature(agent.forward).parameters
-    except (TypeError, ValueError):
-        return {}
+        import mlx.core as mx
 
-
-def _accepts_pixels(agent: Any) -> bool:
-    parameters = _forward_parameters(agent)
-    if "pixel_values" in parameters and "image_grid_thw" in parameters:
-        return True
-    forwards_kwargs = any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-    )
-    return forwards_kwargs and getattr(getattr(agent, "config", None), "vision_config", None) is not None
-
-
-def _load_image_processor() -> Any:
-    from transformers import AutoImageProcessor, AutoProcessor
-
-    sources: list[tuple[str, dict[str, Any]]] = []
-    if _model_path:
-        sources.append((_model_path, {"subfolder": MODEL_SUBFOLDER}))
-    sources.append((PROCESSOR_REPO, {}))
-    for source, kwargs in sources:
-        for loader in (AutoProcessor, AutoImageProcessor):
-            try:
-                loaded = loader.from_pretrained(source, **kwargs)
-            except Exception:  # noqa: BLE001 - try the next source
-                continue
-            image_processor = getattr(loaded, "image_processor", loaded)
-            if hasattr(image_processor, "merge_size"):
-                return image_processor
-    return None
-
-
-def load_vision(agent: Any, tokenizer: Any) -> tuple[Any, str]:
-    """Returns (vision support, reason). Support is None when screenshots cannot be used."""
-    global _vision
-    if _vision is not None:
-        return _vision
-
-    def unsupported(reason: str) -> tuple[Any, str]:
-        global _vision
-        _vision = (None, reason)
-        log("vision_unavailable", reason=reason)
-        return _vision
-
-    if not _accepts_pixels(agent):
-        return unsupported(
-            f"{type(agent).__name__}.forward does not accept pixel_values/image_grid_thw"
-        )
-    tokens = {
-        "start": "<|vision_start|>",
-        "pad": "<|image_pad|>",
-        "end": "<|vision_end|>",
-    }
-    unk = getattr(tokenizer, "unk_token_id", None)
-    for token in tokens.values():
-        token_id = tokenizer.convert_tokens_to_ids(token)
-        if token_id is None or token_id == unk:
-            return unsupported(f"tokenizer has no {token} token")
-    with redirect_stdout(sys.stderr):
-        image_processor = _load_image_processor()
-    if image_processor is None:
-        return unsupported("no Qwen image processor could be loaded")
-
-    _vision = (
-        SimpleNamespace(
-            image_processor=image_processor,
-            merge_size=int(image_processor.merge_size),
-            pad_token_id=tokenizer.convert_tokens_to_ids(tokens["pad"]),
-            # Qwen3.5 computes M-RoPE from these and refuses pixels without them.
-            wants_type_ids="mm_token_type_ids" in _forward_parameters(agent),
-            **{f"{name}_token": token for name, token in tokens.items()},
-        ),
-        "",
-    )
-    log("vision_loaded", processor=type(image_processor).__name__)
-    return _vision
+        mx.clear_cache()
+    except Exception:  # noqa: BLE001 - freeing memory is best effort
+        pass
 
 
 def validate_image(message: dict[str, Any]) -> dict[str, str] | None:
@@ -194,38 +118,6 @@ def validate_image(message: dict[str, Any]) -> dict[str, str] | None:
     if mime_type not in IMAGE_MIME_TYPES:
         raise ValueError(f"image.mime_type must be one of {sorted(IMAGE_MIME_TYPES)}")
     return {"data": data, "mime_type": mime_type}
-
-
-def _decode_image(image: dict[str, str]) -> Any:
-    from PIL import Image
-
-    try:
-        raw = base64.b64decode(image["data"], validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError("image.data is not valid base64") from error
-    decoded = Image.open(io.BytesIO(raw)).convert("RGB")
-    width, height = decoded.size
-    if width * height > IMAGE_MAX_PIXELS:
-        scale = (IMAGE_MAX_PIXELS / (width * height)) ** 0.5
-        decoded = decoded.resize(
-            (max(1, int(width * scale)), max(1, int(height * scale))),
-            Image.Resampling.BICUBIC,
-        )
-    return decoded
-
-
-def _prepare_vision(vision: Any, image: dict[str, str]) -> dict[str, Any]:
-    with redirect_stdout(sys.stderr):
-        processed = vision.image_processor(images=[_decode_image(image)], return_tensors="pt")
-    grid = processed["image_grid_thw"]
-    image_tokens = int(grid.prod()) // (vision.merge_size**2)
-    return {
-        "pixel_values": processed["pixel_values"],
-        "image_grid_thw": grid,
-        "image_tokens": image_tokens,
-        # Same expansion the Qwen processor performs for one image placeholder.
-        "prefix": f"{vision.start_token}{vision.pad_token * image_tokens}{vision.end_token}",
-    }
 
 
 def _validate_options(question_id: str, criteria: Any) -> None:
@@ -286,115 +178,214 @@ def validate_request(message: Any) -> tuple[str, str | dict[str, Any] | list[Any
     return request_id, state, questions
 
 
-def _validate_answers(answers: Any, questions: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(answers, dict):
-        raise RuntimeError("OpenJev result is missing answers")
-    for question_id in questions:
-        answer = answers.get(question_id)
-        if not isinstance(answer, dict) or answer.get("type") != "choice":
-            raise RuntimeError(f"OpenJev answer {question_id!r} must be a choice object")
-        if not isinstance(answer.get("choice"), str):
-            raise RuntimeError(f"OpenJev answer {question_id!r} choice must be a string")
-        probabilities = answer.get("probabilities")
-        if not isinstance(probabilities, dict) or any(
-            not isinstance(value, (int, float)) or isinstance(value, bool)
-            for value in probabilities.values()
-        ):
-            raise RuntimeError(
-                f"OpenJev answer {question_id!r} must contain numeric probabilities"
-            )
-    return answers
+# --- Prompt -----------------------------------------------------------------
 
 
-def _build_premise(state: str | dict[str, Any] | list[Any]) -> str:
-    """Convert Laya state to premise text for NLI."""
-    if isinstance(state, dict):
-        page = state.get("page", {})
-        url = page.get("url", "")
-        text = page.get("text", "")
-        recent_actions = state.get("recent_actions", [])
-        action_str = "; ".join(
-            f"{a.get('operation', '')}:{a.get('targetRef', '')}" for a in recent_actions[-5:]
+def _state_parts(state: str | dict[str, Any] | list[Any]) -> tuple[str, str, str]:
+    """(url, recent actions, page text) from a Laya state."""
+    if not isinstance(state, dict):
+        return "", "none", state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
+    page = state.get("page")
+    page = page if isinstance(page, dict) else {}
+    recent = state.get("recent_actions")
+    recent_text = json.dumps(recent, ensure_ascii=False) if recent else "none"
+    return str(page.get("url") or ""), recent_text, str(page.get("text") or "")
+
+
+def _instructions_text(instructions: str | dict[str, Any] | list[Any]) -> str:
+    if isinstance(instructions, str):
+        return instructions
+    if isinstance(instructions, list):
+        return "\n".join(str(item) for item in instructions)
+    return json.dumps(instructions, ensure_ascii=False)
+
+
+def _chat_prompt(tokenizer: Any, system: str, user: str) -> str:
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    try:
+        return tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False, enable_thinking=False
         )
-        return f"Page: {url}\nContent: {text}\nRecent: {action_str}"
-    return str(state)
+    except TypeError:  # template without an enable_thinking switch
+        return tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
+        )
 
 
-def _entailment_index(agent: Any) -> int:
-    # OpenJev NLI checkpoints order labels contradiction/entailment/neutral, so
-    # the entailment column must come from the config rather than position 0.
-    label2id = getattr(getattr(agent, "config", None), "label2id", None) or {}
-    for label, index in label2id.items():
-        if str(label).lower() == "entailment":
-            return int(index)
-    return 0
+def _user_message(url: str, recent: str, text: str, criteria: dict[str, str]) -> str:
+    candidates = "\n".join(f"{key}: {description}" for key, description in criteria.items())
+    return (
+        f"URL: {url}\n"
+        f"RECENT ACTIONS: {recent}\n"
+        f"PAGE TEXT:\n{text}\n\n"
+        f"CANDIDATE ACTIONS (id: description):\n{candidates}\n\n"
+        "Answer with exactly one id."
+    )
 
 
-def _hypothesis_from_criterion(criterion: str, description: str, context: str = "") -> str:
-    """Convert a criterion (operation or target) to an NLI hypothesis."""
-    # Every hypothesis repeats the goal; an uncapped goal crowds the
-    # criterion itself out of the pair and flattens every option's score.
-    if len(context) > MAX_GOAL_CHARS:
-        context = f"{context[: MAX_GOAL_CHARS - 1]}…"
-    return f"{context} {criterion}: {description}".strip()
-
-
-def _score_pairs(
-    agent: Any,
+def build_prompt_ids(
     tokenizer: Any,
-    premises: list[str],
-    hypotheses: list[str],
-    vision: Any = None,
-    visual: dict[str, Any] | None = None,
-) -> Any:
-    """Entailment scores per pair, or None if truncation cut into the image tokens."""
-    import numpy as np
-    import torch
+    instructions: str | dict[str, Any] | list[Any],
+    state: str | dict[str, Any] | list[Any],
+    criteria: dict[str, str],
+    max_tokens: int = MAX_PROMPT_TOKENS,
+) -> list[int]:
+    """Chat prompt token ids, with page text cut (never the rules/candidates) to fit max_tokens."""
+    system = f"{_instructions_text(instructions)}\nReply with only the id of the chosen action."
+    url, recent, text = _state_parts(state)
 
-    device = next(agent.parameters()).device
-    if visual is None:
-        batch_size = len(premises)
-        max_length = TEXT_MAX_TOKENS
-    else:
-        batch_size = max(1, IMAGE_BATCH_SIZE)
-        # Keep the text budget the model was tuned on; image tokens ride on top.
-        max_length = TEXT_MAX_TOKENS + visual["image_tokens"] + 2
-        premises = [f"{visual['prefix']}{premise}" for premise in premises]
+    def encode(page_text: str) -> list[int]:
+        prompt = _chat_prompt(tokenizer, system, _user_message(url, recent, page_text, criteria))
+        return list(tokenizer.encode(prompt))
 
-    chunks = []
-    with redirect_stdout(sys.stderr):
-        for offset in range(0, len(premises), batch_size):
-            inputs = tokenizer(
-                premises[offset : offset + batch_size],
-                hypotheses[offset : offset + batch_size],
-                return_tensors="pt",
-                padding=True,
-                # Trim page text, never the hypothesis: it carries the option
-                # being scored. Image tokens lead the premise and survive.
-                truncation="only_first",
-                max_length=max_length,
-            )
-            if visual is not None:
-                rows = inputs["input_ids"].shape[0]
-                image_counts = (inputs["input_ids"] == vision.pad_token_id).sum(dim=-1)
-                if bool((image_counts != visual["image_tokens"]).any()):
-                    return None
-                # Qwen VL batches flatten patches across samples, one grid row per image.
-                inputs["pixel_values"] = torch.cat([visual["pixel_values"]] * rows).to(
-                    device, dtype=agent.dtype
-                )
-                inputs["image_grid_thw"] = visual["image_grid_thw"].repeat(rows, 1)
-                if vision.wants_type_ids:
-                    # Same marking as ProcessorMixin.create_mm_token_type_ids: image=1, text=0.
-                    inputs["mm_token_type_ids"] = (
-                        inputs["input_ids"] == vision.pad_token_id
-                    ).int()
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+    ids = encode(text)
+    if len(ids) <= max_tokens:
+        return ids
 
-            with torch.inference_mode():
-                logits = agent(**inputs).logits  # [batch, 3] NLI classes
-                chunks.append(torch.softmax(logits.float(), dim=-1).cpu().numpy())
-    return np.concatenate(chunks)
+    text_ids = list(tokenizer.encode(text)) if text else []
+    for _ in range(TRUNCATION_MAX_PASSES):
+        overflow = len(ids) - max_tokens + TRUNCATION_MARGIN_TOKENS
+        keep = len(text_ids) - overflow
+        if keep <= 0:
+            break
+        text_ids = text_ids[:keep]
+        ids = encode(tokenizer.decode(text_ids))
+        if len(ids) <= max_tokens:
+            return ids
+    raise ValueError(
+        f"prompt needs {len(ids)} tokens even without page text; limit is {max_tokens}"
+    )
+
+
+# --- Constrained choice ------------------------------------------------------
+
+
+class _TrieNode:
+    __slots__ = ("children", "choice")
+
+    def __init__(self) -> None:
+        self.children: dict[int, _TrieNode] = {}
+        self.choice: str | None = None
+
+
+def _branches(node: _TrieNode) -> bool:
+    """Whether any node at or below `node` offers more than one continuation."""
+    return len(node.children) > 1 or any(_branches(child) for child in node.children.values())
+
+
+def build_trie(sequences: dict[str, list[int]]) -> _TrieNode:
+    root = _TrieNode()
+    for choice, tokens in sequences.items():
+        node = root
+        for token in tokens:
+            node = node.children.setdefault(token, _TrieNode())
+        node.choice = choice
+    return root
+
+
+def trie_probabilities(
+    root: _TrieNode,
+    state: Any,
+    weigh: Callable[[Any, list[int]], list[float]],
+    advance: Callable[[Any, list[int]], Any],
+    clone: Callable[[Any], Any],
+) -> dict[str, float]:
+    """Exact probability of every id: product of restricted softmaxes along its path.
+
+    `state` must already describe the root position. The model is only consulted at
+    real branch points; forced edges (a single continuation) cost nothing and are
+    fed in one batch when the next branch point needs fresh logits.
+      weigh(state, tokens)    -> next-token probabilities over `tokens`, summing to 1
+      advance(state, tokens)  -> state after feeding `tokens` (may mutate and return it)
+      clone(state)            -> independent copy, taken before a sibling mutates it
+    """
+    probabilities: dict[str, float] = {}
+
+    def walk(node: _TrieNode, node_state: Any, pending: list[int], mass: float) -> None:
+        tokens = sorted(node.children)
+        if len(tokens) == 1:
+            child = node.children[tokens[0]]
+            if child.choice is not None:
+                probabilities[child.choice] = mass
+            if child.children:
+                walk(child, node_state, [*pending, tokens[0]], mass)
+            return
+        if pending:
+            node_state = advance(node_state, pending)
+        weights = weigh(node_state, tokens)
+        # Only subtrees that branch again will read the state; the last of them may
+        # take it over, earlier ones get a copy before anyone mutates it.
+        needy = [token for token in tokens if _branches(node.children[token])]
+        for token, weight in zip(tokens, weights):
+            child = node.children[token]
+            if child.choice is not None:
+                probabilities[child.choice] = mass * weight
+            if child.children:
+                if token not in needy:
+                    child_state = None
+                else:
+                    child_state = node_state if token == needy[-1] else clone(node_state)
+                walk(child, child_state, [token], mass * weight)
+
+    walk(root, state, [], 1.0)
+    return probabilities
+
+
+def _end_token(tokenizer: Any) -> int:
+    ids = tokenizer.encode(END_OF_TURN, add_special_tokens=False)
+    if len(ids) == 1:
+        return int(ids[0])
+    eos = getattr(tokenizer, "eos_token_id", None)
+    if eos is None:
+        raise RuntimeError(f"tokenizer has no single {END_OF_TURN} token")
+    return int(eos)
+
+
+def score_choices(
+    model: Any, tokenizer: Any, prompt_ids: list[int], choices: list[str]
+) -> dict[str, float]:
+    """One prefill, then a few cached decode steps over the trie of candidate ids."""
+    import mlx.core as mx
+    from mlx_lm.models.cache import make_prompt_cache
+
+    end = _end_token(tokenizer)
+    sequences = {
+        choice: [*tokenizer.encode(choice, add_special_tokens=False), end]
+        for choice in choices
+    }
+
+    def log_probs(logits: Any) -> Any:
+        logits = logits.astype(mx.float32)
+        return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+
+    def step(cache: Any, tokens: list[int]) -> Any:
+        row = log_probs(model(mx.array(tokens)[None], cache=cache)[0, -1])
+        mx.eval(row)
+        return row
+
+    def weigh(state: list[Any], tokens: list[int]) -> list[float]:
+        return mx.softmax(state[1][mx.array(tokens)]).tolist()
+
+    def advance(state: list[Any], tokens: list[int]) -> list[Any]:
+        state[1] = step(state[0], tokens)
+        return state
+
+    def clone(state: list[Any]) -> list[Any]:
+        return [copy.deepcopy(state[0]), state[1]]
+
+    cache = make_prompt_cache(model)
+    chunk = max(1, PREFILL_CHUNK_TOKENS)
+    for offset in range(0, len(prompt_ids), chunk):
+        row = step(cache, prompt_ids[offset : offset + chunk])
+    root = build_trie(sequences)
+    return trie_probabilities(root, [cache, row], weigh, advance, clone)
+
+
+def _choose(probabilities: dict[str, float]) -> str:
+    return max(probabilities.items(), key=lambda item: item[1])[0]
 
 
 def predict(
@@ -402,75 +393,29 @@ def predict(
     questions: dict[str, Any],
     image: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    agent, tokenizer = load()
-    premise = _build_premise(state)
+    model, tokenizer = load()
+    started = time.perf_counter()
 
-    premises: list[str] = []
-    hypotheses: list[str] = []
-    pair_meta = []  # (question_id, criterion_key)
-
+    answers: dict[str, Any] = {}
+    input_tokens = 0
     for question_id, question in questions.items():
-        criteria = question.get("criteria", {})
-        context = ""
-        if isinstance(question.get("instructions"), dict):
-            context = question["instructions"].get("goal", "")
-        elif isinstance(question.get("instructions"), str):
-            context = question["instructions"]
-        elif isinstance(question.get("instructions"), list):
-            context = " ".join(str(x) for x in question["instructions"])
+        criteria = question["criteria"]
+        prompt_ids = build_prompt_ids(tokenizer, question["instructions"], state, criteria)
+        input_tokens += len(prompt_ids)
+        probabilities = score_choices(model, tokenizer, prompt_ids, list(criteria))
+        answers[question_id] = {
+            "type": "choice",
+            "choice": _choose(probabilities),
+            "probabilities": probabilities,
+        }
 
-        for criterion_key, criterion_desc in criteria.items():
-            premises.append(premise)
-            hypotheses.append(_hypothesis_from_criterion(criterion_key, criterion_desc, context))
-            pair_meta.append((question_id, criterion_key))
-
-    if not premises:
-        raise RuntimeError("No valid premise-hypothesis pairs generated")
-
-    probs = None
-    image_report: dict[str, Any] | None = None
+    total_seconds = round(time.perf_counter() - started, 3)
+    response: dict[str, Any] = {
+        "answers": answers,
+        "usage": {"input_tokens": input_tokens, "total_seconds": total_seconds},
+    }
     if image is not None:
-        vision, reason = load_vision(agent, tokenizer)
-        visual = None
-        if vision is not None:
-            try:
-                visual = _prepare_vision(vision, image)
-            except Exception as error:  # noqa: BLE001 - a bad screenshot degrades to text-only
-                reason = f"screenshot could not be processed: {error}"
-                log("image_error", error_kind=type(error).__name__, error=str(error))
-        if visual is not None:
-            probs = _score_pairs(agent, tokenizer, premises, hypotheses, vision, visual)
-            if probs is None:
-                reason = "goal text too long to keep the screenshot tokens"
-                log("image_truncated", image_tokens=visual["image_tokens"])
-            else:
-                image_report = {"used": True, "tokens": visual["image_tokens"]}
-        image_report = image_report or {"used": False, "reason": reason}
-    if probs is None:
-        probs = _score_pairs(agent, tokenizer, premises, hypotheses)
-
-    # Each criterion is independently scored by its entailment probability.
-    # They are not a categorical distribution: two candidate actions may both be
-    # entailed to different degrees, so normalizing them destroys calibration.
-    entailment = _entailment_index(agent)
-    answers = {}
-    for (question_id, criterion_key), prob in zip(pair_meta, probs):
-        entailment_score = float(prob[entailment])
-        
-        if question_id not in answers:
-            answers[question_id] = {"type": "choice", "choice": "", "probabilities": {}}
-        
-        answers[question_id]["probabilities"][criterion_key] = entailment_score
-
-    # Pick the highest raw entailment as the choice for each question.
-    for question_id, answer in answers.items():
-        if answer["probabilities"]:
-            best = max(answer["probabilities"].items(), key=lambda x: x[1])
-            answer["choice"] = best[0]
-
-    response: dict[str, Any] = {"answers": answers}
-    if image_report is not None:
-        response["image"] = image_report
+        response["image"] = {"used": False, "reason": IMAGE_UNSUPPORTED_REASON}
     return response
 
 
@@ -500,24 +445,16 @@ def handle_line(line: str) -> None:
                 "error_kind": type(error).__name__,
             }
         )
+    finally:
+        release_memory()
 
 
 def stop(_signum: int, _frame: Any) -> None:
-    # Release accelerator allocations before the process exits. This matters on
-    # macOS where MPS allocations can otherwise remain resident briefly.
-    global _agent, _tokenizer, _vision
-    try:
-        import torch
-
-        if _agent is not None:
-            _agent.to("cpu")
-        if torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-    except Exception:  # noqa: BLE001 - shutdown must always complete
-        pass
-    _agent = None
+    # Drop the weights before exiting so Metal buffers are released promptly.
+    global _model, _tokenizer
+    _model = None
     _tokenizer = None
-    _vision = None
+    release_memory()
     raise SystemExit(0)
 
 
