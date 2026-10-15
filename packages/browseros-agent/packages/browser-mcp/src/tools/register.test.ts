@@ -101,6 +101,28 @@ describe('registerBrowserTools', () => {
     expect(fake.configs.get('run')?.outputSchema).toBeDefined()
   })
 
+  it('rejects tabs new without a url instead of opening about:blank', async () => {
+    const fake = createFakeServer()
+    const opened: string[] = []
+    const session = {
+      pages: {
+        newPage: async (url: string) => {
+          opened.push(url)
+          return 42
+        },
+      },
+    } as unknown as BrowserSession
+
+    registerBrowserTools(fake.server as never, session)
+
+    for (const args of [{ action: 'new' }, { action: 'new', url: '  ' }]) {
+      const result = await fake.handlers.get('tabs')?.(args)
+      expect(result?.isError).toBe(true)
+      expect(textOf(result)).toContain('url is required')
+    }
+    expect(opened).toEqual([])
+  })
+
   it('preserves structured results when the option is omitted', async () => {
     const fake = createFakeServer()
     const session = {
@@ -109,7 +131,10 @@ describe('registerBrowserTools', () => {
 
     registerBrowserTools(fake.server as never, session)
 
-    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+    const result = await fake.handlers.get('tabs')?.({
+      action: 'new',
+      url: 'https://example.com',
+    })
 
     expect(result?.structuredContent).toEqual({ page: 42 })
     expect(result).toHaveProperty('structuredContent')
@@ -137,7 +162,10 @@ describe('registerBrowserTools', () => {
       },
     )
 
-    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+    const result = await fake.handlers.get('tabs')?.({
+      action: 'new',
+      url: 'https://example.com',
+    })
 
     expect(result).not.toHaveProperty('structuredContent')
     expect(debugLogs.at(-1)).toEqual({
@@ -318,7 +346,10 @@ describe('registerBrowserTools', () => {
       },
     )
 
-    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+    const result = await fake.handlers.get('tabs')?.({
+      action: 'new',
+      url: 'https://example.com',
+    })
 
     expect(result?.isError).toBe(true)
     // The error text stays in content, never shadowed by the handle (#2651).

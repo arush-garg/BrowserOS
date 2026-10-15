@@ -23,7 +23,9 @@ export const tabs = defineTool({
       url: z
         .string()
         .optional()
-        .describe('URL for action="new" (defaults to about:blank).'),
+        .describe(
+          'URL for action="new" (required; calls without a URL are rejected so no about:blank tabs are leaked).',
+        ),
       background: z
         .boolean()
         .default(true)
@@ -78,14 +80,17 @@ export const tabs = defineTool({
         })
       }
       case 'new': {
-        const page = await ctx.session.pages.newPage(
-          args.url ?? 'about:blank',
-          {
-            background: args.background,
-            windowId: ctx.defaultWindowId,
-            tabGroupId: ctx.defaultTabGroupId,
-          },
-        )
+        const url = args.url?.trim()
+        if (!url) {
+          return errorResult(
+            'tabs new: url is required. Pass the page URL to open instead of opening about:blank.',
+          )
+        }
+        const page = await ctx.session.pages.newPage(url, {
+          background: args.background,
+          windowId: ctx.defaultWindowId,
+          tabGroupId: ctx.defaultTabGroupId,
+        })
         return textResult(`opened page ${page}`, { page })
       }
       case 'close': {

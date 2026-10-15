@@ -27,7 +27,8 @@ enum TabsAction {
 struct TabsArgs {
     #[serde(default)]
     action: TabsAction,
-    /// URL for action="new" (defaults to about:blank).
+    /// URL for action="new" (required; calls without a URL are rejected so no
+    /// about:blank tabs are leaked).
     url: Option<String>,
     /// Retired: new pages always open in the background so an agent never
     /// switches the user's tab. Still accepted, and ignored, so clients that
@@ -84,11 +85,17 @@ fn handler<'a>(
                 )
             }
             TabsAction::New => {
+                let Some(url) = args.url.as_deref().map(str::trim).filter(|url| !url.is_empty())
+                else {
+                    return Ok(Some(error_result(
+                        "tabs new: url is required. Pass the page URL to open instead of opening about:blank.",
+                    )));
+                };
                 let page = ctx
                     .session
                     .pages
                     .new_page(
-                        args.url.as_deref().unwrap_or("about:blank"),
+                        url,
                         NewPageOptions {
                             // Never foreground: focus decisions belong to the user
                             // (cockpit Watch), not to the agent.
@@ -144,5 +151,15 @@ mod tests {
     fn unknown_fields_are_still_rejected() {
         let result = serde_json::from_value::<TabsArgs>(json!({ "action": "new", "hidden": true }));
         assert!(result.is_err_and(|error| error.to_string().contains("hidden")));
+    }
+
+    #[test]
+    fn new_without_url_parses_so_handler_can_reject_it() -> anyhow::Result<()> {
+        // The handler, not serde, rejects a missing url so the agent gets a
+        // tool error explaining why instead of a leaked about:blank tab.
+        let args: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
+        assert!(matches!(args.action, TabsAction::New));
+        assert!(args.url.is_none());
+        Ok(())
     }
 }

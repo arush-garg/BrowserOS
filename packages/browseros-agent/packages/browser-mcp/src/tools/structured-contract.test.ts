@@ -207,7 +207,10 @@ describe('browser tool structured contract', () => {
       const actual = {
         'tabs.list': await call('tabs', { action: 'list' }),
         'tabs.active': await call('tabs', { action: 'active' }),
-        'tabs.new': await call('tabs', { action: 'new' }),
+        'tabs.new': await call('tabs', {
+          action: 'new',
+          url: 'https://example.com',
+        }),
         'tabs.close': await call('tabs', { action: 'close', page: 1 }),
         'tab_groups.list': await call('tab_groups', { action: 'list' }),
         'tab_groups.create': await call('tab_groups', {
