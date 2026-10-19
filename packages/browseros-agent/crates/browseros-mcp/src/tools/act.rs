@@ -28,7 +28,7 @@ fn login_page_hint(url: &str) -> &'static str {
             || lower.contains("slack")
             || lower.contains("linear"))
     {
-        return "\n[BrowserOS note] This page requires authentication. STOP and wait for the user to log in manually, then send a follow-up message to continue.";
+        return "\n[BrowserOS note] This page appears to require authentication. Check the user's designated BrowserOS tab and account before asking them to log in; a login page in another browser or profile does not prove their existing tab is signed out. If the intended tab itself requires login, use the approved credential flow or ask the user to complete it.";
     }
     ""
 }
@@ -497,6 +497,14 @@ fn scroll_direction(direction: Option<&ActDirection>) -> ScrollDirection {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn login_hint_does_not_assume_another_browser_is_signed_out() {
+        let hint = login_page_hint("https://example.com/login");
+        assert!(hint.contains("designated BrowserOS tab"));
+        assert!(!hint.contains("STOP and wait"));
+        assert!(login_page_hint("https://example.com/products").is_empty());
+    }
 
     #[test]
     fn diff_detail_mapping() {

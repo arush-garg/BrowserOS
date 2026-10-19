@@ -45,21 +45,31 @@ describe('semantic action Laya request construction', () => {
         ref: snapshot.button,
         role: 'button',
         name: 'Search',
-        description: `button "Search" — - button "Search" [ref=${snapshot.button}]`,
+        description: 'button "Search"',
       },
       {
         ref: snapshot.textbox,
         role: 'textbox',
         name: 'Where to?',
-        description: `textbox "Where to?" — - textbox "Where to?" [ref=${snapshot.textbox}]`,
+        description: 'textbox "Where to?"',
       },
       {
         ref: snapshot.secondTextbox,
         role: 'searchbox',
         name: 'Where from?',
-        description: `searchbox "Where from?" — - searchbox "Where from?" [ref=${snapshot.secondTextbox}]`,
+        description: 'searchbox "Where from?"',
       },
     ])
+  })
+
+  it('keeps only snapshot state that adds to role and name', () => {
+    const refs = new RefMap()
+    const box = refs.mint({ backendNodeId: 9, role: 'checkbox', name: 'Agree' })
+    const [candidate] = candidatesFromSnapshot(
+      `- checkbox "Agree" [checked] [ref=${box}]`,
+      refs.byRef,
+    )
+    expect(candidate?.description).toBe('checkbox "Agree" — [checked]')
   })
 
   it('builds shared compact state and Laya choice questions', () => {

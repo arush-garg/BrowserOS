@@ -4,7 +4,7 @@ import { defineTool, errorResult, textResult } from './framework'
 export const tabs = defineTool({
   name: 'tabs',
   description:
-    'Manage browser tabs: list open pages (with their page ids), open a new page, or close one. Use the returned page id with snapshot/act/navigate.',
+    'Manage browser tabs: list open pages, open a background page without changing focus, or close one. Use windowId with new to target an unfocused window. Use the returned page id with snapshot/act/navigate.',
   input: z.object({
     action: z.enum(['list', 'new', 'close']).default('list'),
     url: z
@@ -15,8 +15,17 @@ export const tabs = defineTool({
       ),
     background: z
       .boolean()
-      .default(true)
-      .describe('Open without stealing focus for action="new".'),
+      .optional()
+      .describe(
+        'Deprecated for action="new"; tabs always open in the background.',
+      ),
+    windowId: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        'Window id for action="new"; use windows list to select an unfocused window.',
+      ),
     hidden: z
       .boolean()
       .default(false)
@@ -36,6 +45,7 @@ export const tabs = defineTool({
             page: p.pageId,
             url: p.url,
             title: p.title,
+            windowId: p.windowId,
           })),
         })
       }
@@ -47,10 +57,11 @@ export const tabs = defineTool({
           )
         }
         const page = await ctx.session.pages.newPage(url, {
-          background: args.background,
+          background: true,
           hidden: args.hidden,
-          windowId: ctx.defaultWindowId,
-          tabGroupId: ctx.defaultTabGroupId,
+          windowId: args.windowId ?? ctx.defaultWindowId,
+          tabGroupId:
+            args.windowId === undefined ? ctx.defaultTabGroupId : undefined,
         })
         return textResult(`opened page ${page}`, { page })
       }

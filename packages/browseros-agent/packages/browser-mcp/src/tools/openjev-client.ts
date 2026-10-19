@@ -8,6 +8,7 @@ import openjevServiceSource from '../../python/openjev_service.py' with {
 export interface OpenJevState {
   page: {
     url?: string
+    title?: string
     text: string
   }
   recent_actions?: unknown[]
@@ -358,14 +359,30 @@ export class OpenJevClient {
   }
 }
 
-let defaultClient: OpenJevClient | undefined
+export interface OpenJevPredictor {
+  predict(
+    state: OpenJevState,
+    questions: OpenJevQuestions,
+    options?: OpenJevPredictOptions,
+  ): Promise<OpenJevResponse>
+  close(): void
+}
 
-export function getOpenJevClient(): OpenJevClient {
-  defaultClient ??= new OpenJevClient()
+let defaultClient: OpenJevPredictor | undefined
+
+/** Default predictor; `semantic-action.ts` overrides via `setOpenJevClientFactory`. */
+let clientFactory: () => OpenJevPredictor = () => new OpenJevClient()
+
+export function setOpenJevClientFactory(factory: () => OpenJevPredictor): void {
+  clientFactory = factory
+}
+
+export function getOpenJevClient(): OpenJevPredictor {
+  defaultClient ??= clientFactory()
   return defaultClient
 }
 
-export function setOpenJevClientForTests(client?: OpenJevClient): void {
+export function setOpenJevClientForTests(client?: OpenJevPredictor): void {
   defaultClient?.close()
   defaultClient = client
 }

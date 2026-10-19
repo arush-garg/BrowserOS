@@ -23,6 +23,7 @@ Screenshots are accepted but not used: the text backend reports image.used=false
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import os
 import signal
@@ -103,6 +104,23 @@ def release_memory() -> None:
         pass
 
 
+def unload() -> bool:
+    """Drop the resident model so its weights can be reclaimed; `load()` reloads."""
+    global _model, _tokenizer
+    if _model is None and _tokenizer is None:
+        return False
+    _model, _tokenizer = None, None
+    gc.collect()
+    release_memory()
+    try:
+        import mlx.core as mx
+
+        log("model_unloaded", active_memory_gb=round(mx.get_active_memory() / 1024**3, 2))
+    except Exception:  # noqa: BLE001 - diagnostics only
+        log("model_unloaded")
+    return True
+
+
 def validate_image(message: dict[str, Any]) -> dict[str, str] | None:
     image = message.get("image")
     if image is None:
@@ -181,15 +199,20 @@ def validate_request(message: Any) -> tuple[str, str | dict[str, Any] | list[Any
 # --- Prompt -----------------------------------------------------------------
 
 
-def _state_parts(state: str | dict[str, Any] | list[Any]) -> tuple[str, str, str]:
-    """(url, recent actions, page text) from a Laya state."""
+def _state_parts(state: str | dict[str, Any] | list[Any]) -> tuple[str, str, str, str]:
+    """(url, title, recent actions, page text) from the tool state."""
     if not isinstance(state, dict):
-        return "", "none", state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
+        return "", "", "none", state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
     page = state.get("page")
     page = page if isinstance(page, dict) else {}
     recent = state.get("recent_actions")
     recent_text = json.dumps(recent, ensure_ascii=False) if recent else "none"
-    return str(page.get("url") or ""), recent_text, str(page.get("text") or "")
+    return (
+        str(page.get("url") or ""),
+        str(page.get("title") or ""),
+        recent_text,
+        str(page.get("text") or ""),
+    )
 
 
 def _instructions_text(instructions: str | dict[str, Any] | list[Any]) -> str:
@@ -215,10 +238,13 @@ def _chat_prompt(tokenizer: Any, system: str, user: str) -> str:
         )
 
 
-def _user_message(url: str, recent: str, text: str, criteria: dict[str, str]) -> str:
+def _user_message(
+    url: str, title: str, recent: str, text: str, criteria: dict[str, str]
+) -> str:
     candidates = "\n".join(f"{key}: {description}" for key, description in criteria.items())
     return (
         f"URL: {url}\n"
+        f"PAGE TITLE: {title or 'none'}\n"
         f"RECENT ACTIONS: {recent}\n"
         f"PAGE TEXT:\n{text}\n\n"
         f"CANDIDATE ACTIONS (id: description):\n{candidates}\n\n"
@@ -235,10 +261,12 @@ def build_prompt_ids(
 ) -> list[int]:
     """Chat prompt token ids, with page text cut (never the rules/candidates) to fit max_tokens."""
     system = f"{_instructions_text(instructions)}\nReply with only the id of the chosen action."
-    url, recent, text = _state_parts(state)
+    url, title, recent, text = _state_parts(state)
 
     def encode(page_text: str) -> list[int]:
-        prompt = _chat_prompt(tokenizer, system, _user_message(url, recent, page_text, criteria))
+        prompt = _chat_prompt(
+            tokenizer, system, _user_message(url, title, recent, page_text, criteria)
+        )
         return list(tokenizer.encode(prompt))
 
     ids = encode(text)
@@ -410,6 +438,7 @@ def predict(
         }
 
     total_seconds = round(time.perf_counter() - started, 3)
+    log("predicted", input_tokens=input_tokens, total_seconds=total_seconds)
     response: dict[str, Any] = {
         "answers": answers,
         "usage": {"input_tokens": input_tokens, "total_seconds": total_seconds},

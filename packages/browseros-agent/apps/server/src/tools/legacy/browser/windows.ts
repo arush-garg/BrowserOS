@@ -24,6 +24,7 @@ const windowInfoSchema = z.object({
   isVisible: z.boolean(),
   tabCount: z.number(),
   activeTabId: z.number().optional(),
+  profileName: z.string().optional(),
 })
 
 export const list_windows = defineTool({
@@ -49,8 +50,9 @@ export const list_windows = defineTool({
       if (!w.isVisible) markers.push('HIDDEN')
       if (w.isActive) markers.push('ACTIVE')
       const suffix = markers.length > 0 ? ` [${markers.join(', ')}]` : ''
+      const profile = w.profileName ? `, profile: ${w.profileName}` : ''
       lines.push(
-        `Window ${w.windowId} (${w.windowType}, ${w.tabCount} tabs)${suffix}`,
+        `Window ${w.windowId} (${w.windowType}, ${w.tabCount} tabs${profile})${suffix}`,
       )
     }
 

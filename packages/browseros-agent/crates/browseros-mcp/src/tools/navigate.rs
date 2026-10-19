@@ -26,7 +26,7 @@ fn login_page_hint(url: &str) -> &'static str {
             || lower.contains("slack")
             || lower.contains("linear"))
     {
-        return "\n[BrowserOS note] This page requires authentication. STOP and wait for the user to log in manually, then send a follow-up message to continue.";
+        return "\n[BrowserOS note] This page appears to require authentication. Check the user's designated BrowserOS tab and account before asking them to log in; a login page in another browser or profile does not prove their existing tab is signed out. If the intended tab itself requires login, use the approved credential flow or ask the user to complete it.";
     }
     ""
 }

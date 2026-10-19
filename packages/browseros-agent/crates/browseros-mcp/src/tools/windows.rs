@@ -93,9 +93,14 @@ fn format_window_list(windows: &[browseros_core::windows::WindowInfo]) -> String
         } else {
             format!(" [{}]", markers.join(", "))
         };
+        let profile = window
+            .profile_name
+            .as_deref()
+            .map(|name| format!(", profile: {name}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "Window {} ({}, {} tabs){suffix}",
-            window.window_id, window.window_type, window.tab_count
+            "Window {} ({}, {} tabs{}){}",
+            window.window_id, window.window_type, window.tab_count, profile, suffix
         ));
     }
     lines.join("\n")

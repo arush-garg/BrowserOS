@@ -5,7 +5,7 @@ import { acquirePageLease, getPageLease, releasePageLease } from './page-lease'
 export const tabs = defineTool({
   name: 'tabs',
   description:
-    'Manage browser tabs. `list` returns every open page, `active` shows the current front page, `new` opens a fresh page, and `close` closes a page. When a task would disrupt a tab the user is actively using, prefer cloning it: copy its URL from `list` into `tabs new`, then work in the new page.',
+    'Manage browser tabs. `list` returns every open page, `active` shows the current front page, `new` opens a background page without changing focus, and `close` closes a page. Use `windowId` with `new` to create a page in a specific window, even if it is not focused. Use the returned page id for subsequent actions.',
   input: z
     .object({
       action: z
@@ -28,8 +28,17 @@ export const tabs = defineTool({
         ),
       background: z
         .boolean()
-        .default(true)
-        .describe('Open without stealing focus for action="new".'),
+        .optional()
+        .describe(
+          'Deprecated for action="new"; tabs always open in the background.',
+        ),
+      windowId: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          'Window id for action="new"; use windows list to select an unfocused window.',
+        ),
       page: z
         .number()
         .int()
@@ -66,6 +75,7 @@ export const tabs = defineTool({
             page: p.pageId,
             url: p.url,
             title: p.title,
+            windowId: p.windowId,
           })),
         })
       }
@@ -87,9 +97,10 @@ export const tabs = defineTool({
           )
         }
         const page = await ctx.session.pages.newPage(url, {
-          background: args.background,
-          windowId: ctx.defaultWindowId,
-          tabGroupId: ctx.defaultTabGroupId,
+          background: true,
+          windowId: args.windowId ?? ctx.defaultWindowId,
+          tabGroupId:
+            args.windowId === undefined ? ctx.defaultTabGroupId : undefined,
         })
         return textResult(`opened page ${page}`, { page })
       }
@@ -170,6 +181,7 @@ export const tabs = defineTool({
             page: p.pageId,
             url: p.url,
             title: p.title,
+            windowId: p.windowId,
           })),
         })
       }

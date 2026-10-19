@@ -1,6 +1,5 @@
 <div align="center">
 <img width="693" height="415" alt="BrowserOS neo: the missing browser for your AI agents" src="https://github.com/user-attachments/assets/8129f9c8-e8f4-4afe-834a-91397121d833" />
-
 <br></br>
 <a href="https://discord.gg/YKwjt5vuKr"><img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord" /></a>
 <a href="https://dub.sh/browserOS-slack"><img src="https://img.shields.io/badge/Slack-555?logo=slack" alt="Slack" /></a>
@@ -10,46 +9,10 @@
 <br></br>
 
 <a href="https://www.producthunt.com/products/browseros_ai?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-browseros-neo" target="_blank" rel="noopener noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1031913&amp;theme=dark&amp;t=1786088428884" /><img alt="BrowserOS neo - The Missing Browser for Claude, Cowork &amp; Codex | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1031913&amp;theme=light&amp;t=1786088428884" /></picture></a>
-<a href="https://trendshift.io/repositories/16468?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16468" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16468/daily?language=TypeScript" alt="browseros-ai%2FBrowserOS | Trendshift" width="250" height="55"/></a>
-<br></br>
-
-<a href="https://cdn.browseros.com/download/BrowserOS_neo.dmg"><img src="https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
-<a href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
-
-**[Website](https://www.browseros.com)** · **[Docs](https://docs.browseros.com)** · **[Enterprise](mailto:founders@browseros.com?subject=Enterprise%3A%20BrowserOS%20neo&body=Hi%2C%0A%0AWe%27re%20looking%20at%20BrowserOS%20neo%20for%20our%20team.%0A%0ACompany%3A%0ATeam%20size%3A%0AWhat%20we%20want%20to%20automate%3A)**
-
-Free · Open source · Everything runs on your machine
-
+<a href="https://trendshift.io/repositories/16468?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16468" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16468/daily?language=TypeScript" alt="browseros-ai%2FBrowserOS | Trendshift" width="250" height="25" /></a>
 </div>
 
-A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
-
-BrowserOS neo is not a Chrome replacement. It is a secondary browser that sits next to Chrome, made friendly to agents.
-
-## Get started
-
-### 1. Install BrowserOS neo
-
-```sh
-brew tap browseros-ai/tap
-brew install --cask browseros-neo
-```
-
-Prefer a direct download? Grab it for [macOS](https://cdn.browseros.com/download/BrowserOS_neo.dmg) or [Windows](https://cdn.browseros.com/download/BrowserOS_neo_installer.exe).
-
-### 2. Import from Chrome
-
-One click brings over your logins, bookmarks and extensions. Your agents work with your real accounts from the first task.
-
-### 3. Connect your agent
-
-BrowserOS neo finds Claude Code, Codex, Cursor, VS Code, OpenClaw and Hermes on your machine. Connect any of them with one click.
-
-### 4. Give it a task
-
-From your agent, not from the browser:
-
-> Book me the cheapest flight to London.
+## What is BrowserOS neo?
 
 Watch it happen live in your new tab, or replay it later.
 
@@ -104,7 +67,7 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 - **Not a cloud browser.** Cloud browsers (like browser-use, browserbase) run in a datacenter, so logging into your accounts is a pain, and sites like Twitter and LinkedIn block you because you are on a datacenter IP. BrowserOS neo runs on your machine, on `127.0.0.1`.
 - **Not a locked-in AI browser.** Atlas, Comet, and Dia only work with their own AI. BrowserOS neo works with the agents you already use and pay for: Claude Code, Cowork, Codex, Cursor, and others.
 
-## Also in this repo: BrowserOS
+## Also in this repo: BrowserOS and Jev Framework
 
 <table>
 <tr>
@@ -116,6 +79,17 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 A Chromium fork with an AI agent built into every new tab, for when <b>you</b> are the one browsing. Bring your own AI keys or run everything locally with Ollama.
 <br><br>
 <b><a href="README.BrowserOS.md">Read about BrowserOS</a></b> &nbsp;·&nbsp; <a href="https://www.browseros.com/browseros/">Website</a> &nbsp;·&nbsp; <a href="https://docs.browseros.com/browseros">Docs</a>
+</td>
+</tr>
+<tr>
+<td width="110" align="center" valign="middle">
+<img src="https://github.com/user-attachments/assets/8129f9c8-e8f4-4afe-834a-91397121d833" alt="Jev Framework" width="72" />
+</td>
+<td valign="middle">
+<h3>Jev Framework</h3>
+Local semantic action model service for browser automation with HTTP endpoint, lazy loading, and intelligent unloading.
+<br><br>
+<b><a href="docs/openjev-scorer-service.md">Read about Jev Framework</a></b> &nbsp;·&nbsp; <a href="https://docs.browseros.com/openjev">Docs</a>
 </td>
 </tr>
 </table>
@@ -148,8 +122,6 @@ BrowserOS neo runs on macOS and Windows. BrowserOS runs on macOS, Windows, and L
 
 Both browsers ship from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript, Rust and Go).
 
-### Architecture
-
 ```
 BrowserOS/
 ├── packages/browseros/              # Chromium fork + build system (Python)
@@ -157,16 +129,18 @@ BrowserOS/
 │   ├── build/                       # Build CLI and modules
 │   └── resources/                   # Icons, entitlements, signing
 │
+
 └── packages/browseros-agent/        # Agent platform (TypeScript / Rust / Go)
     ├── apps/
     │   ├── claw-server-rust/        # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
     │   ├── claw-app/                # BrowserOS neo dashboard extension (WXT + React)
     │   ├── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
     │   ├── server/                  # BrowserOS MCP server + AI agent loop (Bun)
-    │   ├── app/                     # BrowserOS extension UI (WXT + React)
+    │   ├── app/                     # BrowserOS extension: new tab, side panel chat, onboarding, settings
     │   ├── app-onboard/             # BrowserOS onboarding flow (Vite)
     │   └── cli/                     # CLI tool (Go)
     │
+
     ├── packages/                    # Shared TypeScript packages
     │   ├── acpx-ai-provider/        # AI SDK provider over the acpx ACP runtime
     │   ├── agent-mcp-manager/       # Add, link and unlink MCP servers across coding agents
@@ -179,6 +153,7 @@ BrowserOS/
     │   ├── onboarding-video/        # Remotion compositions for the first-run demo
     │   └── shared/                  # Shared constants
     │
+
     └── crates/                      # Shared Rust crates
         ├── browseros-cdp/           # CDP bindings
         ├── browseros-core/          # Core primitives
@@ -187,18 +162,7 @@ BrowserOS/
         └── harness-integrations/    # Managed integrations for AI coding harnesses
 ```
 
-| Package | What it does |
-|---------|-------------|
-| [`packages/browseros`](packages/browseros/) | Chromium fork: patches, build system, signing |
-| [`apps/claw-server-rust`](packages/browseros-agent/apps/claw-server-rust/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
-| [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserOS neo new-tab dashboard: watch, replay, and manage agent sessions |
-| [`apps/claw-onboard`](packages/browseros-agent/apps/claw-onboard/) | BrowserOS neo first-run onboarding |
-| [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing the browser MCP tools and running the BrowserOS AI agent loop |
-| [`apps/app`](packages/browseros-agent/apps/app/) | BrowserOS extension: new tab, side panel chat, onboarding, settings |
-| [`apps/app-onboard`](packages/browseros-agent/apps/app-onboard/) | BrowserOS first-run onboarding |
-| [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI: control BrowserOS from the terminal or AI coding agents |
-
-### Contributing
+## Contributing
 
 We'd love your help making BrowserOS neo and BrowserOS better. Start with the [Contributing Guide](CONTRIBUTING.md), which routes you to the right path.
 

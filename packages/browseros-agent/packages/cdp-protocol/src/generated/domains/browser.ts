@@ -38,6 +38,7 @@ export interface WindowInfo {
   tabCount: number
   activeTabId?: TabID
   browserContextId?: BrowserContextID
+  profileName?: string
 }
 
 export interface TabInfo {

@@ -1,7 +1,7 @@
 use crate::framework::{
     ToolCtx, ToolExecResult, ToolResult, error_result, page_json, parse_args, text_result,
 };
-use browseros_core::{PageId, pages::NewPageOptions};
+use browseros_core::{PageId, WindowId, pages::NewPageOptions};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use serde_json::json;
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
-Use the returned page id with snapshot/act/navigate.";
+Use windowId with new to target an unfocused window; use the returned page id with snapshot/act/navigate.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -36,6 +36,9 @@ struct TabsArgs {
     #[serde(default, rename = "background")]
     #[schemars(skip)]
     _background: Option<bool>,
+    /// Window id for action="new"; may be an unfocused window.
+    #[serde(rename = "windowId")]
+    window_id: Option<i64>,
     /// Page id for action="close".
     page: Option<u32>,
 }
@@ -71,6 +74,7 @@ fn handler<'a>(
                             "page": page.page_id.0,
                             "url": page.url,
                             "title": page.title,
+                            "windowId": page.window_id.as_ref().map(|id| id.0),
                         })).collect::<Vec<_>>()
                     })),
                 )
@@ -100,8 +104,15 @@ fn handler<'a>(
                             // Never foreground: focus decisions belong to the user
                             // (cockpit Watch), not to the agent.
                             background: Some(true),
-                            window_id: ctx.defaults.default_window_id.clone(),
-                            tab_group_id: ctx.defaults.default_tab_group_id.clone(),
+                            window_id: args
+                                .window_id
+                                .map(WindowId)
+                                .or_else(|| ctx.defaults.default_window_id.clone()),
+                            tab_group_id: if args.window_id.is_some() {
+                                None
+                            } else {
+                                ctx.defaults.default_tab_group_id.clone()
+                            },
                         },
                     )
                     .await?;
@@ -144,6 +155,15 @@ mod tests {
             serde_json::from_value(json!({ "action": "new", "background": false }))?;
         assert!(matches!(args.action, TabsAction::New));
         assert_eq!(args._background, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_window_id_is_accepted() -> anyhow::Result<()> {
+        let args: TabsArgs = serde_json::from_value(json!({
+            "action": "new", "url": "https://example.com", "windowId": 7
+        }))?;
+        assert_eq!(args.window_id, Some(7));
         Ok(())
     }
 

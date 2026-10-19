@@ -271,13 +271,16 @@ class PromptTests(unittest.TestCase):
     def test_prompt_layout_follows_the_documented_format(self) -> None:
         tokenizer = FakeTokenizer()
         state = {
-            "page": {"url": "https://x.test", "text": "Header"},
+            "page": {"url": "https://x.test", "title": "Example", "text": "Header"},
             "recent_actions": [{"operation": "CLICK"}],
         }
         ids = SERVICE.build_prompt_ids(tokenizer, "RULES goal", state, self.CRITERIA)
         prompt = tokenizer.decode(ids)
         self.assertIn("system: RULES goal Reply with only the id of the chosen action.", prompt)
-        self.assertIn('URL: https://x.test RECENT ACTIONS: [{"operation": "CLICK"}]', prompt)
+        self.assertIn(
+            'URL: https://x.test PAGE TITLE: Example RECENT ACTIONS: [{"operation": "CLICK"}]',
+            prompt,
+        )
         self.assertIn("PAGE TEXT: Header", prompt)
         self.assertIn("CLICK:e1: Click link one DONE: finished Answer with exactly one id.", prompt)
 
@@ -474,6 +477,32 @@ class ModelLoadingTests(unittest.TestCase):
         with patch.dict(sys.modules, {"mlx": None, "mlx.core": None}):
             with self.assertRaisesRegex(RuntimeError, "mlx-lm"):
                 SERVICE.load()
+
+    def test_unload_drops_model_and_reload_calls_mlx_again(self) -> None:
+        fake_mx = SimpleNamespace(
+            set_memory_limit=Mock(),
+            get_active_memory=lambda: 0,
+            clear_cache=Mock(),
+        )
+        mlx_load = Mock(return_value=("model", "tokenizer"))
+        modules = {
+            "mlx": SimpleNamespace(core=fake_mx),
+            "mlx.core": fake_mx,
+            "mlx_lm": SimpleNamespace(load=mlx_load),
+        }
+        stderr = io.StringIO()
+        with patch.dict(sys.modules, modules), redirect_stderr(stderr):
+            self.assertFalse(SERVICE.unload())  # nothing loaded yet
+            SERVICE.load()
+            self.assertTrue(SERVICE.unload())
+            self.assertIsNone(SERVICE._model)
+            self.assertIsNone(SERVICE._tokenizer)
+            SERVICE.load()
+
+        self.assertEqual(mlx_load.call_count, 2)
+        fake_mx.clear_cache.assert_called()
+        events = [json.loads(line)["event"] for line in stderr.getvalue().splitlines()]
+        self.assertEqual(events, ["model_loaded", "model_unloaded", "model_loaded"])
 
 
 if __name__ == "__main__":

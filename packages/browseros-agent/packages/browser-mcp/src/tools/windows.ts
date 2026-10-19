@@ -72,8 +72,9 @@ function formatWindowList(windows: WindowInfo[]): string {
   const lines = [`Found ${windows.length} windows:`, '']
   for (const window of windows) {
     const suffix = window.isActive ? ' [ACTIVE]' : ''
+    const profile = window.profileName ? `, profile: ${window.profileName}` : ''
     lines.push(
-      `Window ${window.windowId} (${window.windowType}, ${window.tabCount} tabs)${suffix}`,
+      `Window ${window.windowId} (${window.windowType}, ${window.tabCount} tabs${profile})${suffix}`,
     )
   }
   return lines.join('\n')

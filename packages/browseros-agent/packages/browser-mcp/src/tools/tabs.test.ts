@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'bun:test'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { PageInfo, PageSession } from '@browseros/browser-core/core/pages'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { executeTool } from './framework'
@@ -41,6 +41,54 @@ describe('tabs tool', () => {
 
   beforeEach(() => {
     mockSession = createMockSession()
+  })
+
+  describe('new action', () => {
+    it('opens in the background in the default window even with background=false', async () => {
+      const newPage = mock(() => Promise.resolve(42))
+      mockSession.pages.newPage = newPage
+
+      const result = await executeTool(
+        tabs,
+        { action: 'new', url: 'https://example.com', background: false },
+        {
+          session: mockSession,
+          defaultWindowId: 1,
+          defaultTabGroupId: 'group-1',
+        },
+      )
+
+      expect(result.isError).toBeFalsy()
+      expect(newPage).toHaveBeenCalledWith('https://example.com', {
+        background: true,
+        windowId: 1,
+        tabGroupId: 'group-1',
+      })
+      expect(textOf(result)).toContain('opened page 42')
+    })
+
+    it('targets an unfocused window without applying another window’s group', async () => {
+      const newPage = mock(() => Promise.resolve(43))
+      mockSession.pages.newPage = newPage
+
+      const result = await executeTool(
+        tabs,
+        { action: 'new', url: 'https://example.com', windowId: 7 },
+        {
+          session: mockSession,
+          defaultWindowId: 1,
+          defaultTabGroupId: 'group-1',
+        },
+      )
+
+      expect(result.isError).toBeFalsy()
+      expect(newPage).toHaveBeenCalledWith('https://example.com', {
+        background: true,
+        windowId: 7,
+        tabGroupId: undefined,
+      })
+      expect(textOf(result)).toContain('opened page 43')
+    })
   })
 
   describe('match action', () => {

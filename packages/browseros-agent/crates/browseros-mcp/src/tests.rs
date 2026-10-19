@@ -797,6 +797,30 @@ async fn invalid_arguments_are_tool_error_results() {
 }
 
 #[tokio::test]
+async fn upload_validates_local_file_before_browser_side_effect() {
+    let tool = tool_by_name("upload");
+    let missing = execute_tool(
+        &tool,
+        json!({ "page": 1, "ref": "e1", "file": "/path/that/does/not/exist.mp4" }),
+        &fake_ctx(),
+    )
+    .await
+    .expect("invalid file should return a tool result");
+    assert!(missing.is_error);
+    assert!(result_text(&missing).contains("cannot access"));
+
+    let directory = execute_tool(
+        &tool,
+        json!({ "page": 1, "ref": "e1", "file": env!("CARGO_MANIFEST_DIR") }),
+        &fake_ctx(),
+    )
+    .await
+    .expect("directory should return a tool result");
+    assert!(directory.is_error);
+    assert!(result_text(&directory).contains("not a regular file"));
+}
+
+#[tokio::test]
 async fn retired_hidden_inputs_are_rejected() {
     for name in ["tabs", "windows"] {
         let tool = tool_by_name(name);

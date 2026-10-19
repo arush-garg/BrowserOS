@@ -656,11 +656,18 @@ impl BrowserBridge {
                 if opts.is_some_and(|options| options.contains_key("hidden")) {
                     return Err("pages.newPage: hidden is no longer supported".to_string());
                 }
-                let window_id = optional_i64_field(opts, "windowId")?
+                let requested_window_id = optional_i64_field(opts, "windowId")?;
+                let window_id = requested_window_id
                     .map(WindowId)
                     .or_else(|| self.ctx.defaults.default_window_id.clone());
                 let tab_group_id = optional_string_field(opts, "tabGroupId")?
-                    .or_else(|| self.ctx.defaults.default_tab_group_id.clone());
+                    .or_else(|| {
+                        if requested_window_id.is_none() {
+                            self.ctx.defaults.default_tab_group_id.clone()
+                        } else {
+                            None
+                        }
+                    });
                 let page_id = self
                     .control
                     .race(self.ctx.session.pages.new_page(

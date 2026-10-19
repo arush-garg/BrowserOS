@@ -11,10 +11,13 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +#include "base/strings/utf_string_conversions.h"
 +#include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_attributes_entry.h"
++#include "chrome/browser/profiles/profile_attributes_storage.h"
  #include "chrome/browser/profiles/profile_manager.h"
 +#include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_commands.h"
@@ -174,6 +177,16 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +  Profile* profile = bwi->GetProfile();
 +  if (profile) {
 +    info->SetBrowserContextId(profile->GetDebugName());
++    ProfileManager* profile_manager = g_browser_process->profile_manager();
++    if (profile_manager) {
++      ProfileAttributesStorage& storage =
++          profile_manager->GetProfileAttributesStorage();
++      ProfileAttributesEntry* entry =
++          storage.GetProfileAttributesWithPath(profile->GetPath());
++      if (entry && !entry->GetName().empty()) {
++        info->SetProfileName(base::UTF16ToUTF8(entry->GetName()));
++      }
++    }
 +  }
 +
 +  return info;

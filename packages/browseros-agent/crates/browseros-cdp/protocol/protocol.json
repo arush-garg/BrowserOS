@@ -3750,6 +3750,12 @@
                             "name": "browserContextId",
                             "optional": true,
                             "$ref": "BrowserContextID"
+                        },
+                        {
+                            "name": "profileName",
+                            "description": "User-visible profile name for the window.",
+                            "optional": true,
+                            "type": "string"
                         }
                     ]
                 },

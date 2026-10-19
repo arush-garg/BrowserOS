@@ -41,6 +41,7 @@ export interface WindowInfo {
   isVisible: boolean
   tabCount: number
   activeTabId?: number
+  profileName?: string
 }
 
 export interface SetWindowVisibilityResult {
