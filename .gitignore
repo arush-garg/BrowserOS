@@ -47,3 +47,11 @@ packages/browseros/build/extensions/
 
 dump/
 graphify-out/
+
+# Runtime logs and build artifacts: previously committed by accident.
+# Existing tracked copies are NOT deleted by this change (history is
+# preserved); these patterns only stop new copies being committed.
+browseros-server.log
+browseros-server.log.old
+**/.bun-build
+**/*.bun-build

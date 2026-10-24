@@ -76,9 +76,12 @@ describe('createBrowserMcpServer', () => {
       'action',
       'background',
       'field',
+      'owner',
       'page',
       'query',
+      'ttlMs',
       'url',
+      'windowId',
     ])
   })
 
