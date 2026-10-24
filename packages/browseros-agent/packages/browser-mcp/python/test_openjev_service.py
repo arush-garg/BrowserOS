@@ -98,7 +98,21 @@ class ValidationTests(unittest.TestCase):
                     },
                 }
             )
-        with self.assertRaisesRegex(ValueError, "type must be choice"):
+        with self.assertRaisesRegex(ValueError, "type must be one of"):
+            SERVICE.validate_request(
+                {
+                    "request_id": "one",
+                    "state": "page",
+                    "questions": {
+                        "operation": {
+                            "type": "rank",
+                            "instructions": "Score",
+                            "criteria": {"0": "bad", "1": "good"},
+                        }
+                    },
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "score criteria must be an array"):
             SERVICE.validate_request(
                 {
                     "request_id": "one",
@@ -109,6 +123,16 @@ class ValidationTests(unittest.TestCase):
                             "instructions": "Score",
                             "criteria": {"0": "bad", "1": "good"},
                         }
+                    },
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "noul criteria"):
+            SERVICE.validate_request(
+                {
+                    "request_id": "one",
+                    "state": "page",
+                    "questions": {
+                        "q": {"type": "noul", "instructions": "Is it?", "criteria": {"maybe": "x"}}
                     },
                 }
             )
@@ -263,6 +287,81 @@ class PredictTests(unittest.TestCase):
             result["image"],
             {"used": False, "reason": "vision not supported by mlx text backend"},
         )
+
+    def test_choice_answer_carries_typesafe_confidence(self) -> None:
+        with patch.object(SERVICE, "load", return_value=("model", FakeTokenizer())), patch.object(
+            SERVICE, "score_choices", return_value={"WAIT": 0.25, "DONE": 0.75}
+        ):
+            answer = SERVICE.predict("page", QUESTIONS)["answers"]["operation"]
+        # (0.75 - 1/2) / (1 - 1/2)
+        self.assertAlmostEqual(answer["confidence"], 0.5)
+
+    def test_score_question_returns_expected_level_legend_and_confidence(self) -> None:
+        levels = ["Cosmetic", {"what": "Degraded", "examples": ["works in Chrome"]}, "Blocking"]
+        question = {"sev": {"type": "score", "instructions": "How severe?", "criteria": levels}}
+        with patch.object(SERVICE, "load", return_value=("model", FakeTokenizer())), patch.object(
+            SERVICE, "score_choices", return_value={"0": 0.0, "1": 0.57, "2": 0.43}
+        ) as score:
+            answer = SERVICE.predict("bug report", question)["answers"]["sev"]
+        self.assertEqual(score.call_args.args[3], ["0", "1", "2"])
+        self.assertEqual(answer["type"], "score")
+        self.assertAlmostEqual(answer["score"], 1.43)
+        # TypeSafe docs example: (0, 0.57, 0.43) -> 0.355
+        self.assertAlmostEqual(answer["confidence"], 0.355, places=3)
+        self.assertEqual(answer["legend"]["1"], levels[1])
+        self.assertEqual(answer["probabilities"], {"0": 0.0, "1": 0.57, "2": 0.43})
+
+    def test_noul_question_returns_probability_of_yes(self) -> None:
+        question = {"q": {"type": "noul", "instructions": "Is it urgent?"}}
+        with patch.object(SERVICE, "load", return_value=("model", FakeTokenizer())), patch.object(
+            SERVICE, "score_choices", return_value={"yes": 0.9, "no": 0.1}
+        ) as score:
+            answer = SERVICE.predict("now please", question)["answers"]["q"]
+        self.assertEqual(score.call_args.args[3], ["yes", "no"])
+        self.assertEqual(answer, {"type": "noul", "noul": 0.9})
+
+    def test_validation_accepts_typesafe_question_shapes(self) -> None:
+        SERVICE.validate_request(
+            {
+                "request_id": "one",
+                "state": {"ticket": "refund please"},
+                "questions": {
+                    "c": {"type": "choice", "instructions": "Dept?", "criteria": {"billing": None, "returns": {"what": "returns"}}},
+                    "s": {"type": "score", "instructions": "Mood?", "criteria": ["Calm", "Angry"]},
+                    "n": {"type": "noul", "instructions": "Refund?", "criteria": {"true": "asks", "false": "no"}},
+                    "n2": {"type": "noul", "instructions": "Refund?"},
+                },
+            }
+        )
+
+
+class StateTests(unittest.TestCase):
+    CRITERIA = {"a": "first", "b": "second"}
+
+    def test_object_state_without_page_reaches_the_prompt(self) -> None:
+        tokenizer = FakeTokenizer()
+        ids = SERVICE.build_prompt_ids(
+            tokenizer, "Pick", {"user_message": "convert json to yaml"}, self.CRITERIA
+        )
+        prompt = tokenizer.decode(ids)
+        self.assertIn("convert json to yaml", prompt)
+        self.assertIn("INPUT:", prompt)
+        self.assertNotIn("PAGE TEXT", prompt)
+        self.assertIn("chosen option.", prompt)
+
+    def test_page_state_keeps_extra_top_level_fields(self) -> None:
+        tokenizer = FakeTokenizer()
+        state = {"page": {"url": "u", "text": "body"}, "goal": "buy milk"}
+        prompt = tokenizer.decode(SERVICE.build_prompt_ids(tokenizer, "Pick", state, self.CRITERIA))
+        self.assertIn("PAGE TEXT: body", prompt)
+        self.assertIn("buy milk", prompt)
+
+    def test_null_description_renders_bare_id(self) -> None:
+        tokenizer = FakeTokenizer()
+        prompt = tokenizer.decode(
+            SERVICE.build_prompt_ids(tokenizer, "Pick", "x", {"alpha": None, "beta": "b"})
+        )
+        self.assertIn("alpha beta: b", prompt)
 
 
 class PromptTests(unittest.TestCase):

@@ -40,16 +40,61 @@ describe('OllamaSystemOneClient', () => {
       }),
     )
     const client = new OllamaSystemOneClient({ model: 'tev1', fetch })
-    const response = await client.predict(state, questions, {
-      image: { data: 'abc', mimeType: 'image/jpeg' },
-    })
+    const response = await client.predict(state, questions)
     expect(calls[0]).toEqual({ model: 'tev1', state, questions })
     expect(response.answers.action?.choice).toBe('CLICK_e1')
     expect(response.usage?.input_tokens).toBe(42)
+    expect(response.image).toBeUndefined()
+  })
+
+  test('defaults to the local router without a model field', async () => {
+    let url = ''
+    const impl = (async (
+      target: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      url = String(target)
+      expect(JSON.parse(String(init?.body))).not.toHaveProperty('model')
+      return Response.json({
+        answers: { action: { choice: 'DONE', probabilities: { DONE: 1 } } },
+      })
+    }) as unknown as typeof fetch
+    await new OllamaSystemOneClient({ fetch: impl }).predict(state, questions)
+    expect(url).toBe('http://127.0.0.1:11435/v1/systemone')
+  })
+
+  test('forwards the screenshot and passes through the image report', async () => {
+    const { fetch, calls } = fakeFetch(() =>
+      Response.json({
+        backend: 'cloudflare',
+        answers: { action: { choice: 'DONE', probabilities: { DONE: 1 } } },
+        image: { used: true, count: 1 },
+      }),
+    )
+    const response = await new OllamaSystemOneClient({ fetch }).predict(
+      state,
+      questions,
+      { image: { data: 'abc', mimeType: 'image/jpeg' } },
+    )
+    expect(calls[0]?.image).toEqual({ data: 'abc', mime_type: 'image/jpeg' })
+    expect(response.image?.used).toBe(true)
+  })
+
+  test('reports image unused when the server is silent about it', async () => {
+    const { fetch } = fakeFetch(() =>
+      Response.json({
+        answers: { action: { choice: 'DONE', probabilities: { DONE: 1 } } },
+      }),
+    )
+    const response = await new OllamaSystemOneClient({ fetch }).predict(
+      state,
+      questions,
+      { image: { data: 'abc', mimeType: 'image/png' } },
+    )
     expect(response.image?.used).toBe(false)
   })
 
-  test('surfaces Ollama errors as OpenJevError', async () => {
+  test('surfaces HTTP errors as OpenJevError', async () => {
     const { fetch } = fakeFetch(() =>
       Response.json({ error: 'model "nope" not found' }, { status: 404 }),
     )

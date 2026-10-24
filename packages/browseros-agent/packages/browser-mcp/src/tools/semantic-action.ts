@@ -31,16 +31,19 @@ import { selectRelevantLines } from './snapshot-relevance'
 
 type InputApi = ReturnType<BrowserSession['input']>
 
-// BROWSEROS_OPENJEV_BACKEND=ollama sends decisions to Ollama's `/v1/systemone`
-// (BROWSEROS_OPENJEV_OLLAMA_MODEL, BROWSEROS_OPENJEV_OLLAMA_URL); anything
-// else keeps the resident mlx_lm Python service.
+// Decisions go over HTTP to the shared OpenJev router (launchd
+// com.browseros.openjev, 127.0.0.1:11435): local MLX for text, a hosted vision
+// decision model for screenshots, cloud fallback for both. Override the target
+// with BROWSEROS_OPENJEV_URL (and BROWSEROS_OPENJEV_ROUTE to pin a backend, e.g.
+// "local"). BROWSEROS_OPENJEV_BACKEND=subprocess spawns openjev_service.py
+// in-process instead (loads a second copy of the weights; offline debugging only).
 setOpenJevClientFactory(() =>
-  process.env.BROWSEROS_OPENJEV_BACKEND?.trim() === 'ollama'
-    ? new OllamaSystemOneClient({
-        baseUrl: process.env.BROWSEROS_OPENJEV_OLLAMA_URL?.trim() || undefined,
-        model: process.env.BROWSEROS_OPENJEV_OLLAMA_MODEL?.trim() || undefined,
-      })
-    : new OpenJevClient(),
+  process.env.BROWSEROS_OPENJEV_BACKEND?.trim() === 'subprocess'
+    ? new OpenJevClient()
+    : new OllamaSystemOneClient({
+        baseUrl: process.env.BROWSEROS_OPENJEV_URL?.trim() || undefined,
+        model: process.env.BROWSEROS_OPENJEV_ROUTE?.trim() || undefined,
+      }),
 )
 
 // Decision models cap the candidate list per question: the mlx_lm service takes

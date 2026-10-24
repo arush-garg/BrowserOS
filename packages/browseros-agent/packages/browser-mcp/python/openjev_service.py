@@ -2,12 +2,19 @@
 """Persistent JSONL adapter for the local OpenJev decision model (MLX).
 
 Protocol (one JSON object per line on stdin/stdout, JSON log events on stderr):
-  request:  {request_id, state: {page: {url, text}, recent_actions: [...]},
-             questions: {<name>: {type: "choice", instructions, criteria: {<id>: <description>}}},
+  request:  {request_id, state: str | object | array, questions: {<name>: <question>},
              image?: {data, mime_type}}
-  response: {request_id, answers: {<name>: {type: "choice", choice, probabilities}},
-             usage: {input_tokens, total_seconds}, image?: {used, reason}}
-            or {request_id, error, error_kind}
+            question = {type: "choice", instructions, criteria: {<id>: <description|object|null>}}
+                     | {type: "score",  instructions, criteria: [<level>, ...]}   (2-10 levels, low->high)
+                     | {type: "noul",   instructions, criteria?: {true, false}}
+            BrowserOS page states use {page: {url, title, text}, recent_actions}; any other
+            state is passed to the model whole.
+  response: {request_id, answers: {<name>: <answer>}, usage: {input_tokens, total_seconds},
+             image?: {used, reason}}  or  {request_id, error, error_kind}
+            answer = {type: "choice", choice, confidence, probabilities}
+                   | {type: "score", score, confidence, legend, probabilities}
+                   | {type: "noul", noul}
+            (TypeSafe System One answer shapes; confidence uses TypeSafe's formulas.)
 
 Backend: an mlx_lm chat model (default Qwen3.5-4B 4-bit, override with
 BROWSEROS_OPENJEV_MODEL). Each question costs ONE prefill over the prompt (goal
@@ -44,6 +51,9 @@ PREFILL_CHUNK_TOKENS = int(os.environ.get("BROWSEROS_OPENJEV_PREFILL_CHUNK") or 
 MAX_STATE_CHARS = 50_000
 MAX_QUESTIONS = 8
 MAX_OPTIONS = 64
+QUESTION_TYPES = ("choice", "score", "noul")
+MIN_SCORE_LEVELS = 2
+MAX_SCORE_LEVELS = 10
 MAX_IMAGE_BASE64_CHARS = 8_000_000
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 IMAGE_UNSUPPORTED_REASON = "vision not supported by mlx text backend"
@@ -147,8 +157,43 @@ def _validate_options(question_id: str, criteria: Any) -> None:
         )
     if any(not isinstance(key, str) or not key for key in criteria):
         raise ValueError(f"question {question_id!r} criteria keys must be nonempty strings")
-    if any(not isinstance(description, str) for description in criteria.values()):
-        raise ValueError(f"question {question_id!r} criteria descriptions must be strings")
+    # TypeSafe contract: descriptions may be a string, a structured object/array
+    # (e.g. {"what": ..., "examples": [...]}) or null (the id speaks for itself).
+    if any(
+        description is not None and not isinstance(description, (str, dict, list))
+        for description in criteria.values()
+    ):
+        raise ValueError(
+            f"question {question_id!r} criteria descriptions must be strings, objects, arrays, or null"
+        )
+
+
+def _validate_levels(question_id: str, criteria: Any) -> None:
+    if not isinstance(criteria, list) or len(criteria) < MIN_SCORE_LEVELS:
+        raise ValueError(
+            f"question {question_id!r} score criteria must be an array of at least {MIN_SCORE_LEVELS} levels"
+        )
+    if len(criteria) > MAX_SCORE_LEVELS:
+        raise ValueError(
+            f"question {question_id!r} supports at most {MAX_SCORE_LEVELS} score levels"
+        )
+    if any(not isinstance(level, (str, dict, list)) or not level for level in criteria):
+        raise ValueError(
+            f"question {question_id!r} score levels must be nonempty strings, objects, or arrays"
+        )
+
+
+def _validate_noul_criteria(question_id: str, criteria: Any) -> None:
+    if criteria is None:
+        return
+    if not isinstance(criteria, dict) or set(criteria) - {"true", "false"}:
+        raise ValueError(
+            f"question {question_id!r} noul criteria must be an object with only 'true'/'false' keys"
+        )
+    if any(not isinstance(value, (str, dict, list)) for value in criteria.values()):
+        raise ValueError(
+            f"question {question_id!r} noul criteria descriptions must be strings, objects, or arrays"
+        )
 
 
 def _validate_question(question_id: Any, question: Any) -> None:
@@ -157,15 +202,23 @@ def _validate_question(question_id: Any, question: Any) -> None:
     if not isinstance(question, dict):
         raise ValueError(f"question {question_id!r} must be an object")
 
-    if question.get("type") != "choice":
-        raise ValueError(f"question {question_id!r} type must be choice")
+    kind = question.get("type")
+    if kind not in QUESTION_TYPES:
+        raise ValueError(
+            f"question {question_id!r} type must be one of {', '.join(QUESTION_TYPES)}"
+        )
 
     instructions = question.get("instructions")
     if not isinstance(instructions, (str, dict, list)) or not instructions:
         raise ValueError(
             f"question {question_id!r} instructions must be a nonempty string, object, or array"
         )
-    _validate_options(question_id, question.get("criteria"))
+    if kind == "choice":
+        _validate_options(question_id, question.get("criteria"))
+    elif kind == "score":
+        _validate_levels(question_id, question.get("criteria"))
+    else:
+        _validate_noul_criteria(question_id, question.get("criteria"))
 
 
 def validate_request(message: Any) -> tuple[str, str | dict[str, Any] | list[Any], dict[str, Any]]:
@@ -200,19 +253,33 @@ def validate_request(message: Any) -> tuple[str, str | dict[str, Any] | list[Any
 
 
 def _state_parts(state: str | dict[str, Any] | list[Any]) -> tuple[str, str, str, str]:
-    """(url, title, recent actions, page text) from the tool state."""
+    """(url, title, recent actions, page text) from the tool state.
+
+    BrowserOS sends {page: {url, title, text}, recent_actions}. Any other object
+    or array (the generic TypeSafe contract) is serialized whole as the text, so
+    content outside `page` is never silently dropped.
+    """
     if not isinstance(state, dict):
         return "", "", "none", state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
     page = state.get("page")
-    page = page if isinstance(page, dict) else {}
+    if not isinstance(page, dict):
+        return "", "", "none", json.dumps(state, ensure_ascii=False)
     recent = state.get("recent_actions")
     recent_text = json.dumps(recent, ensure_ascii=False) if recent else "none"
+    extra = {key: value for key, value in state.items() if key not in ("page", "recent_actions")}
+    text = str(page.get("text") or "")
+    if extra:
+        text = f"{text}\n\nCONTEXT: {json.dumps(extra, ensure_ascii=False)}".lstrip()
     return (
         str(page.get("url") or ""),
         str(page.get("title") or ""),
         recent_text,
-        str(page.get("text") or ""),
+        text,
     )
+
+
+def _is_page_state(state: str | dict[str, Any] | list[Any]) -> bool:
+    return isinstance(state, dict) and isinstance(state.get("page"), dict)
 
 
 def _instructions_text(instructions: str | dict[str, Any] | list[Any]) -> str:
@@ -238,10 +305,21 @@ def _chat_prompt(tokenizer: Any, system: str, user: str) -> str:
         )
 
 
+def _description_text(description: Any) -> str:
+    if description is None:
+        return ""
+    if isinstance(description, str):
+        return description
+    return json.dumps(description, ensure_ascii=False)
+
+
 def _user_message(
-    url: str, title: str, recent: str, text: str, criteria: dict[str, str]
+    url: str, title: str, recent: str, text: str, criteria: dict[str, Any]
 ) -> str:
-    candidates = "\n".join(f"{key}: {description}" for key, description in criteria.items())
+    candidates = "\n".join(
+        f"{key}: {_description_text(description)}" if description is not None else key
+        for key, description in criteria.items()
+    )
     return (
         f"URL: {url}\n"
         f"PAGE TITLE: {title or 'none'}\n"
@@ -252,22 +330,40 @@ def _user_message(
     )
 
 
+def _generic_user_message(text: str, criteria: dict[str, Any]) -> str:
+    options = "\n".join(
+        f"{key}: {_description_text(description)}" if description is not None else key
+        for key, description in criteria.items()
+    )
+    return f"INPUT:\n{text}\n\nOPTIONS (id: description):\n{options}\n\nAnswer with exactly one id."
+
+
 def build_prompt_ids(
     tokenizer: Any,
     instructions: str | dict[str, Any] | list[Any],
     state: str | dict[str, Any] | list[Any],
-    criteria: dict[str, str],
+    criteria: dict[str, Any],
     max_tokens: int = MAX_PROMPT_TOKENS,
 ) -> list[int]:
-    """Chat prompt token ids, with page text cut (never the rules/candidates) to fit max_tokens."""
-    system = f"{_instructions_text(instructions)}\nReply with only the id of the chosen action."
+    """Chat prompt token ids, with page text cut (never the rules/candidates) to fit max_tokens.
+
+    Page states (BrowserOS) keep the browser-action layout; any other state uses a
+    neutral INPUT/OPTIONS layout so generic decisions are not framed as clicks.
+    """
+    page_state = _is_page_state(state)
     url, title, recent, text = _state_parts(state)
+    if page_state:
+        system = f"{_instructions_text(instructions)}\nReply with only the id of the chosen action."
+    else:
+        system = f"{_instructions_text(instructions)}\nReply with only the id of the chosen option."
 
     def encode(page_text: str) -> list[int]:
-        prompt = _chat_prompt(
-            tokenizer, system, _user_message(url, title, recent, page_text, criteria)
+        user = (
+            _user_message(url, title, recent, page_text, criteria)
+            if page_state
+            else _generic_user_message(page_text, criteria)
         )
-        return list(tokenizer.encode(prompt))
+        return list(tokenizer.encode(_chat_prompt(tokenizer, system, user)))
 
     ids = encode(text)
     if len(ids) <= max_tokens:
@@ -416,6 +512,79 @@ def _choose(probabilities: dict[str, float]) -> str:
     return max(probabilities.items(), key=lambda item: item[1])[0]
 
 
+def choice_confidence(probabilities: list[float]) -> float:
+    """TypeSafe Choice confidence: top probability above an even split, scaled to [0, 1]."""
+    n = len(probabilities)
+    if n < 2:
+        return 1.0
+    return max(0.0, min(1.0, (max(probabilities) - 1 / n) / (1 - 1 / n)))
+
+
+def score_confidence(probabilities: list[float]) -> float:
+    """TypeSafe Score confidence: spread around the top level vs. an even spread."""
+    n = len(probabilities)
+    top = probabilities.index(max(probabilities))
+    spread = sum(p * abs(i - top) for i, p in enumerate(probabilities))
+    even_spread = sum(abs(i - (n - 1) / 2) for i in range(n)) / n
+    return max(0.0, min(1.0, 1 - spread / even_spread))
+
+
+def _level_text(level: Any) -> str:
+    if isinstance(level, dict) and isinstance(level.get("what"), str):
+        examples = level.get("examples")
+        if isinstance(examples, list) and examples:
+            return f"{level['what']} (e.g. {'; '.join(str(e) for e in examples)})"
+        return level["what"]
+    return _description_text(level)
+
+
+# Each question type is lowered onto the same constrained-choice scorer:
+#   choice -> the caller's ids
+#   score  -> level numbers "0".."n-1", answer = expected level
+#   noul   -> "yes"/"no", answer = P(yes)
+NOUL_INSTRUCTION = "Answer yes or no."
+
+
+def _lower_question(question: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    kind = question["type"]
+    instructions = question["instructions"]
+    if kind == "choice":
+        return instructions, question["criteria"]
+    if kind == "score":
+        levels = question["criteria"]
+        text = _instructions_text(instructions)
+        rules = f"{text}\nRate on the ordered scale below; level 0 is the low end, level {len(levels) - 1} the high end."
+        return rules, {str(i): _level_text(level) for i, level in enumerate(levels)}
+    criteria = question.get("criteria") or {}
+    text = _instructions_text(instructions)
+    return f"{text}\n{NOUL_INSTRUCTION}", {
+        "yes": _level_text(criteria["true"]) if "true" in criteria else "yes, true",
+        "no": _level_text(criteria["false"]) if "false" in criteria else "no, false",
+    }
+
+
+def _answer(question: dict[str, Any], probabilities: dict[str, float]) -> dict[str, Any]:
+    kind = question["type"]
+    if kind == "choice":
+        return {
+            "type": "choice",
+            "choice": _choose(probabilities),
+            "confidence": round(choice_confidence(list(probabilities.values())), 4),
+            "probabilities": probabilities,
+        }
+    if kind == "score":
+        levels = question["criteria"]
+        ordered = [probabilities[str(i)] for i in range(len(levels))]
+        return {
+            "type": "score",
+            "score": round(sum(i * p for i, p in enumerate(ordered)), 4),
+            "confidence": round(score_confidence(ordered), 4),
+            "legend": {str(i): level for i, level in enumerate(levels)},
+            "probabilities": {str(i): p for i, p in enumerate(ordered)},
+        }
+    return {"type": "noul", "noul": round(probabilities["yes"], 4)}
+
+
 def predict(
     state: str | dict[str, Any] | list[Any],
     questions: dict[str, Any],
@@ -427,15 +596,11 @@ def predict(
     answers: dict[str, Any] = {}
     input_tokens = 0
     for question_id, question in questions.items():
-        criteria = question["criteria"]
-        prompt_ids = build_prompt_ids(tokenizer, question["instructions"], state, criteria)
+        instructions, criteria = _lower_question(question)
+        prompt_ids = build_prompt_ids(tokenizer, instructions, state, criteria)
         input_tokens += len(prompt_ids)
         probabilities = score_choices(model, tokenizer, prompt_ids, list(criteria))
-        answers[question_id] = {
-            "type": "choice",
-            "choice": _choose(probabilities),
-            "probabilities": probabilities,
-        }
+        answers[question_id] = _answer(question, probabilities)
 
     total_seconds = round(time.perf_counter() - started, 3)
     log("predicted", input_tokens=input_tokens, total_seconds=total_seconds)

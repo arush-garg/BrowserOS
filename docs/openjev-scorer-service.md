@@ -31,10 +31,22 @@ It is 2.2 GB on disk, loads in ~2 s, and runs with a ~4–5 GB process footprint
 
 - State contains sanitized URL, recent actions, and goal-relevant page characters (≤4,000).
 - The service renders one chat prompt: the question instructions (decision rules + goal) as the system message; URL, recent actions, page text, and the candidate list (`id: description`) as the user message.
-- `image` is accepted for protocol compatibility but the text backend ignores it and reports `image: {used: false, reason}`.
+- `image` is accepted for protocol compatibility but the text backend ignores it and reports `image: {used: false, reason}`. The default checkpoint has no vision weights: `mlx_lm`'s `qwen3_5` loader drops `vision_tower`/`model.visual` tensors during conversion, so all 924 tensors in `mlx--Qwen3.5-4B-4bit` are `language_model.*`. Image input would need an MLX VLM runtime plus a checkpoint converted with its vision tower.
 - Page text and labels remain untrusted data; only the caller goal controls behavior.
 - The model makes finite choices and cannot generate text. Pass `text` when a goal can require `TYPE_TEXT` or `SELECT`; otherwise the loop pauses with `needs_text` before that text/select step mutates the page.
 - Loop stops on DONE, BLOCKED, low confidence, repeated no-progress action, error, or step limit.
+
+## Question types (TypeSafe System One shapes)
+
+All three TypeSafe primitives are served; each is lowered onto the same one-prefill constrained-choice scorer.
+
+| `type` | `criteria` | Answer |
+|---|---|---|
+| `choice` | `{id: description \| object \| null}` (≤64) | `choice`, `confidence`, `probabilities` |
+| `score` | ordered array of 2–10 levels (string or `{what, examples}`) | `score` (expected level), `confidence`, `legend`, `probabilities` |
+| `noul` | optional `{true, false}` | `noul` = P(yes) |
+
+`confidence` follows TypeSafe's formulas (Choice: `(p_max − 1/n)/(1 − 1/n)`; Score: 1 − spread around the top level ÷ even spread). `state` may be a string, a BrowserOS page object (`{page, recent_actions}`, browser-action layout), or any other object/array, which is serialized whole into a neutral `INPUT/OPTIONS` prompt (earlier versions silently dropped non-`page` objects).
 
 ## JSONL protocol
 
@@ -52,34 +64,40 @@ Response:
 
 `image` is optional in both directions; `image.used: false` comes with a `reason`. Stdout is protocol-only. Diagnostics go to stderr as JSON events (`model_loaded`, `request_error`).
 
-## HTTP endpoint (Jev / Ollama `/v1/systemone` contract)
+## HTTP endpoint (default): OpenJev router on 127.0.0.1:11435
 
-The same model can be served over HTTP so that BrowserOS talks to a URL instead of owning a subprocess, and so the model behind the URL can be swapped (Ollama decision models, a remote Jev-compatible API) without a code change. The model loads on the first request and is unloaded after 30 s without traffic (`--idle-seconds`), so the ~3 GB footprint is only held while decisions are flowing. Cold request ≈ +3–8 s for the load.
-
-```sh
-openjev-serve                      # ~/bin launcher -> python/openjev_http.py, 127.0.0.1:11435
-openjev-serve --idle-seconds 120   # keep warm longer; 0 = never unload; --preload loads at start
-# POST /v1/systemone {model?, state, questions} -> {model, answers, usage}; GET /health
-```
-
-Point the server at it:
+`semantic_action` talks HTTP to one shared decision endpoint instead of owning a subprocess. The server is the
+OpenJev router (`~/Development/openjev-client`, launchd `com.browseros.openjev`, launcher `~/bin/openjev-serve`).
+It imports `openjev_service.py` from this directory and runs the MLX model in-process as its first text
+backend, falling back to Cloudflare Workers AI `clef-flash`, then OpenRouter `inception/mercury-decide:free`.
+Screenshots go to those two vision-capable decision models, because the local checkpoint has no vision weights.
+The model loads on the first local request and unloads after `OPENJEV_LOCAL_IDLE_SECONDS` (default 120) idle.
 
 ```sh
-export BROWSEROS_OPENJEV_BACKEND=ollana                     # HTTP transport (openjev-ollama-client.ts)
-export BROWSEROS_OPENJEV_OLLAMA_URL=http://127.0.0.1:11435  # or http://127.0.0.1:11434 for Ollama itself
-export BROWSEROS_OPENJEV_OLLAMA_MODEL=openjev               # model name forwarded in the request
-export BROWSEROS_OPENJEV_MAX_OPTIONS=64                     # lower to 24 for Ollama's tev1
-export BROWSEROS_OPENJEV_MAX_STATE_TEXT=4000                # lower to ~1500 for tev1's 2048-token prompt cap
+# POST /v1/systemone {state, questions, image?, model?} -> {model, backend, answers, usage, routing, image?}
+# GET  /health -> chains, per-backend configured/budget/cooldown/today's usage
+curl -s 127.0.0.1:11435/health | python3 -m json.tool
+launchctl kickstart -k gui/$(id -u)/com.browseros.openjev   # after editing openjev_service.py or the router
 ```
 
-Measured (M4 Pro, 7 advisory goals): the HTTP path scores identically to the subprocess (7/7, median 6.6 s) because it is the same model; Ollama's `tev1:0.8b` was 5/7 at 0.8 s/decision but is capped at 24 criteria and 2048 prompt tokens, and `strands-decider` failed to load in Ollama 0.40.6 (`missing embedding weight`). Unset `BROWSEROS_OPENJEV_BACKEND` to return to the resident subprocess.
+BrowserOS needs no configuration. Optional overrides:
+
+```sh
+export BROWSEROS_OPENJEV_URL=http://127.0.0.1:11435   # any /v1/systemone server (Ollama works too)
+export BROWSEROS_OPENJEV_ROUTE=local                  # pin a router backend: local | cloudflare | openrouter
+export BROWSEROS_OPENJEV_BACKEND=subprocess           # spawn openjev_service.py directly (offline debugging; second copy of weights)
+export BROWSEROS_OPENJEV_MAX_OPTIONS=64
+```
+
+With `screenshot: true`, the image reaches a vision model and `vision.used` is `true`. Measured 2026-10-19:
+a chart image got 4/4 questions right on Cloudflare and on OpenRouter, versus 0/4 with the local text model.
 
 ## Tests
 
 ```sh
 cd packages/browseros-agent
 ~/Development/v_env/bin/python -m unittest packages/browser-mcp/python/test_openjev_service.py
-bun test packages/browser-mcp/src/tools/openjev-client.test.ts   packages/browser-mcp/src/tools/semantic-action.test.ts   packages/browser-mcp/src/tools/semantic-action.integration.test.ts
+bun test packages/browser-mcp/src/tools/openjev-client.test.ts packages/browser-mcp/src/tools/openjev-ollama-client.test.ts packages/browser-mcp/src/tools/semantic-action.test.ts packages/browser-mcp/src/tools/semantic-action.integration.test.ts
 ```
 
 ## Jev Framework Documentation
@@ -102,7 +120,7 @@ Exact NODE_ENV=development command:
 ```
 
 ### Important Notes
-- Compatible HTTP wrapper uses MLX (NOT Ollama serving model directly)
+- The HTTP server is the OpenJev router (local MLX in-process + cloud fallback); `openjev_http.py` was removed
 - Chrome/CDP is an external dependency
-- Documentation covers HTTP contract, lazy load +30s idle unload, ~/bin/openjev-serve, env selection, tests
+- Documentation covers HTTP contract, lazy load + idle unload, ~/bin/openjev-serve, env selection, tests
 - Parent handles launchd installation; do not commit local absolute-path plists

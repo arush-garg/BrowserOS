@@ -28,7 +28,7 @@ Model: `BROWSEROS_OPENJEV_MODEL` (default `~/.cache/huggingface/hub/mlx--Qwen3.5
     targetRef?: string
     result?: string
   }>
-  screenshot?: boolean    // default false; accepted, but the text backend ignores it
+  screenshot?: boolean    // default false; routed to a vision decision model by the OpenJev router
   success?: Predicate       // optional explicit postcondition for the complete goal. A model DONE decision is accepted only when this predicate matches; otherwise the loop continues or returns assertion_failed.
   assertTimeout?: number    // How long, in ms, to wait for `success` after a DONE decision (default 5000, max 30000)
 }
@@ -61,7 +61,7 @@ The model is constrained to choose one of the offered action ids; it never gener
 1. Capture a fresh accessibility snapshot and BrowserOS refs.
 2. Filter goal-relevant page text to 4,000 characters.
 3. Build one choice question: decision rules + goal as instructions, and up to 64 criteria of the form `CLICK:e12` → `Click link "new"` (plus `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`).
-4. Send one request to the persistent `openjev_service.py` subprocess. The service renders one chat prompt (rules, URL, recent actions, page text, candidate list), prefills it once, and reads the answer by walking the token trie of the candidate ids with restricted, renormalised next-token distributions.
+4. Send one request to the OpenJev router at `127.0.0.1:11435` (which runs `openjev_service.py` in-process for text). The service renders one chat prompt (rules, URL, recent actions, page text, candidate list), prefills it once, and reads the answer by walking the token trie of the candidate ids with restricted, renormalised next-token distributions.
 5. Validate the answer id and probability distribution (sums to 1 over the criteria).
 6. Effective confidence is the chosen id's probability.
 7. Execute safe BrowserOS input primitive, settle, and repeat.
