@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
+import { platform } from 'node:os'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { RefMap } from '@browseros/browser-core/core/snapshot/refs'
 import { executeTool } from './framework'
@@ -246,9 +247,12 @@ describe('semantic_action execution guards', () => {
       maxSteps: 1,
     })
     expect(result.structuredContent).toMatchObject({ status: 'max_steps' })
+    // semantic-action.ts branches on platform(): Meta+a on darwin,
+    // Control+a elsewhere. The old expectation hardcoded Meta+a, so this
+    // test failed on any non-macOS runner even though the code was correct.
     expect(actions).toEqual([
       'focus:e1',
-      'press:Meta+a',
+      platform() === 'darwin' ? 'press:Meta+a' : 'press:Control+a',
       'type:flights',
       'fill:e1:flights',
     ])

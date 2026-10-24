@@ -84,7 +84,9 @@ describe('registerBrowserTools', () => {
       'owner',
       'page',
       'query',
+      'ttlMs',
       'url',
+      'windowId',
     ])
     const windowsSchema = fake.configs.get('windows')?.inputSchema as
       | { shape: Record<string, unknown> }
