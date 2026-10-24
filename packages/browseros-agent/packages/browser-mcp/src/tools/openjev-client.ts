@@ -58,6 +58,9 @@ export interface OpenJevPredictOptions {
 
 export interface OpenJevResponse {
   answers: Record<string, OpenJevAnswer>
+  /** Identifies the model that actually decided; a router may escalate or fall through. */
+  backend?: string
+  model?: string
   usage?: OpenJevUsage
   image?: OpenJevImageReport
 }
@@ -157,6 +160,8 @@ export class OpenJevClient {
         }
         return {
           answers: response.answers,
+          backend: 'local-mlx-offline',
+          model: process.env.BROWSEROS_OPENJEV_MODEL || 'Qwen3.5-4B-4bit',
           ...(response.usage && { usage: response.usage }),
           ...(response.image && { image: response.image }),
         }

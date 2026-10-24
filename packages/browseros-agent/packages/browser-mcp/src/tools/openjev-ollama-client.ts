@@ -98,6 +98,10 @@ export class OllamaSystemOneClient {
       }
       return {
         answers: body.answers,
+        backend:
+          body.backend ??
+          (this.model ? `systemone/${this.model}` : 'systemone/unreported'),
+        ...(body.model && { model: body.model }),
         usage: {
           input_tokens: body.usage?.input_tokens ?? 0,
           output_tokens: body.usage?.output_tokens,

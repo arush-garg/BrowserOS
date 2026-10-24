@@ -43,6 +43,7 @@ describe('OpenJevClient', () => {
     const first = await client.predict(state, questions)
     const second = await client.predict(state, questions)
 
+    expect(first.backend).toBe('local-mlx-offline')
     expect(first.usage).toEqual({ input_tokens: 1, output_tokens: 0 })
     expect(first.answers).toMatchObject({
       operation: {

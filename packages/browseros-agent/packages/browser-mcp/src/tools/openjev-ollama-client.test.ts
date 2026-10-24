@@ -42,6 +42,8 @@ describe('OllamaSystemOneClient', () => {
     const client = new OllamaSystemOneClient({ model: 'tev1', fetch })
     const response = await client.predict(state, questions)
     expect(calls[0]).toEqual({ model: 'tev1', state, questions })
+    expect(response.backend).toBe('systemone/tev1')
+    expect(response.model).toBe('tev1')
     expect(response.answers.action?.choice).toBe('CLICK_e1')
     expect(response.usage?.input_tokens).toBe(42)
     expect(response.image).toBeUndefined()
@@ -78,6 +80,7 @@ describe('OllamaSystemOneClient', () => {
     )
     expect(calls[0]?.image).toEqual({ data: 'abc', mime_type: 'image/jpeg' })
     expect(response.image?.used).toBe(true)
+    expect(response.backend).toBe('cloudflare')
   })
 
   test('reports image unused when the server is silent about it', async () => {

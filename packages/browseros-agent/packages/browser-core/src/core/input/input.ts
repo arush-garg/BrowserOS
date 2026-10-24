@@ -6,7 +6,6 @@ import {
   focusElement,
   getElementCenter,
   getInputValue,
-  jsClick,
   scrollIntoView,
 } from './geometry'
 import { clearField, pressCombo, typeText } from './keyboard'
@@ -176,22 +175,79 @@ export class Input {
     opts: ClickOptions = {},
   ): Promise<{ x: number; y: number } | undefined> {
     await scrollIntoView(session, backendNodeId)
+
+    let center: { x: number; y: number }
     try {
-      const { x, y } = await getElementCenter(session, backendNodeId)
-      await dispatchClick(
-        session,
-        x,
-        y,
-        mouseButton(opts.button),
-        opts.clickCount ?? 1,
-        0,
-      )
-      return { x, y }
+      center = await getElementCenter(session, backendNodeId)
     } catch {
-      // No geometry (hidden/zero-size) — fall back to a synthetic DOM click.
-      await jsClick(session, backendNodeId)
-      return undefined
+      throw new Error(
+        'cannot click an element with no geometry (hidden or zero-size) — make it visible first',
+      )
     }
+
+    const { x, y } = center
+
+    // ── Occlusion / hit-test guard ────────────────────────────────────────────
+    // The hit-tested topmost element must be the target, its descendant, or an
+    // associated label. An unrelated ancestor or overlay is not proof that a
+    // click reaches the target.
+    //
+    // Everything else means a different element is covering the target — fail
+    // loudly so the caller can scroll/close a modal/wait for an overlay to
+    // disappear rather than silently mis-clicking.
+    // ─────────────────────────────────────────────────────────────────────────
+    const occlusionError = (await callOnElement(
+      session,
+      backendNodeId,
+      `function(px, py) {
+        var target = this;
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return 'invalid click coordinates';
+        var rect = target.getBoundingClientRect();
+        if (!rect.width || !rect.height || getComputedStyle(target).visibility === 'hidden' ||
+            getComputedStyle(target).display === 'none') return 'target has no visible geometry';
+        var top = target.ownerDocument.elementFromPoint(px, py);
+        if (!top) return 'no element at click point';
+        // 1. Same element
+        if (top === target) return null;
+        // 2. Descendant of target (inner <span>, <svg>, etc.)
+        if (target.contains(top)) return null;
+        // 3. top is a <label> associated with target
+        if (top.tagName === 'LABEL') {
+          var ctrl = top.control;
+          if (ctrl === target) return null;
+        }
+        // 4. target is a <label> whose control lives inside top (or is top itself)
+        if (target.tagName === 'LABEL') {
+          var tc = target.control;
+          if (tc && (tc === top || tc.contains(top))) return null;
+        }
+        return top.tagName + (top.id ? '#' + top.id : '') +
+               (top.className ? '.' + String(top.className).trim().split(/\\s+/).join('.') : '');
+      }`,
+      [x, y],
+    )) as string | null | undefined
+
+    if (occlusionError === undefined) {
+      throw new Error(
+        'could not verify click occlusion — target may be detached',
+      )
+    }
+    if (occlusionError) {
+      throw new Error(
+        `element is occluded at (${Math.round(x)}, ${Math.round(y)}) by <${occlusionError}> — ` +
+          `scroll the overlapping element out of the way or wait for it to disappear before clicking`,
+      )
+    }
+
+    await dispatchClick(
+      session,
+      x,
+      y,
+      mouseButton(opts.button),
+      opts.clickCount ?? 1,
+      0,
+    )
+    return { x, y }
   }
 
   async hover(ref: string): Promise<void> {
