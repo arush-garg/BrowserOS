@@ -294,6 +294,8 @@ describe('browser tool structured contract', () => {
         navigate: ['page', 'url'],
         snapshot: [
           'contentLength',
+          'droppedLines',
+          'droppedRefs',
           'mode',
           'page',
           'partial',
