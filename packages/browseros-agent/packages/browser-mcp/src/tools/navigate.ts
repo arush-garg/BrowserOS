@@ -1,6 +1,7 @@
 import { z } from 'zod/v4'
 import { defineTool, errorResult } from './framework'
 import { expandMacro, SEARCH_MACROS } from './navigate-macros'
+import { invalidateStaleGuard } from './stale-guard'
 
 export const navigate = defineTool({
   name: 'navigate',
@@ -60,6 +61,11 @@ export const navigate = defineTool({
           break
       }
     }
+
+    // Navigation terminates queued multi-actions for this page: any
+    // action_guard token minted before this point is now stale, and the
+    // caller must take a fresh snapshot before acting again.
+    invalidateStaleGuard(ctx.session, args.page, `navigate ${args.action}`)
 
     const refreshed = await ctx.session.pages.refresh(args.page)
     const origin =

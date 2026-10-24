@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import { defineTool, textResult } from './framework'
+import { truncateSnapshot } from './observation-policy'
 import { formatSnapshotResult } from './snapshot-format'
 
 export const snapshot = defineTool({
@@ -50,21 +51,25 @@ export const snapshot = defineTool({
       args.mode === 'interactive'
         ? rawLines.filter((line) => /\[ref=e\d+\]/.test(line))
         : rawLines
-    const limited = lines.slice(0, args.maxLines)
-    const partial = timedOut || limited.length < lines.length
-    const text = limited.join('\n')
+    // Truncation is reported explicitly, with the dropped refs named, so
+    // "not in my snapshot" is never mistaken for "not on the page".
+    const truncated = truncateSnapshot(lines.join('\n'), args.maxLines)
+    const partial = timedOut || truncated.truncated
+    const text = truncated.text
     const origin =
       ctx.session.pages.getInfo(args.page)?.url ?? snapshot.url ?? 'unknown'
     const formatted = await formatSnapshotResult(text, origin)
     return textResult(
-      `${partial ? `[partial ${args.mode} snapshot]\n` : ''}${formatted.text}`,
+      `${partial ? `[partial ${args.mode} snapshot]\n` : ''}${truncated.header ? `${truncated.header}\n` : ''}${formatted.text}`,
       {
         page: args.page,
         mode: args.mode,
         partial,
         timedOut,
-        totalLines: lines.length,
-        returnedLines: limited.length,
+        totalLines: truncated.totalLines,
+        returnedLines: truncated.returnedLines,
+        droppedLines: truncated.droppedLines,
+        droppedRefs: truncated.droppedRefs,
         ...formatted.structured,
       },
     )
