@@ -17,6 +17,7 @@ import { semantic_action } from './semantic-action'
 import { snapshot } from './snapshot'
 import { tab_groups } from './tab-groups'
 import { tabs } from './tabs'
+import { TASK_SESSION_TOOLS } from './task-session-tools'
 import { upload } from './upload'
 import { wait } from './wait'
 import { windows } from './windows'
@@ -44,4 +45,5 @@ export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   windows,
   evaluate,
   run,
+  ...TASK_SESSION_TOOLS,
 ]
