@@ -1,5 +1,5 @@
 /**
- * Static-markup checks for the Tasks list screen. Stubs the data hook so the
+ * Static-markup checks for the Skills list screen. Stubs the data hook so the
  * test does not need a running backend.
  */
 
@@ -56,15 +56,21 @@ const sampleSkill: Skill = {
   },
 }
 
-describe('Tasks list screen', () => {
-  it('renders the header', () => {
-    dataOverride = { ...baseData }
-    expect(renderApp()).toContain('Tasks')
+describe('Skills list screen', () => {
+  it('renders the header that teaches how skills are made', () => {
+    dataOverride = { ...baseData, skills: [sampleSkill] }
+    const html = renderApp()
+    expect(html).toContain('Skills')
+    expect(html).toContain('Stop retyping the same prompts.')
+    expect(html).toContain('save this as a skill in neo')
+    expect(html).not.toContain('New skill')
   })
 
-  it('shows the empty state when there are no tasks', () => {
+  it('shows the empty state when there are no skills', () => {
     dataOverride = { ...baseData }
-    expect(renderApp()).toContain('No tasks yet')
+    const html = renderApp()
+    expect(html).toContain('No skills yet')
+    expect(html).not.toContain('New skill')
   })
 
   it('shows skeleton loading rows while the first page is pending', () => {

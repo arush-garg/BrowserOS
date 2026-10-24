@@ -77,9 +77,9 @@ fn handler<'a>(
             return Ok(Some(error_result(message)));
         }
         if let Err(error) = ctx
-            .session
+            .browser
             .input(PageId(args.page))
-            .await
+            .await?
             .upload_file_by_ref(&Ref(args.r#ref.clone()), files.clone())
             .await
         {

@@ -5,12 +5,30 @@ use browseros_core::{PageId, WindowId, pages::NewPageOptions};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
-Use windowId with new to target an unfocused window; use the returned page id with snapshot/act/navigate.";
+A new page is handed back once it has stopped changing, not merely once it has \
+loaded, so do not pause afterwards to let it catch up. \
+Use windowId with new to target an unfocused window; use the returned page id with snapshot/act/navigate. \
+action=\"list\" reports the tab group id of every grouped page. Record yours on \
+your first list of a task, before you need it. Ownership is per connection: every \
+remade connection starts a new session and loses it, so list before you open \
+anything on a new connection and pass that id as groupId on action=\"new\". Your \
+pages then keep going to that group instead of a second one being started for the \
+same task, and the tabs already in it read as yours again. If you no longer have \
+the id, find it in the listing: after a reconnect your tabs read as another \
+agent's, and your group is titled with your own name as <yourName>/<task>. Only \
+action=\"new\" reclaims; groupId is ignored on the other actions.";
+const PROFILE_NOTE: &str = "\
+Listings and page operations include only normal windows of one regular profile: the \
+browser_target selection, or the original Default profile (directory \"Default\") when \
+none is set, whatever window is focused. OAuth/window.open popups return \
+page_out_of_scope. With no selection and no Default window, tabs new opens the page in a \
+new inactive Default window; with a selection and no normal window, use windows create \
+after browser_profiles load.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -41,15 +59,43 @@ struct TabsArgs {
     window_id: Option<i64>,
     /// Page id for action="close".
     page: Option<u32>,
+    /// Tab group id for action="new". Pass the group id a previous call reported
+    /// to keep continuing work in the same group; omit it to use your own group.
+    #[serde(default, rename = "groupId")]
+    group_id: Option<String>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<TabsArgs>(
-        "tabs",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def::<TabsArgs>(
+            "tabs",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
+}
+
+/// Whether a tab group is currently open. A listing failure answers `true` so
+/// a transient CDP problem never produces a misleading note.
+async fn group_is_open(ctx: &ToolCtx, group_id: &str) -> bool {
+    let Ok(result) = ctx
+        .browser
+        .cdp("Browser.getTabGroups", json!({}), None)
+        .await
+    else {
+        return true;
+    };
+    result
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .any(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
+        })
+        .unwrap_or(true)
 }
 
 fn handler<'a>(
@@ -61,7 +107,7 @@ fn handler<'a>(
         let args: TabsArgs = parse_args(raw)?;
         let result = match args.action {
             TabsAction::List => {
-                let pages = ctx.session.pages.list().await?;
+                let pages = ctx.browser.list_pages().await?.pages;
                 let lines = pages.iter().map(format_page_line).collect::<Vec<_>>();
                 text_result(
                     if lines.is_empty() {
@@ -70,17 +116,25 @@ fn handler<'a>(
                         lines.join("\n")
                     },
                     Some(json!({
-                        "pages": pages.iter().map(|page| json!({
-                            "page": page.page_id.0,
-                            "url": page.url,
-                            "title": page.title,
-                            "windowId": page.window_id.as_ref().map(|id| id.0),
-                        })).collect::<Vec<_>>()
+                        "pages": pages.iter().map(|page| {
+                            let mut value = json!({
+                                "page": page.page_id.0,
+                                "url": page.url,
+                                "title": page.title,
+                                // The group identifies work continued after reconnect.
+                                "groupId": page.group_id,
+                                "windowId": page.window_id.as_ref().map(|id| id.0),
+                            });
+                            if let Some(profile) = &page.browser_profile_id {
+                                value["browserProfileId"] = json!(profile);
+                            }
+                            value
+                        }).collect::<Vec<_>>()
                     })),
                 )
             }
             TabsAction::Active => {
-                let Some(page) = ctx.session.pages.get_active().await? else {
+                let Some(page) = ctx.browser.active_page().await? else {
                     return Ok(Some(error_result("tabs active: no active page found.")));
                 };
                 text_result(
@@ -89,44 +143,65 @@ fn handler<'a>(
                 )
             }
             TabsAction::New => {
-                let Some(url) = args.url.as_deref().map(str::trim).filter(|url| !url.is_empty())
+                let Some(url) = args
+                    .url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
                 else {
                     return Ok(Some(error_result(
                         "tabs new: url is required. Pass the page URL to open instead of opening about:blank.",
                     )));
                 };
+                let window_id = args.window_id.map(WindowId);
+                let tab_group_id = super::page_creation::tab_group_for_creation(
+                    ctx,
+                    args.group_id.clone(),
+                    window_id.clone(),
+                )
+                .await?;
                 let page = ctx
-                    .session
-                    .pages
+                    .browser
                     .new_page(
                         url,
                         NewPageOptions {
                             // Never foreground: focus decisions belong to the user
                             // (cockpit Watch), not to the agent.
                             background: Some(true),
-                            window_id: args
-                                .window_id
-                                .map(WindowId)
-                                .or_else(|| ctx.defaults.default_window_id.clone()),
-                            tab_group_id: if args.window_id.is_some() {
-                                None
-                            } else {
-                                ctx.defaults.default_tab_group_id.clone()
-                            },
+                            window_id,
+                            browser_context_id: None,
+                            tab_group_id,
                         },
                     )
                     .await?;
-                response.text(format!("opened page {}", page.0));
+                // A mistyped or half-remembered group id used to be silently
+                // ignored, which produced the very outcome the group argument
+                // exists to avoid: the page continues in the session's own
+                // group while the agent believes it rejoined an earlier one.
+                // The unbound legacy path keeps its advisory. A bound view has
+                // already rejected an out-of-scope/mismatched group before creation.
+                if let Some(requested) = args.group_id.as_deref()
+                    && !group_is_open(ctx, requested).await
+                {
+                    // Grouping runs detached so it cannot delay this response,
+                    // so the note says what was NOT done rather than asserting
+                    // a placement that has not happened yet.
+                    response.text(format!(
+                        "note: tab group {requested} is not open, so page {} was not added to it and will go to your own group. List tab groups to find the id you meant.",
+                        page.page_id.0
+                    ));
+                }
+                response.text(format!("opened page {}", page.page_id.0));
                 // Claw-server hooks key ownership/grouping off this "page" field.
-                response.data(json!({ "page": page.0 }));
-                response.include_snapshot(page.0);
+                response.data(json!({ "page": page.page_id.0 }));
+                response.include_snapshot(page.page_id.0);
                 return Ok(None);
             }
             TabsAction::Close => {
                 let Some(page) = args.page else {
                     return Ok(Some(error_result("tabs close: page is required.")));
                 };
-                ctx.session.pages.close(PageId(page)).await?;
+                ctx.browser.close_page(PageId(page)).await?;
                 text_result(format!("closed page {page}"), Some(json!({ "page": page })))
             }
         };
@@ -144,8 +219,18 @@ fn format_page_line(page: &browseros_core::pages::PageInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabsAction, TabsArgs};
+    use super::{DESCRIPTION, TabsAction, TabsArgs};
     use serde_json::json;
+
+    /// An agent that no longer holds the id has only the listing to find it in,
+    /// and after a reconnect its own tabs read as another agent's. Both halves
+    /// have to be stated or the reclaim is undiscoverable from this tool alone.
+    #[test]
+    fn the_description_says_how_to_find_a_group_id_you_no_longer_have() {
+        assert!(DESCRIPTION.contains("list before you open"));
+        assert!(DESCRIPTION.contains("<yourName>/<task>"));
+        assert!(DESCRIPTION.contains("read as another"));
+    }
 
     #[test]
     fn retired_background_field_is_accepted_and_ignored() -> anyhow::Result<()> {
@@ -164,6 +249,16 @@ mod tests {
             "action": "new", "url": "https://example.com", "windowId": 7
         }))?;
         assert_eq!(args.window_id, Some(7));
+        Ok(())
+    }
+
+    #[test]
+    fn a_group_id_is_accepted_on_new_and_defaults_to_none() -> anyhow::Result<()> {
+        let named: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "groupId": "ABC123" }))?;
+        assert_eq!(named.group_id.as_deref(), Some("ABC123"));
+        let plain: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
+        assert_eq!(plain.group_id, None);
         Ok(())
     }
 

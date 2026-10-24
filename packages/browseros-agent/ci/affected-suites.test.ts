@@ -49,18 +49,52 @@ describe('computeAffectedSuites', () => {
     expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
   })
 
+  it('tests that the cursor package selects its own and pointer integration suites', () => {
+    const suites = computeAffectedSuites(
+      [pkg('@browseros/agent-cursor', 'packages/agent-cursor')],
+      [],
+    )
+    expect(suites).toEqual([
+      {
+        suite: 'agent-cursor',
+        command: '(cd packages/agent-cursor && bun run test)',
+        junit_path: 'test-results/agent-cursor.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+      {
+        suite: 'build',
+        command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
+        junit_path: 'test-results/build.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+    ])
+  })
+
+  it('tests that a committed cursor asset change selects its freshness suite', () => {
+    expect(
+      suiteNames(
+        [],
+        [
+          'packages/browseros-agent/crates/browseros-core/src/assets/agent-cursor.js',
+        ],
+      ),
+    ).toEqual(['agent-cursor', 'build'])
+  })
+
   it('maps any affected Rust crate to all three Rust suites', () => {
     expect(
       suiteNames([
         pkg('@browseros/browseros-core-rust', 'crates/browseros-core'),
       ]),
-    ).toEqual(['claw-server-rust', 'claw-server-rust-quality', 'claw-mcp'])
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('treats the Rust server app path as a Rust package', () => {
     expect(
-      suiteNames([pkg('@browseros/claw-server-rust', 'apps/claw-server-rust')]),
-    ).toEqual(['claw-server-rust', 'claw-server-rust-quality', 'claw-mcp'])
+      suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('adds the build suite when scripts change', () => {
@@ -125,6 +159,20 @@ describe('computeAffectedSuites', () => {
     expect(suiteNames([], ['README.md', 'docs/whatever.md'])).toEqual([])
   })
 
+  it('tests that CAPTCHA test bed changes select their unit suite without a browser or Rust', () => {
+    const suites = computeAffectedSuites(
+      [],
+      ['packages/browseros-agent/tools/captcha-testbed/e2e/runner.ts'],
+    )
+    expect(suites.map((suite) => suite.suite)).toEqual(['captcha'])
+    expect(suites[0]).toMatchObject({
+      command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+      junit_path: 'test-results/captcha.xml',
+      needs_browser: false,
+      needs_rust: false,
+    })
+  })
+
   it('unions and de-duplicates across packages and paths, in declared order', () => {
     const result = suiteNames(
       [
@@ -139,8 +187,8 @@ describe('computeAffectedSuites', () => {
     expect(result).toEqual([
       'agent',
       'claw-app',
-      'claw-server-rust',
-      'claw-server-rust-quality',
+      'claw-server',
+      'claw-server-quality',
       'claw-mcp',
     ])
   })
@@ -155,10 +203,15 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
-      pkg('@browseros/claw-server-rust', 'apps/claw-server-rust'),
+      pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
-      new Set(Object.keys(SUITES).filter((suite) => suite !== 'release')),
+      new Set(
+        Object.keys(SUITES).filter(
+          (suite) => !['release', 'captcha'].includes(suite),
+        ),
+      ),
     )
   })
 

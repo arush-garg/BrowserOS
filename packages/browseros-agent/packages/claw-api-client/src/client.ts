@@ -1,4 +1,5 @@
 import type {
+  AgentSettings,
   AppendRecordingEventsResponse,
   AuditCleanupResult,
   AuditRetention,
@@ -11,6 +12,8 @@ import type {
   HealthResponse,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
+  ResolveHelpResponse,
+  SaveJevTokenRequest,
   SessionDetail,
   SessionList,
   SessionScreenshotList,
@@ -24,6 +27,7 @@ import type {
   SkillUpdate,
   SystemInfo,
   TelemetryState,
+  UpdateAgentSettingsRequest,
 } from '@browseros/claw-api'
 import createClient, { type Client } from 'openapi-fetch'
 import { ApiResponseError } from './errors'
@@ -139,6 +143,36 @@ export class ClawApiClient {
     return this.unwrap(await this.client.GET('/api/v1/settings/telemetry'))
   }
 
+  async getAgentSettings(): Promise<AgentSettings> {
+    return this.unwrap(await this.client.GET('/api/v1/settings/agent'))
+  }
+
+  async updateAgentSettings(
+    body: UpdateAgentSettingsRequest,
+  ): Promise<AgentSettings> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/agent', { body }),
+    )
+  }
+
+  /**
+   * Stores the decision model credential, which offers the pursue tool. Its own
+   * call rather than a field on updateAgentSettings, so saving a switch can
+   * never clear a credential. The reply never carries the token.
+   */
+  async saveJevToken(body: SaveJevTokenRequest): Promise<AgentSettings> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/agent/jev-token', { body }),
+    )
+  }
+
+  /** Forgets the stored credential. JEV_TOKEN, if set, applies again. */
+  async removeJevToken(): Promise<AgentSettings> {
+    return this.unwrap(
+      await this.client.DELETE('/api/v1/settings/agent/jev-token'),
+    )
+  }
+
   async getAuditStorage(): Promise<AuditStorageState> {
     return this.unwrap(await this.client.GET('/api/v1/audit/storage'))
   }
@@ -189,6 +223,17 @@ export class ClawApiClient {
     )
   }
 
+  async resolveHelp(
+    request: SessionRequest & { note?: string },
+  ): Promise<ResolveHelpResponse> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/sessions/{sessionId}/help/resolve', {
+        params: { path: { sessionId: request.sessionId } },
+        body: { note: request.note },
+      }),
+    )
+  }
+
   async getRecording(request: SessionRequest): Promise<RecordingMetadata> {
     return this.unwrap(
       await this.client.GET('/api/v1/sessions/{sessionId}/recording', {
@@ -231,8 +276,10 @@ export class ClawApiClient {
       await this.client.GET('/api/v1/sessions/{sessionId}/preview', {
         params: {
           path: { sessionId: request.sessionId },
-          query:
-            request.refresh === undefined ? {} : { refresh: request.refresh },
+          query: {
+            refresh: request.refresh,
+            browserTabId: request.browserTabId,
+          },
         },
         parseAs: 'blob',
       }),

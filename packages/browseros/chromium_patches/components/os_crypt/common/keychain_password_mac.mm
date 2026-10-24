@@ -1,16 +1,16 @@
 diff --git a/components/os_crypt/common/keychain_password_mac.mm b/components/os_crypt/common/keychain_password_mac.mm
-index f240dc22ee391..805f7e3f37a5b 100644
+index 212b93095214422112afd346e36cd2838891725b..6422141bbe9154f6c0f4922a43a122cff2bf4572 100644
 --- a/components/os_crypt/common/keychain_password_mac.mm
 +++ b/components/os_crypt/common/keychain_password_mac.mm
-@@ -18,6 +18,7 @@
+@@ -15,6 +15,7 @@
+ #include "base/rand_util.h"
  #include "base/strings/string_view_util.h"
- #include "base/types/expected.h"
  #include "build/branding_buildflags.h"
 +#include "components/os_crypt/common/browseros_product_buildflags.h"
  #include "crypto/apple/keychain_v2.h"
  #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
-@@ -38,8 +39,18 @@
+@@ -35,8 +36,19 @@
  const char kDefaultServiceName[] = "Chrome Safe Storage";
  const char kDefaultAccountName[] = "Chrome";
  #else
@@ -32,7 +32,7 @@ index f240dc22ee391..805f7e3f37a5b 100644
  #endif
 
  // These values are persisted to logs. Entries should not be renumbered and
-@@ -97,7 +108,22 @@
+@@ -97,4 +109,21 @@
    if (password.error() == errSecItemNotFound) {
      uma_result = FindGenericPasswordResult::kPasswordNotFound;
 +#if BUILDFLAG(BROWSEROS_PRODUCT_BROWSERCLAW)

@@ -10,8 +10,12 @@ paths:
     $ref: ./paths/system.yaml#/diagnostics
   /system/health:
     $ref: ./paths/system.yaml#/health
+  /system/ready:
+    $ref: ./paths/system.yaml#/ready
   /system/shutdown:
     $ref: ./paths/system.yaml#/shutdown
+  /api/v1/extension/update-ready:
+    $ref: ./paths/system.yaml#/extensionUpdateReady
   /api/v1/system:
     $ref: ./paths/system.yaml#/info
   /api/v1/cockpit/stats:
@@ -20,12 +24,18 @@ paths:
     $ref: ./paths/feedback.yaml#/invitation
   /api/v1/settings/telemetry:
     $ref: ./paths/settings.yaml#/telemetry
+  /api/v1/settings/agent:
+    $ref: ./paths/settings.yaml#/agent
+  /api/v1/settings/agent/jev-token:
+    $ref: ./paths/settings.yaml#/jevToken
   /api/v1/sessions:
     $ref: ./paths/sessions.yaml#/collection
   /api/v1/sessions/{sessionId}:
     $ref: ./paths/sessions.yaml#/detail
   /api/v1/sessions/{sessionId}/cancel:
     $ref: ./paths/sessions.yaml#/cancel
+  /api/v1/sessions/{sessionId}/help/resolve:
+    $ref: ./paths/sessions.yaml#/resolveHelp
   /api/v1/sessions/{sessionId}/recording:
     $ref: ./paths/recordings.yaml#/metadata
   /api/v1/sessions/{sessionId}/recording/events:
@@ -96,6 +106,8 @@ components:
       $ref: ./schemas/common.yaml#/ApiError
     HealthResponse:
       $ref: ./schemas/system.yaml#/HealthResponse
+    BrowserLink:
+      $ref: ./schemas/system.yaml#/BrowserLink
     ShutdownResponse:
       $ref: ./schemas/system.yaml#/ShutdownResponse
     SystemDiagnostics:
@@ -104,6 +116,8 @@ components:
       $ref: ./schemas/system.yaml#/SystemInfo
     SystemCapabilities:
       $ref: ./schemas/system.yaml#/SystemCapabilities
+    SchemaStatus:
+      $ref: ./schemas/system.yaml#/SchemaStatus
     CockpitStats:
       $ref: ./schemas/cockpit.yaml#/CockpitStats
     CockpitStatsWindow:
@@ -118,6 +132,14 @@ components:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
+    AgentSettings:
+      $ref: ./schemas/settings.yaml#/AgentSettings
+    JevTokenSource:
+      $ref: ./schemas/settings.yaml#/JevTokenSource
+    SaveJevTokenRequest:
+      $ref: ./schemas/settings.yaml#/SaveJevTokenRequest
+    UpdateAgentSettingsRequest:
+      $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
     LiveSessionActivityState:
@@ -142,6 +164,14 @@ components:
       $ref: ./schemas/dispatches.yaml#/Dispatch
     CancelSessionResponse:
       $ref: ./schemas/sessions.yaml#/CancelSessionResponse
+    HelpRequestKind:
+      $ref: ./schemas/sessions.yaml#/HelpRequestKind
+    HelpRequest:
+      $ref: ./schemas/sessions.yaml#/HelpRequest
+    ResolveHelpRequest:
+      $ref: ./schemas/sessions.yaml#/ResolveHelpRequest
+    ResolveHelpResponse:
+      $ref: ./schemas/sessions.yaml#/ResolveHelpResponse
     RecordingMetadata:
       $ref: ./schemas/recordings.yaml#/RecordingMetadata
     RecordingTabMetadata:

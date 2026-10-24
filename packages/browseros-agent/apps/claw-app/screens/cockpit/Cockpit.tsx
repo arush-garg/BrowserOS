@@ -1,21 +1,28 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
 import { FeedbackInviteCard } from '@/components/cockpit/FeedbackInviteCard'
+import { InControlBar } from '@/components/cockpit/InControlBar'
+import { NeedsYouBanner } from '@/components/cockpit/NeedsYouBanner'
 import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
+import { UltrafastBanner } from '@/components/cockpit/UltrafastBanner'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
 import { useCockpitData } from './cockpit.data'
+import { useHelpTakeover } from './cockpit.hooks'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
+// Pause the waitlist promotion across both cockpit layouts until re-enabled.
+const SHOW_ULTRAFAST_BANNER = false
 
 export function Cockpit() {
   const { sessions } = useCockpitData()
+  const takeover = useHelpTakeover(sessions)
 
   // When no live session is connected, these probes decide which onboarding
   // shell to show. Their stable keys are shared with RecentActivity and MCP.
@@ -74,21 +81,33 @@ export function Cockpit() {
 
   const content =
     state !== 'ready' ? (
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+      // Tighter top than the ready cockpit (Paper: 26 px), so the prompt and
+      // the whole demo sit above an 800 px fold at 1280 wide.
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6 px-8 pt-[26px] pb-16">
+        {SHOW_ULTRAFAST_BANNER && <UltrafastBanner />}
         <ProductHuntBanner />
         <FeedbackInviteCard />
-        <CockpitOnboarding
-          state={state}
-          connectedHarnesses={connectedHarnesses}
-        />
+        <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
       </div>
     ) : (
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+        <NeedsYouBanner
+          sessions={sessions}
+          onTakeOver={takeover.takeOver}
+          onStop={takeover.stop}
+          pendingTakeOverSessionId={takeover.pendingTakeOverSessionId}
+          cancelPendingSessionId={takeover.stopPendingSessionId}
+        />
+        {SHOW_ULTRAFAST_BANNER && <UltrafastBanner />}
         <CockpitHero />
         {shouldLoadStats && stats.data?.hasMeasuredStats ? (
           <SavedStatsBand stats={stats.data} />
         ) : (
-          <RunningGrid sessions={sessions} />
+          <RunningGrid
+            sessions={sessions}
+            onTakeOver={takeover.takeOver}
+            takeOverPendingSessionId={takeover.pendingTakeOverSessionId}
+          />
         )}
         <ProductHuntBanner />
         <FeedbackInviteCard />
@@ -96,5 +115,17 @@ export function Cockpit() {
       </div>
     )
 
-  return <div className="flex min-h-screen flex-col">{content}</div>
+  return (
+    <div className="flex min-h-screen flex-col">
+      {content}
+      {takeover.inControlSession && (
+        <InControlBar
+          session={takeover.inControlSession}
+          onHandBack={takeover.handBack}
+          onCancel={takeover.cancelControl}
+          isHandingBack={takeover.isHandingBack}
+        />
+      )}
+    </div>
+  )
 }

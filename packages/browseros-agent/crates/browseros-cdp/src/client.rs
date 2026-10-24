@@ -13,11 +13,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     net::TcpStream,
-    sync::{Mutex, broadcast, mpsc, oneshot},
+    sync::{Mutex, Notify, broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -29,7 +29,7 @@ use tokio_tungstenite::{
         protocol::{CloseFrame, WebSocketConfig},
     },
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 type WsStream = WebSocketStream<TcpStream>;
@@ -52,6 +52,9 @@ pub struct ConnectOptions {
     pub reconnect_delay: Duration,
     pub keepalive_interval: Duration,
     pub keepalive_timeout: Duration,
+    /// How often the link supervisor re-reads whether the socket should be up.
+    /// Bounds how long a lost wake-up can delay recovery.
+    pub link_check_interval: Duration,
     pub request_timeout: Duration,
     pub connect_max_retries: usize,
     pub reconnect_max_retries: usize,
@@ -78,6 +81,7 @@ impl Default for ConnectOptions {
             reconnect_delay: Duration::from_secs(5),
             keepalive_interval: Duration::from_secs(30),
             keepalive_timeout: Duration::from_secs(10),
+            link_check_interval: Duration::from_secs(1),
             request_timeout: Duration::from_secs(60),
             connect_max_retries: 3,
             reconnect_max_retries: 3,
@@ -95,16 +99,24 @@ struct Inner {
     opts: ConnectOptions,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, PendingSender>>,
+    /// Serializes socket publication with dispatch. An epoch-bound request must
+    /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
     targeted: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<CdpEvent>>>,
     connected: AtomicBool,
     disconnecting: AtomicBool,
-    reconnecting: AtomicBool,
     epoch: AtomicU64,
+    /// When the link went down, so an outage can be reported and logged. `None`
+    /// while the link is up. Never held across an await.
+    down_since: std::sync::Mutex<Option<Instant>>,
+    /// Prompts the link supervisor to look again. Losing a wake-up only costs
+    /// `link_check_interval`, because the supervisor also re-reads on a timer.
+    link_wake: Notify,
     last_host: Mutex<Option<String>>,
     reader_task: Mutex<Option<JoinHandle<()>>>,
     keepalive_task: Mutex<Option<JoinHandle<()>>>,
+    link_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl CdpClient {
@@ -119,15 +131,18 @@ impl CdpClient {
             targeted: std::sync::Mutex::new(HashMap::new()),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
-            reconnecting: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
+            down_since: std::sync::Mutex::new(None),
+            link_wake: Notify::new(),
             last_host: Mutex::new(None),
             reader_task: Mutex::new(None),
             keepalive_task: Mutex::new(None),
+            link_task: Mutex::new(None),
         });
 
         open_socket(inner.clone()).await?;
         start_keepalive(inner.clone()).await;
+        start_link_supervisor(inner.clone()).await;
         Ok(Self { inner })
     }
 
@@ -151,6 +166,12 @@ impl CdpClient {
         if let Some(handle) = self.inner.keepalive_task.lock().await.take() {
             handle.abort();
         }
+        // The supervisor is asked to stop rather than aborted. Aborting it can land
+        // between a reopen installing its sink and registering its reader, which
+        // leaves a live socket and reader behind with the client marked connected,
+        // and skips the teardown below. It exits cooperatively instead, closing any
+        // socket it opened, so teardown finishes a moment after this returns.
+        self.inner.link_wake.notify_one();
         reject_all_pending(&self.inner, CdpError::NotConnected).await;
     }
 
@@ -166,8 +187,42 @@ impl CdpClient {
         self.inner.epoch.load(Ordering::SeqCst)
     }
 
+    /// How long the link has been down, or `None` while it is up.
+    #[must_use]
+    pub fn down_for(&self) -> Option<Duration> {
+        self.inner
+            .down_since
+            .lock()
+            .ok()
+            .and_then(|since| since.map(|at| at.elapsed()))
+    }
+
     pub async fn send(
         &self,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        self.send_with_epoch(None, method, params, session).await
+    }
+
+    /// Sends only on the socket incarnation used to resolve the caller's IDs.
+    /// Validation happens at dispatch, after lock waits; an epoch change rejects
+    /// the request before writing and never retries it on the replacement socket.
+    pub async fn send_at_epoch(
+        &self,
+        expected_epoch: u64,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        self.send_with_epoch(Some(expected_epoch), method, params, session)
+            .await
+    }
+
+    async fn send_with_epoch(
+        &self,
+        expected_epoch: Option<u64>,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
@@ -184,6 +239,7 @@ impl CdpClient {
             );
         }
         self.send_frame(
+            expected_epoch,
             id,
             method,
             Message::Text(Value::Object(frame).to_string().into()),
@@ -212,6 +268,31 @@ impl CdpClient {
         params_json: &str,
         session: Option<&SessionId>,
     ) -> Result<String, CdpError> {
+        self.send_raw_json_with_epoch(None, method, params_json, session)
+            .await
+    }
+
+    /// Like [`Self::send_at_epoch`], retaining the caller's serialized parameters
+    /// in the outgoing frame. Stale root and session requests are both rejected
+    /// before any bytes are written to a replacement socket.
+    pub async fn send_raw_json_at_epoch(
+        &self,
+        expected_epoch: u64,
+        method: &str,
+        params_json: &str,
+        session: Option<&SessionId>,
+    ) -> Result<String, CdpError> {
+        self.send_raw_json_with_epoch(Some(expected_epoch), method, params_json, session)
+            .await
+    }
+
+    async fn send_raw_json_with_epoch(
+        &self,
+        expected_epoch: Option<u64>,
+        method: &str,
+        params_json: &str,
+        session: Option<&SessionId>,
+    ) -> Result<String, CdpError> {
         let _validated: Value = serde_json::from_str(params_json)?;
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let method_json = serde_json::to_string(method)?;
@@ -223,7 +304,7 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(id, method, Message::Text(frame.into()))
+            .send_frame(expected_epoch, id, method, Message::Text(frame.into()))
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -252,22 +333,38 @@ impl CdpClient {
         rx
     }
 
-    async fn send_frame(&self, id: u64, method: &str, message: Message) -> Result<Value, CdpError> {
-        if !self.is_connected() {
-            return Err(CdpError::NotConnected);
-        }
-
+    async fn send_frame(
+        &self,
+        expected_epoch: Option<u64>,
+        id: u64,
+        method: &str,
+        message: Message,
+    ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
 
         let send_result = {
             let mut guard = self.inner.sink.lock().await;
-            match guard.as_mut() {
-                Some(sink) => sink
-                    .send(message)
-                    .await
-                    .map_err(|err| CdpError::Transport(err.to_string())),
-                None => Err(CdpError::NotConnected),
+            // Admission before either lock wait cannot bind a request to a socket.
+            // Publication takes this same guard, which stays held through the write.
+            let actual_epoch = self.epoch();
+            if let Some(expected) = expected_epoch
+                && expected != actual_epoch
+            {
+                Err(CdpError::ConnectionEpochChanged {
+                    expected,
+                    actual: actual_epoch,
+                })
+            } else if !self.is_connected() {
+                Err(CdpError::NotConnected)
+            } else {
+                match guard.as_mut() {
+                    Some(sink) => sink
+                        .send(message)
+                        .await
+                        .map_err(|err| CdpError::Transport(err.to_string())),
+                    None => Err(CdpError::NotConnected),
+                }
             }
         };
 
@@ -301,10 +398,32 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
         }
 
         let (sink, reader) = ws.split();
-        *inner.sink.lock().await = Some(sink);
-        inner.connected.store(true, Ordering::SeqCst);
-        inner.disconnecting.store(false, Ordering::SeqCst);
-        inner.epoch.fetch_add(1, Ordering::SeqCst);
+        let epoch = {
+            let mut guard = inner.sink.lock().await;
+            // Publishing the sink separately would let a stale request validate the
+            // old epoch and write to the new socket. Dispatch observes all three
+            // values under this guard, even if it queued before the reconnect.
+            *guard = Some(sink);
+            let epoch = inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            inner.connected.store(true, Ordering::SeqCst);
+            epoch
+        };
+        // Logged at info, and with the outage, because "did it come back" is the
+        // only question a disconnect report actually asks.
+        let outage = inner
+            .down_since
+            .lock()
+            .ok()
+            .and_then(|mut since| since.take())
+            .map(|at| at.elapsed());
+        match outage {
+            Some(outage) => info!(
+                epoch,
+                down_ms = outage.as_millis(),
+                "CDP link restored after outage"
+            ),
+            None => info!(epoch, "CDP link established"),
+        }
 
         let reader_inner = inner.clone();
         let handle = tokio::spawn(async move {
@@ -485,48 +604,94 @@ async fn start_keepalive(inner: Arc<Inner>) {
     *guard = Some(handle);
 }
 
+/// Records that the link is down and asks the supervisor to look.
+///
+/// It deliberately decides nothing else. The previous version armed the repair
+/// here, guarded by a flag that meant both "a repair loop is running" and "a
+/// further attempt is guaranteed". Those come apart when a freshly opened socket
+/// fails before the arming path clears the flag: both sides then believe the
+/// other owns the retry, and the link stays down with nothing retrying it.
 async fn mark_connection_lost(inner: Arc<Inner>) {
-    if !inner.connected.swap(false, Ordering::SeqCst) && inner.reconnecting.load(Ordering::SeqCst) {
-        return;
-    }
+    let was_connected = inner.connected.swap(false, Ordering::SeqCst);
     *inner.sink.lock().await = None;
     reject_all_pending(&inner, CdpError::ConnectionLost).await;
-
-    if inner.disconnecting.load(Ordering::SeqCst) {
-        return;
+    if was_connected && let Ok(mut since) = inner.down_since.lock() {
+        since.get_or_insert_with(Instant::now);
     }
-    if inner.reconnecting.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    tokio::spawn(async move {
-        reconnect_loop(inner).await;
-    });
+    inner.link_wake.notify_one();
 }
 
-async fn reconnect_loop(inner: Arc<Inner>) {
+/// Drops a socket this client should no longer be holding.
+async fn close_socket(inner: &Arc<Inner>) {
+    inner.connected.store(false, Ordering::SeqCst);
+    *inner.sink.lock().await = None;
+    if let Some(handle) = inner.reader_task.lock().await.take() {
+        handle.abort();
+    }
+    reject_all_pending(inner, CdpError::NotConnected).await;
+}
+
+async fn start_link_supervisor(inner: Arc<Inner>) {
+    let mut guard = inner.link_task.lock().await;
+    if guard.is_some() {
+        return;
+    }
+    let task_inner = inner.clone();
+    *guard = Some(tokio::spawn(async move {
+        link_supervisor(task_inner).await;
+    }));
+}
+
+/// Keeps the socket open for the life of the client.
+///
+/// Level triggered on purpose: every pass re-reads whether the link should be up
+/// and whether it is, so no ordering of loss and recovery events can leave it
+/// down with nobody retrying. A reopened socket that dies immediately is just the
+/// next pass's work.
+async fn link_supervisor(inner: Arc<Inner>) {
+    let mut consecutive_failures: usize = 0;
     loop {
-        for attempt in 0..inner.opts.reconnect_max_retries {
-            sleep(inner.opts.reconnect_delay).await;
-            if inner.disconnecting.load(Ordering::SeqCst) {
-                inner.reconnecting.store(false, Ordering::SeqCst);
-                return;
+        if inner.disconnecting.load(Ordering::SeqCst) {
+            return;
+        }
+        if inner.connected.load(Ordering::SeqCst) {
+            consecutive_failures = 0;
+            tokio::select! {
+                () = inner.link_wake.notified() => {}
+                () = sleep(inner.opts.link_check_interval) => {}
             }
-            match open_socket(inner.clone()).await {
-                Ok(()) => {
-                    inner.reconnecting.store(false, Ordering::SeqCst);
-                    return;
-                }
-                Err(err) => warn!(
-                    attempt = attempt + 1,
-                    max = inner.opts.reconnect_max_retries,
-                    "CDP reconnect failed: {err}"
-                ),
-            }
+            continue;
         }
 
-        match inner.opts.reconnect_policy {
-            ReconnectPolicy::KeepTrying => continue,
-            ReconnectPolicy::Exit(code) => std::process::exit(code),
+        sleep(inner.opts.reconnect_delay).await;
+        if inner.disconnecting.load(Ordering::SeqCst) {
+            return;
+        }
+        if inner.connected.load(Ordering::SeqCst) {
+            continue;
+        }
+        match open_socket(inner.clone()).await {
+            Ok(()) => {
+                consecutive_failures = 0;
+                if inner.disconnecting.load(Ordering::SeqCst) {
+                    close_socket(&inner).await;
+                    return;
+                }
+            }
+            Err(err) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                warn!(
+                    attempt = consecutive_failures,
+                    max = inner.opts.reconnect_max_retries,
+                    "CDP reconnect failed: {err}"
+                );
+                if consecutive_failures >= inner.opts.reconnect_max_retries {
+                    match inner.opts.reconnect_policy {
+                        ReconnectPolicy::KeepTrying => consecutive_failures = 0,
+                        ReconnectPolicy::Exit(code) => std::process::exit(code),
+                    }
+                }
+            }
         }
     }
 }
@@ -537,3 +702,7 @@ async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
         let _ = sender.send(Err(error.clone()));
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

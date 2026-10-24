@@ -11,6 +11,16 @@ export type WindowID = number
 
 export type TabID = number
 
+export type BrowserProfileID = string
+
+export interface BrowserProfileInfo {
+  browserProfileId: BrowserProfileID
+  name: string
+  directory: string
+  loaded: boolean
+  browserContextId?: BrowserContextID
+}
+
 export type WindowType =
   | 'normal'
   | 'popup'
@@ -38,6 +48,8 @@ export interface WindowInfo {
   tabCount: number
   activeTabId?: TabID
   browserContextId?: BrowserContextID
+  browserProfileId?: BrowserProfileID
+  liveBrowserContextId?: BrowserContextID
   profileName?: string
 }
 
@@ -54,6 +66,8 @@ export interface TabInfo {
   windowId?: WindowID
   index?: number
   browserContextId?: BrowserContextID
+  browserProfileId?: BrowserProfileID
+  liveBrowserContextId?: BrowserContextID
   groupId?: TabGroupID
 }
 
@@ -135,9 +149,20 @@ export interface Histogram {
   buckets: Bucket[]
 }
 
-export type PrivacySandboxAPI = 'BiddingAndAuctionServices' | 'TrustedKeyValue'
-
 // ══ Commands ══
+
+export interface GetProfilesResult {
+  profiles: BrowserProfileInfo[]
+}
+
+export interface LoadProfileParams {
+  browserProfileId: BrowserProfileID
+}
+
+export interface LoadProfileResult {
+  profile: BrowserProfileInfo
+  loaded: boolean
+}
 
 export interface GetWindowsResult {
   windows: WindowInfo[]
@@ -375,6 +400,10 @@ export interface GetBrowserCommandLineResult {
   arguments: string[]
 }
 
+export interface AddMockCameraParams {
+  deviceId: string
+}
+
 export interface GetHistogramsParams {
   query?: string
   delta?: boolean
@@ -452,11 +481,16 @@ export interface AddPrivacySandboxEnrollmentOverrideParams {
   url: string
 }
 
-export interface AddPrivacySandboxCoordinatorKeyConfigParams {
-  api: PrivacySandboxAPI
-  coordinatorOrigin: string
-  keyConfig: string
-  browserContextId?: BrowserContextID
+export interface GetGlobalPrivacyControlResult {
+  gpc: boolean
+}
+
+export interface SetGlobalPrivacyControlParams {
+  gpc: boolean
+}
+
+export interface SetGlobalPrivacyControlResult {
+  gpc: boolean
 }
 
 // ══ Events ══

@@ -1,7 +1,7 @@
 use crate::format::diff::DiffDetail;
 use crate::framework::{
-    ToolCtx, ToolExecResult, ToolResult, error_result, parse_args, pending_dialog_result,
-    text_result,
+    AuditHints, ToolCtx, ToolExecResult, ToolResult, error_result, parse_args,
+    pending_dialog_result, text_result,
 };
 use browseros_core::{
     PageId, Ref,
@@ -11,6 +11,7 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 /// Returns a short human-readable hint when the current page looks like a
 /// login or OAuth page. Empty string when no hint is needed.
@@ -200,6 +201,20 @@ struct ActArgs {
     clear: Option<bool>,
     /// Post-action diff detail: "full" (default) whole diff, "summary" change counts, "none" to skip it, or a number to cap the inline diff to that many characters. Use "none"/"summary"/a small number on large pages where a full diff floods context.
     diff: Option<ActDiff>,
+    /// Treat the entered value as a secret: keep it out of the local audit log
+    /// (stored as "[redacted]") and skip its screenshot. Password and payment-card
+    /// fields are detected automatically; set this for values neo cannot classify,
+    /// such as custom widgets, canvas inputs, or a field inside a cross-origin
+    /// iframe (for example a hosted card form) typed via type/type_at.
+    sensitive: Option<bool>,
+}
+
+/// Collects which filled refs resolved to a sensitive field so the audit layer can
+/// redact only those values, plus a page-wide flag for targets with no ref to key on.
+#[derive(Default)]
+struct ActSensitivity {
+    refs: Vec<String>,
+    redact_all: bool,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -219,13 +234,63 @@ fn handler<'a>(
         {
             return Ok(Some(result));
         }
-        let console_start = ctx.session.page_signals.console_mark(&page_id);
-        let input = ctx.session.input(page_id.clone()).await;
-        if let Some(err) = run_kind(&args, &input).await? {
-            return Ok(Some(err));
+        let console_start = ctx.browser.signals().console_mark(&page_id);
+        let input = ctx.browser.input(page_id.clone()).await?;
+        let mut sensitivity = ActSensitivity::default();
+        // Honor an explicit sensitive flag before the action runs: a value must
+        // still be redacted if the action later errors out (for example a stale ref
+        // on a sibling field) after this field was already filled.
+        if args.sensitive.unwrap_or(false) {
+            sensitivity.redact_all = true;
         }
-        if args.kind.is_dialog() {
-            ctx.session.page_signals.clear_dialog(&page_id);
+        let outcome: ToolExecResult<Option<ToolResult>> = if args.kind.is_dialog() {
+            let result = run_kind(&args, &input, &mut sensitivity).await;
+            if matches!(result, Ok(None)) {
+                ctx.browser.signals().clear_dialog(&page_id);
+            }
+            result
+        } else {
+            // A confirm/prompt/beforeunload opened by this action freezes the
+            // renderer, so the action's CDP ack never returns; race it against the
+            // page's dialog signal and hand control back with the pending dialog so
+            // the caller can accept or dismiss it, instead of hanging to the run cap
+            // (#2780).
+            let signals = ctx.browser.signals().clone();
+            let watched = page_id.clone();
+            let dialog = async move {
+                while signals.pending_dialog(&watched).is_none() {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            };
+            tokio::select! {
+                biased;
+                result = run_kind(&args, &input, &mut sensitivity) => result,
+                () = dialog => {
+                    Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
+                        || {
+                            text_result(
+                                "a JavaScript dialog is open on this page; use act kind=\"dialog_accept\" or \"dialog_dismiss\" before other actions".to_string(),
+                                None,
+                            )
+                        },
+                    )))
+                }
+            }
+        };
+        // Attach redaction hints before propagating any error or early return, so a
+        // secret entered into the page before a failure is still kept out of the
+        // ledger and its screenshot is skipped.
+        if sensitivity.redact_all || !sensitivity.refs.is_empty() {
+            response.set_audit_hints(AuditHints {
+                sensitive_refs: std::mem::take(&mut sensitivity.refs),
+                redact_all_values: sensitivity.redact_all,
+                skip_screenshot: true,
+            });
+        }
+        match outcome {
+            Ok(Some(early)) => return Ok(Some(early)),
+            Ok(None) => {}
+            Err(err) => return Err(err),
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {
@@ -252,6 +317,7 @@ fn handler<'a>(
 async fn run_kind(
     args: &ActArgs,
     input: &browseros_core::input::Input,
+    sensitivity: &mut ActSensitivity,
 ) -> ToolExecResult<Option<ToolResult>> {
     match args.kind {
         ActKind::Click => {
@@ -282,6 +348,11 @@ async fn run_kind(
             let Some(text) = args.text.as_deref() else {
                 return Ok(Some(error_result("act type: text is required.")));
             };
+            // Classify the focused target before typing, so a secret is caught even
+            // if the keystrokes navigate or detach the field.
+            if input.focused_field_is_sensitive().await {
+                sensitivity.redact_all = true;
+            }
             input.type_text(text).await?;
         }
         ActKind::TypeAt => {
@@ -291,6 +362,9 @@ async fn run_kind(
             let Some(text) = args.text.as_deref() else {
                 return Ok(Some(error_result("act type_at: text is required.")));
             };
+            if input.point_field_is_sensitive(point.x, point.y).await {
+                sensitivity.redact_all = true;
+            }
             input
                 .type_at(point.x, point.y, text, args.clear.unwrap_or(false))
                 .await?;
@@ -303,6 +377,12 @@ async fn run_kind(
                     )));
                 }
                 for field in fields {
+                    if input
+                        .ref_field_is_sensitive(&Ref(field.r#ref.clone()))
+                        .await
+                    {
+                        sensitivity.refs.push(field.r#ref.clone());
+                    }
                     input
                         .fill(
                             &Ref(field.r#ref.clone()),
@@ -318,6 +398,9 @@ async fn run_kind(
             } else if let Some(backend_node_id) =
                 resolve_selector_target(args, "fill", input).await?
             {
+                if input.ref_field_is_sensitive(&Ref(ref_id.to_string())).await {
+                    sensitivity.refs.push(ref_id.to_string());
+                }
                 input
                     .fill_backend_node(
                         backend_node_id,
@@ -474,6 +557,7 @@ fn click_options(args: &ActArgs) -> ClickOptions {
             ActMouseButton::Right => MouseButton::Right,
         }),
         click_count: args.click_count,
+        ..Default::default()
     }
 }
 

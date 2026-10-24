@@ -4,34 +4,52 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 
 interface HookState {
-  invitation: { eligible: boolean; bookUrl?: string }
+  invitation: { eligible: boolean; bookUrl?: string; requestedAt?: number }
+  invitationUpdatedAt: number
   recorded: string[]
+  recordSucceeds: boolean
   cached: unknown[]
   tracked: string[]
+  errors: string[]
   opened: string[]
+  capturing: boolean
 }
 
 const state: HookState = {
   invitation: { eligible: false },
+  invitationUpdatedAt: 1_000,
   recorded: [],
+  recordSucceeds: true,
   cached: [],
   tracked: [],
+  errors: [],
   opened: [],
+  capturing: true,
 }
 
 const invitationKey = ['api', 'feedback', 'invitation']
 
 mock.module('@/modules/api/feedback.hooks', () => ({
-  useFeedbackInvitation: Object.assign(() => ({ data: state.invitation }), {
-    getKey: () => invitationKey,
-  }),
+  useFeedbackInvitation: Object.assign(
+    () => ({
+      data: state.invitation,
+      dataUpdatedAt: state.invitationUpdatedAt,
+    }),
+    {
+      getKey: () => invitationKey,
+    },
+  ),
   useRecordFeedbackInvite: () => ({
     mutate: (
       { outcome }: { outcome: string },
-      options?: { onSuccess?: (settled: unknown) => void },
+      options?: {
+        onSuccess?: (settled: unknown) => void
+        onError?: (error: Error) => void
+      },
     ) => {
       state.recorded.push(outcome)
-      options?.onSuccess?.({ eligible: false })
+      if (state.recordSucceeds) options?.onSuccess?.({ eligible: false })
+      else options?.onError?.(new Error('sidecar unavailable'))
     },
   }),
 }))
@@ -44,6 +62,16 @@ mock.module('@tanstack/react-query', () => ({
   }),
 }))
 
+const captureStateListeners = new Set<() => void>()
+
+mock.module('@/modules/analytics/posthog', () => ({
+  isCapturing: () => state.capturing,
+  subscribeToCaptureState: (listener: () => void) => {
+    captureStateListeners.add(listener)
+    return () => captureStateListeners.delete(listener)
+  },
+}))
+
 mock.module('@/modules/analytics/events', () => ({
   AnalyticsEvent: {
     FeedbackInviteShown: 'feedback_invite_shown',
@@ -54,6 +82,26 @@ mock.module('@/modules/analytics/events', () => ({
     state.tracked.push(event)
   },
 }))
+
+mock.module('sonner', () => ({
+  toast: {
+    error: (message: string) => state.errors.push(message),
+  },
+}))
+
+const storage: Record<string, string> = {}
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => storage[key] ?? null,
+    setItem: (key: string, value: string) => {
+      storage[key] = value
+    },
+    removeItem: (key: string) => {
+      delete storage[key]
+    },
+  },
+})
 
 const globalDescriptors = new Map(
   ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
@@ -68,10 +116,15 @@ let container: HTMLElement
 
 beforeEach(async () => {
   state.invitation = { eligible: false }
+  state.invitationUpdatedAt = 1_000
   state.recorded = []
+  state.recordSucceeds = true
   state.cached = []
   state.tracked = []
+  state.errors = []
+  for (const key of Object.keys(storage)) delete storage[key]
   state.opened = []
+  state.capturing = true
 
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -148,6 +201,25 @@ async function click(element: HTMLElement) {
   })
 }
 
+async function setCapturing(capturing: boolean) {
+  await act(async () => {
+    state.capturing = capturing
+    for (const listener of captureStateListeners) listener()
+  })
+}
+
+async function publishDismissal(dismissedAt: number) {
+  storage['feedbackInviteDismissedAt:v1'] = String(dismissedAt)
+  await act(async () => {
+    const event = new window.Event('storage')
+    Object.defineProperty(event, 'key', {
+      configurable: true,
+      value: 'feedbackInviteDismissedAt:v1',
+    })
+    window.dispatchEvent(event)
+  })
+}
+
 const eligible = { eligible: true, bookUrl: 'https://cal.test/book' }
 
 describe('FeedbackInviteCard', () => {
@@ -204,46 +276,167 @@ describe('FeedbackInviteCard', () => {
     ])
   })
 
-  /// Taking the card away on booking would punish the reader for accepting: they
-  /// land on a booking page, and if they come back to finish later the invitation
-  /// they agreed to has gone. Only declining removes it.
-  it('stays on screen after booking', async () => {
+  /// Booking puts the card away like declining does. The server brings it back
+  /// after its snooze, since opening the booking page is not the same as booking.
+  it('puts the card away after booking, in this tab and others', async () => {
     state.invitation = eligible
     await render()
 
     await click(buttonWithText('Book a 15 minute chat'))
+    expect(container.innerHTML).toBe('')
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeDefined()
+
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.recorded).toEqual([])
+  })
+
+  /// The card returns on every cockpit load outside a snooze, and the cockpit is the
+  /// new tab page. Counting every appearance would report thousands of impressions for one
+  /// reader and leave the funnel without a usable denominator.
+  it('counts the impression once per profile but still shows the card', async () => {
+    state.invitation = eligible
+    await render()
+    expect(state.tracked).toEqual(['feedback_invite_shown'])
+    expect(state.recorded).toEqual(['shown'])
+
+    // A later cockpit load, same profile.
+    state.tracked = []
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
 
     expect(container.textContent).toContain(
       "You're one of our most active users",
     )
-    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    expect(state.tracked).toEqual([])
+    expect(state.recorded).toEqual(
+      ['shown'],
+      // The server is still told, because it holds the first-seen timestamp.
+    )
   })
 
-  it('reopens the link on a second click without reporting it twice', async () => {
+  it('counts the impression when analytics becomes ready on the same mount', async () => {
     state.invitation = eligible
+    state.capturing = false
     await render()
 
-    await click(buttonWithText('Book a 15 minute chat'))
-    await click(buttonWithText('Book a 15 minute chat'))
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.tracked).toEqual([])
+    expect(storage.feedbackInviteShownTracked).toBeUndefined()
 
-    expect(state.opened).toEqual([
-      'https://cal.test/book',
-      'https://cal.test/book',
-    ])
-    expect(state.recorded).toEqual(['shown', 'clicked'])
-    expect(
-      state.tracked.filter((event) => event === 'feedback_invite_clicked'),
-    ).toHaveLength(1)
+    await setCapturing(true)
+
+    expect(state.tracked).toEqual(['feedback_invite_shown'])
+    expect(storage.feedbackInviteShownTracked).toBe('true')
   })
 
-  it('can still be dismissed after booking', async () => {
+  /// The card returns on every load outside a snooze, so a dismissal in one tab has to reach
+  /// the tabs the reader already has open rather than leaving them still offering it.
+  it('stays away in another tab once dismissed', async () => {
     state.invitation = eligible
     await render()
+    await click(buttonWithText('No thanks'))
+    expect(container.innerHTML).toBe('')
 
-    await click(buttonWithText('Book a 15 minute chat'))
+    // Another cockpit tab, same profile, whose cached answer still says eligible.
+    state.tracked = []
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.tracked).toEqual([])
+    expect(state.recorded).toEqual([])
+  })
+
+  /// The cockpit can stay open for days. Once the server offers the card again
+  /// after its snooze, the same mount shows it without a reload.
+  it('comes back on the same mount when a newer server answer is eligible', async () => {
+    state.invitation = eligible
+    await render()
+    await click(buttonWithText('No thanks'))
+    expect(container.innerHTML).toBe('')
+
+    state.recorded = []
+    state.invitationUpdatedAt =
+      Number(storage['feedbackInviteDismissedAt:v1']) + 1
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.recorded).toEqual(['shown'])
+  })
+
+  it('does not persist a browser dismissal when the server write fails', async () => {
+    state.invitation = eligible
+    state.recordSucceeds = false
+    await render()
+
     await click(buttonWithText('No thanks'))
 
-    expect(state.recorded).toEqual(['shown', 'clicked', 'dismissed'])
+    expect(container.innerHTML).toBe('')
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
+    expect(state.errors).toEqual([
+      'Could not save your response. The invitation may appear again.',
+    ])
+
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.recorded).toEqual(['shown'])
+  })
+
+  it('lets a fresh eligible server answer override an older dismissal fence', async () => {
+    state.invitation = eligible
+    storage['feedbackInviteDismissedAt:v1'] = '2000'
+    state.invitationUpdatedAt = 3_000
+
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+  })
+
+  /// A request that was already in flight when another tab saved its answer
+  /// lands after that answer, but it was asked before the snooze existed.
+  it('ignores an eligible answer that was requested before the dismissal', async () => {
+    state.invitation = { ...eligible, requestedAt: 1_500 }
+    storage['feedbackInviteDismissedAt:v1'] = '2000'
+    state.invitationUpdatedAt = 3_000
+
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.recorded).toEqual([])
+  })
+
+  it('hides an already-visible card when another tab confirms dismissal', async () => {
+    state.invitation = eligible
+    state.invitationUpdatedAt = 1_000
+    await render()
+
+    await publishDismissal(2_000)
+
     expect(container.innerHTML).toBe('')
   })
 

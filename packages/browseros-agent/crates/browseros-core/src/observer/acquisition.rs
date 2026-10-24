@@ -154,12 +154,28 @@ impl Observer {
         frame_id: Option<FrameId>,
         runtime_document_id: Option<i64>,
         same_process_parent: Option<&ProtocolSession>,
+        cross_process: bool,
         context: &CaptureContext,
     ) -> Result<AcquiredFrame, CoreError> {
-        let target = self
+        let mut target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), frame_id.clone(), same_process_parent)
+            .resolve_frame_target_with_epoch(
+                self.page_id.clone(),
+                frame_id.clone(),
+                same_process_parent,
+                cross_process,
+                self.access
+                    .as_ref()
+                    .map(|access| access.epoch_guard())
+                    .transpose()?
+                    .flatten(),
+            )
             .await?;
+        if let Some(access) = &self.access {
+            target.session = access
+                .frame_session(target.session, frame_id.clone())
+                .await?;
+        }
         let runtime_document_id = if target.cursor_uses_session_default {
             None
         } else {
@@ -206,6 +222,7 @@ impl Observer {
                         Some(child_frame.frame_id),
                         child_frame.runtime_document_id,
                         Some(&parent_session),
+                        child_frame.cross_process,
                         &context,
                     )
                     .await;
@@ -326,6 +343,10 @@ async fn acquire_frame_data(
 struct ResolvedChildFrame {
     frame_id: FrameId,
     runtime_document_id: Option<i64>,
+    /// The parent has no contentDocument for this child, so it lives in another process (an OOPIF).
+    /// Lets frame resolution attach a not-yet-registered OOPIF instead of mis-querying it on the
+    /// parent session, while same-process children keep inheriting the parent session.
+    cross_process: bool,
 }
 
 async fn resolve_child_frame(
@@ -342,6 +363,7 @@ async fn resolve_child_frame(
         .await
         .ok()?;
     let content_document = described.node.content_document;
+    let cross_process = content_document.is_none();
     let runtime_document_id = content_document
         .as_ref()
         .and_then(|node| node.backend_node_id);
@@ -352,6 +374,7 @@ async fn resolve_child_frame(
     Some(ResolvedChildFrame {
         frame_id,
         runtime_document_id,
+        cross_process,
     })
 }
 

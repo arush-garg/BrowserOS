@@ -121,6 +121,78 @@ describe('ClawApiClient', () => {
     )
   })
 
+  it('tests that agent settings are read and updated on the exact route', async () => {
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json({
+          humanHelpEnabled: false,
+          taskCleanupTipEnabled: false,
+          jevTokenSource: 'none',
+        })
+      },
+    })
+
+    const settings = {
+      humanHelpEnabled: false,
+      taskCleanupTipEnabled: false,
+      jevTokenSource: 'none',
+    } as const
+    await expect(client.getAgentSettings()).resolves.toEqual(settings)
+    await expect(
+      client.updateAgentSettings({ humanHelpEnabled: false }),
+    ).resolves.toEqual(settings)
+
+    expect(requests.map((request) => request.method)).toEqual(['GET', 'PUT'])
+    for (const request of requests) {
+      expect(new URL(request.url).pathname).toBe('/api/v1/settings/agent')
+    }
+    expect(requests[1]?.headers.get('content-type')).toBe('application/json')
+    await expect(requests[1]?.text()).resolves.toBe(
+      '{"humanHelpEnabled":false}',
+    )
+  })
+
+  it('saves and removes the decision model token on its own route', async () => {
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json({
+          humanHelpEnabled: true,
+          taskCleanupTipEnabled: false,
+          jevTokenSource: request.method === 'PUT' ? 'settings' : 'none',
+        })
+      },
+    })
+
+    await expect(
+      client.saveJevToken({ token: 'jev-a-token' }),
+    ).resolves.toEqual({
+      humanHelpEnabled: true,
+      taskCleanupTipEnabled: false,
+      jevTokenSource: 'settings',
+    })
+    await expect(client.removeJevToken()).resolves.toEqual({
+      humanHelpEnabled: true,
+      taskCleanupTipEnabled: false,
+      jevTokenSource: 'none',
+    })
+
+    expect(requests.map((request) => request.method)).toEqual(['PUT', 'DELETE'])
+    for (const request of requests) {
+      expect(new URL(request.url).pathname).toBe(
+        '/api/v1/settings/agent/jev-token',
+      )
+    }
+    await expect(requests[0]?.text()).resolves.toBe('{"token":"jev-a-token"}')
+  })
+
   it('maps contract operations across JSON, NDJSON, text, blob, path, query, and headers', async () => {
     const requests: RecordedRequest[] = []
     const receivers: unknown[] = []
@@ -178,6 +250,7 @@ describe('ClawApiClient', () => {
     const preview = await client.getSessionPreview({
       sessionId: 'session / one',
       refresh: 456,
+      browserTabId: 102,
     })
     await expect(preview.arrayBuffer()).resolves.toHaveProperty('byteLength', 2)
     await expect(
@@ -222,6 +295,9 @@ describe('ClawApiClient', () => {
     expect(new URL(requests[5]?.url ?? '').searchParams.get('refresh')).toBe(
       '456',
     )
+    expect(
+      new URL(requests[5]?.url ?? '').searchParams.get('browserTabId'),
+    ).toBe('102')
     expect(requests.at(-2)?.method).toBe('PUT')
     expect(requests.at(-1)?.method).toBe('DELETE')
     expect(requests.every((request) => request.credentials === 'omit')).toBe(
@@ -322,6 +398,14 @@ describe('binary URL builders', () => {
         refresh: 0,
       }),
     ).toBe(`${baseUrl}/api/v1/sessions/session%20%2F%20one/preview?refresh=0`)
+    expect(
+      buildSessionPreviewUrl(baseUrl, {
+        sessionId: 'session / one',
+        browserTabId: 102,
+      }),
+    ).toBe(
+      `${baseUrl}/api/v1/sessions/session%20%2F%20one/preview?browserTabId=102`,
+    )
     expect(
       buildSessionScreenshotUrl(baseUrl, {
         sessionId: 'session / one',

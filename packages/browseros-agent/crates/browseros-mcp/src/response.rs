@@ -8,9 +8,9 @@ use crate::{
         diff::{DiffDetail, format_diff_result},
         snapshot::format_snapshot_result,
     },
-    framework::{ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
+    framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
-use browseros_core::{ConsoleEntry, PageId, settle::SettleOutcome};
+use browseros_core::{ConsoleEntry, PageId, pointer, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
 
@@ -43,6 +43,7 @@ pub struct ToolResponse {
     structured_content: Option<Value>,
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
+    audit_hints: Option<AuditHints>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ pub struct BuiltToolResponse {
     pub is_error: bool,
     pub structured_content: Option<Value>,
     pub metadata_tab_id: Option<i64>,
+    pub audit_hints: Option<AuditHints>,
 }
 
 impl ToolResponse {
@@ -76,6 +78,12 @@ impl ToolResponse {
         merge_structured(&mut self.structured_content, value);
     }
 
+    /// Record host-only audit hints (secret redaction, screenshot suppression) for
+    /// this dispatch. Carried to the claw-server audit layer, never to the client.
+    pub fn set_audit_hints(&mut self, hints: AuditHints) {
+        self.audit_hints = Some(hints);
+    }
+
     pub fn append_result(&mut self, result: ToolResult) {
         self.content.extend(result.content);
         if result.is_error {
@@ -83,6 +91,9 @@ impl ToolResponse {
         }
         if let Some(structured) = result.structured_content {
             self.data(structured);
+        }
+        if result.audit_hints.is_some() {
+            self.audit_hints = result.audit_hints;
         }
     }
 
@@ -150,15 +161,18 @@ impl ToolResponse {
         }
 
         for summary in self.console_summaries.clone() {
-            self.append_console_summary(ctx, summary);
+            if ctx.browser.page(PageId(summary.page)).await.is_ok() {
+                self.append_console_summary(ctx, summary);
+            }
         }
-        self.prepend_page_signal_lines(ctx, primary_page);
+        self.prepend_page_signal_lines(ctx, primary_page).await;
 
         Ok(BuiltToolResponse {
             content: self.content.clone(),
             is_error: self.has_error,
             structured_content: self.structured_content.clone(),
             metadata_tab_id: None,
+            audit_hints: self.audit_hints.clone(),
         })
     }
 
@@ -167,10 +181,17 @@ impl ToolResponse {
         action: PostAction,
         ctx: &ToolCtx,
     ) -> ToolExecResult<()> {
+        // Settling is advisory and can stop on an admission error. Re-admit
+        // before reading global dialog signals or starting the actual readback.
+        if ctx.browser.binding().is_some()
+            && let Some(page) = action.page()
+        {
+            ctx.browser.page(PageId(page)).await?;
+        }
         match action {
             PostAction::Snapshot { page } => {
                 self.throw_if_dialog_open(ctx, page)?;
-                let observer = ctx.session.observe(browseros_core::PageId(page)).await;
+                let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
                 let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
@@ -183,19 +204,18 @@ impl ToolResponse {
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 let diff = ctx
-                    .session
+                    .browser
                     .observe(browseros_core::PageId(page))
-                    .await
+                    .await?
                     .diff()
                     .await?;
                 let origin = diff.after_url.as_deref().map(ToString::to_string);
                 let origin = match origin {
                     Some(origin) => origin,
                     None => ctx
-                        .session
-                        .pages
-                        .get_info(browseros_core::PageId(page))
-                        .await
+                        .browser
+                        .refresh_page(browseros_core::PageId(page))
+                        .await?
                         .map(|info| info.url)
                         .unwrap_or_else(|| "unknown".to_string()),
                 };
@@ -203,6 +223,14 @@ impl ToolResponse {
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });
+                    // Text changing and the page changing are different
+                    // questions on a page carrying a countdown or a carousel,
+                    // so say which one this was.
+                    if let Some(moved) = diff.arrangement_changed
+                        && let Value::Object(object) = &mut structured
+                    {
+                        object.insert("arrangementChanged".to_string(), Value::Bool(moved));
+                    }
                     if diff.url_changed
                         && let Value::Object(object) = &mut structured
                     {
@@ -221,7 +249,7 @@ impl ToolResponse {
                 Ok(())
             }
             PostAction::Pages => {
-                let pages = ctx.session.pages.list().await?;
+                let pages = ctx.browser.list_pages().await?.pages;
                 if pages.is_empty() {
                     self.text("[Open pages] None");
                     return Ok(());
@@ -247,21 +275,25 @@ impl ToolResponse {
             }
             PostAction::Screenshot { page } => {
                 let page_session = ctx
-                    .session
-                    .pages
-                    .get_session(browseros_core::PageId(page))
+                    .browser
+                    .page_session(browseros_core::PageId(page))
                     .await?;
                 #[derive(serde::Deserialize)]
                 struct CaptureScreenshotResult {
                     data: String,
                 }
-                let result: CaptureScreenshotResult = page_session
+                let hidden = pointer::hide_for_capture(&page_session.session).await;
+                let result = page_session
                     .session
-                    .send(
+                    .send::<_, CaptureScreenshotResult>(
                         "Page.captureScreenshot",
                         json!({ "format": "png", "captureBeyondViewport": false }),
                     )
-                    .await?;
+                    .await;
+                if hidden {
+                    pointer::restore_after_capture(&page_session.session).await;
+                }
+                let result = result?;
                 self.text(format!("[Page {page} screenshot]"));
                 self.image(result.data, "image/png");
                 Ok(())
@@ -278,8 +310,8 @@ impl ToolResponse {
             return Ok(());
         };
         if ctx
-            .session
-            .page_signals
+            .browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
         {
@@ -288,8 +320,8 @@ impl ToolResponse {
         }
         let outcome = tokio::select! {
             () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
-            outcome = browseros_core::settle::wait_for_action_settle(
-                ctx.session.pages.as_ref(),
+            outcome = crate::settle::wait_for_action_settle(
+                &ctx.browser,
                 PageId(page),
                 browseros_core::timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
             ) => outcome,
@@ -308,8 +340,8 @@ impl ToolResponse {
 
     fn append_console_summary(&mut self, ctx: &ToolCtx, summary: ConsoleSummary) {
         let entries = ctx
-            .session
-            .page_signals
+            .browser
+            .signals()
             .console_entries_since(&PageId(summary.page), summary.since);
         let Some(line) = console_summary_line(summary.page, &entries) else {
             return;
@@ -317,7 +349,7 @@ impl ToolResponse {
         self.text(line);
     }
 
-    fn prepend_page_signal_lines(&mut self, ctx: &ToolCtx, primary_page: Option<PageId>) {
+    async fn prepend_page_signal_lines(&mut self, ctx: &ToolCtx, primary_page: Option<PageId>) {
         let mut pages = Vec::new();
         if let Some(page) = primary_page {
             push_page_once(&mut pages, page);
@@ -333,8 +365,13 @@ impl ToolResponse {
 
         let mut lines = Vec::new();
         for page in pages {
-            lines.extend(ctx.session.page_signals.take_alert_note_lines(&page));
-            if let Some(line) = ctx.session.page_signals.pending_dialog_line(&page) {
+            // A page may have moved while the action/readback awaited. Signals
+            // come from the global registry, so admit again before exposing them.
+            if ctx.browser.page(page.clone()).await.is_err() {
+                continue;
+            }
+            lines.extend(ctx.browser.signals().take_alert_note_lines(&page));
+            if let Some(line) = ctx.browser.signals().pending_dialog_line(&page) {
                 lines.push(line);
             }
         }
@@ -372,7 +409,7 @@ impl ToolResponse {
     }
 
     fn throw_if_dialog_open(&self, ctx: &ToolCtx, page: u32) -> ToolExecResult<()> {
-        match ctx.session.page_signals.pending_dialog_line(&PageId(page)) {
+        match ctx.browser.signals().pending_dialog_line(&PageId(page)) {
             Some(message) => Err(ToolError::message(message)),
             None => Ok(()),
         }
@@ -387,6 +424,7 @@ impl BuiltToolResponse {
             content: self.content,
             is_error: self.is_error,
             structured_content: self.structured_content,
+            audit_hints: self.audit_hints,
         }
     }
 }
@@ -438,4 +476,258 @@ fn console_summary_line(page: u32, entries: &[ConsoleEntry]) -> Option<String> {
         entries.len(),
         first.summary_text()
     ))
+}
+
+#[cfg(test)]
+mod pointer_capture_tests {
+    use super::{PostAction, ToolResponse};
+    use crate::{
+        framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx},
+        output_file::create_browser_output_file_access,
+    };
+    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_core::{
+        Browser, CdpConnection, PageId, SessionId,
+        screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
+    };
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::broadcast;
+    use tokio_util::sync::CancellationToken;
+
+    #[derive(Clone, Copy, Debug)]
+    enum CapturePath {
+        Plain,
+        Annotated,
+        Browser,
+        PostAction,
+    }
+    const PATHS: [CapturePath; 4] = [
+        CapturePath::Plain,
+        CapturePath::Annotated,
+        CapturePath::Browser,
+        CapturePath::PostAction,
+    ];
+
+    struct CaptureConnection {
+        calls: Mutex<Vec<(String, Value)>>,
+        events: broadcast::Sender<CdpEvent>,
+        fail_hide: bool,
+        fail_capture: bool,
+    }
+
+    impl CaptureConnection {
+        fn new(fail_hide: bool, fail_capture: bool) -> Arc<Self> {
+            let (events, _) = broadcast::channel(8);
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                events,
+                fail_hide,
+                fail_capture,
+            })
+        }
+
+        fn capture_calls(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .filter_map(|(method, params)| {
+                    let expression = params["expression"].as_str().unwrap_or_default();
+                    if method == "Page.captureScreenshot" {
+                        Some("capture".to_string())
+                    } else if expression.contains("p.hide()") {
+                        Some("hide".to_string())
+                    } else if expression.contains("p.show()") {
+                        Some("show".to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        fn tab() -> Value {
+            json!({ "tabId": 101, "targetId": "target-1", "url": "https://example.test/", "title": "Example", "isActive": true,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false, "windowId": 1, "index": 0 })
+        }
+    }
+
+    impl CdpConnection for CaptureConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((method.to_string(), params.clone()));
+                match method {
+                    "Browser.getTabs" => Ok(json!({ "tabs": [Self::tab()] })),
+                    "Browser.getTabInfo" => Ok(json!({ "tab": Self::tab() })),
+                    "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
+                    "Page.getFrameTree" => Ok(
+                        json!({ "frameTree": { "frame": { "id": "main", "loaderId": "loader-1", "url": "https://example.test/" } } }),
+                    ),
+                    "Accessibility.getFullAXTree" => Ok(json!({ "nodes": [] })),
+                    "Page.captureScreenshot" if self.fail_capture => {
+                        Err(CdpError::Transport("capture failed".into()))
+                    }
+                    "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
+                    "Runtime.evaluate"
+                        if self.fail_hide
+                            && params["expression"]
+                                .as_str()
+                                .is_some_and(|js| js.contains("p.hide()")) =>
+                    {
+                        Err(CdpError::Transport("hide failed".into()))
+                    }
+                    "Runtime.evaluate" => Ok(json!({ "result": { "value": true } })),
+                    "Page.enable"
+                    | "DOM.enable"
+                    | "Runtime.enable"
+                    | "Accessibility.enable"
+                    | "Runtime.runIfWaitingForDebugger"
+                    | "Target.setAutoAttach"
+                    | "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    _ => Err(CdpError::Transport(format!(
+                        "unexpected capture fixture call: {method}"
+                    ))),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move {
+                Ok(self
+                    .send(method, serde_json::from_str(params)?, session)
+                    .await?
+                    .to_string())
+            })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                if expected_epoch != 1 {
+                    return Err(CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
+                self.send(method, params, session).await
+            })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    async fn capture(path: CapturePath, connection: Arc<CaptureConnection>) -> anyhow::Result<()> {
+        let browser = Browser::new(connection);
+        browser.list_pages().await?;
+        match path {
+            CapturePath::Browser => {
+                let capture = browser
+                    .screenshot(PageId(1), ScreenshotFormat::Png, None, false)
+                    .await?;
+                assert_eq!(capture.data, "cG5n");
+            }
+            CapturePath::Plain | CapturePath::Annotated => {
+                let capture = browser
+                    .view()
+                    .await
+                    .screenshot(
+                        PageId(1),
+                        ScreenshotCaptureOptions {
+                            annotate: Some(matches!(path, CapturePath::Annotated)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                assert_eq!(capture.data, "cG5n");
+                assert!(capture.annotations.is_empty());
+            }
+            CapturePath::PostAction => {
+                let ctx = ToolCtx::new(BrowserToolOptions {
+                    browser: browser.view().await,
+                    target: None,
+                    defaults: BrowserToolDefaults::default(),
+                    cancel: CancellationToken::new(),
+                    output_files: create_browser_output_file_access(),
+                    inner_call_hook: None,
+                    preloaded_helpers: Vec::new(),
+                });
+                let mut response = ToolResponse::new();
+                response
+                    .run_session_post_action(PostAction::Screenshot { page: 1 }, &ctx)
+                    .await?;
+                assert_eq!(response.content.len(), 2);
+                assert!(serde_json::to_string(&response.content)?.contains("cG5n"));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_hides_then_restores_the_pointer() -> anyhow::Result<()> {
+        for path in PATHS {
+            let connection = CaptureConnection::new(false, false);
+            capture(path, connection.clone()).await?;
+            assert_eq!(
+                connection.capture_calls(),
+                ["hide", "capture", "show"],
+                "{path:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_restores_the_pointer_on_capture_failure() {
+        for path in PATHS {
+            let connection = CaptureConnection::new(false, true);
+            let error = capture(path, connection.clone()).await.err();
+            assert!(
+                error.is_some_and(|error| error.to_string().contains("capture failed")),
+                "{path:?}"
+            );
+            assert_eq!(
+                connection.capture_calls(),
+                ["hide", "capture", "show"],
+                "{path:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_survives_a_failed_pointer_hide() -> anyhow::Result<()> {
+        for path in PATHS {
+            let connection = CaptureConnection::new(true, false);
+            capture(path, connection.clone()).await?;
+            assert_eq!(connection.capture_calls(), ["hide", "capture"], "{path:?}");
+        }
+        Ok(())
+    }
 }
