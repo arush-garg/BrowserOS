@@ -49,6 +49,14 @@ export const tabs = defineTool({
         .min(1)
         .optional()
         .describe('Lease owner id for acquire/release.'),
+      ttlMs: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Lease TTL in ms for action="acquire" (default 30 minutes). Expired leases are automatically free, so a crashed agent cannot orphan a page.',
+        ),
       field: z
         .enum(['title', 'url', 'content'])
         .optional()
@@ -114,7 +122,9 @@ export const tabs = defineTool({
       case 'acquire': {
         if (args.page === undefined || !args.owner)
           return errorResult('tabs acquire: page and owner are required.')
-        const lease = acquirePageLease(args.page, args.owner)
+        const lease = acquirePageLease(args.page, args.owner, {
+          ttlMs: args.ttlMs,
+        })
         return lease.ok
           ? textResult(`leased page ${args.page} to ${args.owner}`, {
               page: args.page,

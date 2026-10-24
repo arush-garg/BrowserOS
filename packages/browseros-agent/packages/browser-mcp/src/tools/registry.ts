@@ -12,6 +12,7 @@ import { navigate } from './navigate'
 import { pdf } from './pdf'
 import { read } from './read'
 import { run } from './run'
+import { safety } from './safety'
 import { screenshot } from './screenshot'
 import { semantic_action } from './semantic-action'
 import { snapshot } from './snapshot'
@@ -42,6 +43,7 @@ export const BROWSER_TOOLS: readonly ToolDefinition[] = [
   pdf,
   wait,
   windows,
+  safety,
   evaluate,
   run,
 ]
